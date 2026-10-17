@@ -109,3 +109,50 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 All unit tests run with isolated settings and mocked database dependencies to prevent live database coupling or credential exposure.
+
+---
+
+## Modular Monolith Architecture
+
+The backend is structured as a **FastAPI modular monolith**:
+- **Single Backend Service**: A unified FastAPI application sharing runtime configuration (`app.config`), database infrastructure (`app.database`), and migration management (`alembic/`).
+- **Four Research Component Modules**: Encapsulated within `app/components/`, independently owned by component researchers.
+- **Shared Foundation**: All components will leverage the shared SQLAlchemy `Base`, connection pool, and Alembic environment, avoiding duplicate database instances or disconnected servers.
+- **Empty Initial Packages**: The reserved component packages currently contain only empty `__init__.py` markers (0 bytes) with no domain logic, models, or endpoints implemented yet.
+
+---
+
+## Reserved Research Components
+
+| Directory | Full Component Name & Responsibility |
+|---|---|
+| `app/components/c1_tool_call_correctness` | **C1: Explainable Tool-Call Correctness Testing** |
+| `app/components/c2_state_aware_workflow` | **C2: State-Aware Multi-Step Workflow Testing** |
+| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** |
+| `app/components/c4_policy_prompt_injection` | **C4: Policy-Aware Safety and Prompt-Injection Testing** |
+
+### Future Internal Component Organization (Document Only)
+When component implementation begins, components will use meaningful subpackages rather than flat root files (canonical subpackage imports will be used without duplicate root wrappers).
+For **C3**, the agreed future organization will be:
+- `contracts/`: Typed input/output contracts and schemas.
+- `services/`: Validation, fault generation, and domain evaluation logic.
+- `runtime/`: Target adapters, fault injection, execution hooks, and evidence handling.
+- `api/`: FastAPI route handlers and request/response models.
+
+Other components will define responsibility-based subpackages aligned with their specific research requirements. Nested subpackages will only be created when actual implementation starts.
+
+---
+
+## Shared Integration & Architecture Design Notes (Design Only)
+
+The following integration agreements are documented for team alignment and will be finalized prior to component implementation:
+1. **Identifier Conventions**: Uniform format for shared identifiers: `project_id`, `case_id`, `run_id`, and `event_id`.
+2. **C3 Matched Trials**: Pairwise identifiers explicitly linking matched baseline (clean) and fault-injected trials for differential evaluation.
+3. **Traceability Metadata**: Versioned tracking for test tasks, environment fixtures, tool adapters, agent/LLM models, contract schemas, and evaluation heuristics.
+4. **Distinct Verdict Semantics**: Strict conceptual separation between test *readiness*, execution *health*, fault *exposure*, and individual component *verdicts*.
+5. **Component Boundary (C2 & C3)**: C2 owns multi-step state machine modeling and workflow state assertions; C3 consumes discrete `true` / `false` / `unknown` state facts to evaluate recovery behavior without re-implementing state checking.
+6. **Decoupled Evaluation Rules**: Each research component maintains authoritative ownership of its specialized generation algorithms and evaluation rules.
+7. **Unified Execution Infrastructure**: Shared execution orchestration, target fixture/state reset, and evidence transport designed once as a shared capability rather than re-invented across components.
+8. **Deduplicated Findings**: Vulnerabilities, faults, and failures reference shared `event_id` traces without multiplying counts for a single root cause.
+9. **Database Boundary**: QA framework test metadata, evidence, and run results remain strictly partitioned in the QA framework database, completely isolated from Application-Under-Test (AUT) databases.
+10. **Shared Code & Migration Coordination**: Clear code ownership across shared foundations (`app/database.py`, `app/config.py`, `alembic/`) with synchronized Alembic migration reviews across component teams.
