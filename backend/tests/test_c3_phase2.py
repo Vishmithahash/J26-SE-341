@@ -574,11 +574,12 @@ async def test_cancellation_never_forwards_intercepted_work_later():
     # Target callback must NEVER have executed
     assert forward_executed is False
 
-    # Check that cancellation recorded faithful episode evidence
+    # Check that cancellation recorded faithful episode evidence (Phase 3 Gap A correction)
     assert len(interceptor.episode_records) == 1
     ep = interceptor.episode_records[0]
     assert ep.prevented_forwarding is True
-    assert ep.caller_observed_timeout is True
+    assert ep.caller_observed_timeout is False
+    assert ep.cancellation_reason == "PREMATURE_EXTERNAL_CANCELLATION"
 
 
 # ---------------------------------------------------------------------------

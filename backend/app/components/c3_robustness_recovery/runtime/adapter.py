@@ -58,6 +58,7 @@ class CleanupStatus(str, Enum):
     CLEANED_AND_VERIFIED = "CLEANED_AND_VERIFIED"
     UNCERTAIN = "UNCERTAIN"
     FAILED = "FAILED"
+    NOT_ASSESSED = "NOT_ASSESSED"
 
 
 @dataclass(frozen=True)
@@ -281,9 +282,22 @@ class DemonstrationFixtureManager(FixtureManager):
             final_fingerprint=final_fp,
         )
 
+    def verify_committed_operation(self, namespace: str, operation_id: str) -> bool:
+        """Independent observation facility to confirm whether an operation committed."""
+        store = self._namespaces.get(namespace)
+        if not store:
+            return False
+        for order in store.get("orders", []):
+            if (
+                order.get("order_id") == operation_id
+                and order.get("status") == "CONFIRMED"
+            ):
+                return True
+        return False
+
 
 class DemonstrationToolAdapter(DomainToolAdapter):
-    """Generic demonstration adapter for Phase 2 local hermetic testing.
+    """Generic demonstration adapter for Phase 2 and Phase 3 local hermetic testing.
 
     Provides ONE side-effecting domain tool: demonstration_order_placement.
     Target mode is strictly DEMONSTRATION.
@@ -324,6 +338,7 @@ class DemonstrationToolAdapter(DomainToolAdapter):
                 )
             ],
             supported_combinations=[
+                # 1. TIMEOUT_DISCONNECTION (BEFORE_EFFECT)
                 CapabilityCombination(
                     tool_id="demonstration_order_placement",
                     fault_family=FaultFamily.TIMEOUT_DISCONNECTION,
@@ -341,7 +356,106 @@ class DemonstrationToolAdapter(DomainToolAdapter):
                         "HANG_INDEFINITELY",
                     ],
                     required_observation_capabilities=["caller_timeout_observed"],
-                )
+                ),
+                # 2. TIMEOUT_DISCONNECTION (AFTER_COMMIT lost-response)
+                CapabilityCombination(
+                    tool_id="demonstration_order_placement",
+                    fault_family=FaultFamily.TIMEOUT_DISCONNECTION,
+                    effect_phase=EffectPhase.AFTER_COMMIT,
+                    interception_hook=InterceptionHook.APPLICATION_AWARE_HOOK,
+                    supported_occurrence_bounds=OccurrenceBounds(
+                        min_occurrence=1, max_occurrence=5
+                    ),
+                    allowed_release_rule_types=[
+                        ReleaseRuleType.ATTEMPT_BOUNDED,
+                        ReleaseRuleType.IMMEDIATE,
+                    ],
+                    supported_payload_modes=[
+                        "CALLER_TIMEOUT_EXCEEDED",
+                    ],
+                    required_observation_capabilities=["committed_order_verified"],
+                ),
+                # 3. TRANSIENT_5XX (BEFORE_EFFECT)
+                CapabilityCombination(
+                    tool_id="demonstration_order_placement",
+                    fault_family=FaultFamily.TRANSIENT_5XX,
+                    effect_phase=EffectPhase.BEFORE_EFFECT,
+                    interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
+                    supported_occurrence_bounds=OccurrenceBounds(
+                        min_occurrence=1, max_occurrence=5
+                    ),
+                    allowed_release_rule_types=[
+                        ReleaseRuleType.ATTEMPT_BOUNDED,
+                        ReleaseRuleType.IMMEDIATE,
+                    ],
+                    supported_payload_modes=[
+                        "HTTP_500",
+                        "HTTP_502",
+                        "HTTP_503",
+                        "HTTP_504",
+                    ],
+                    required_observation_capabilities=["transient_5xx_observed"],
+                ),
+                # 4. RATE_LIMIT_429 (BEFORE_EFFECT)
+                CapabilityCombination(
+                    tool_id="demonstration_order_placement",
+                    fault_family=FaultFamily.RATE_LIMIT_429,
+                    effect_phase=EffectPhase.BEFORE_EFFECT,
+                    interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
+                    supported_occurrence_bounds=OccurrenceBounds(
+                        min_occurrence=1, max_occurrence=5
+                    ),
+                    allowed_release_rule_types=[
+                        ReleaseRuleType.ATTEMPT_BOUNDED,
+                        ReleaseRuleType.IMMEDIATE,
+                    ],
+                    supported_payload_modes=[
+                        "RATE_LIMIT_EXCEEDED",
+                    ],
+                    required_observation_capabilities=["rate_limit_observed"],
+                ),
+                # 5. TOOL_UNAVAILABILITY (BEFORE_EFFECT)
+                CapabilityCombination(
+                    tool_id="demonstration_order_placement",
+                    fault_family=FaultFamily.TOOL_UNAVAILABILITY,
+                    effect_phase=EffectPhase.BEFORE_EFFECT,
+                    interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
+                    supported_occurrence_bounds=OccurrenceBounds(
+                        min_occurrence=1, max_occurrence=5
+                    ),
+                    allowed_release_rule_types=[
+                        ReleaseRuleType.ATTEMPT_BOUNDED,
+                        ReleaseRuleType.IMMEDIATE,
+                    ],
+                    supported_payload_modes=[
+                        "CIRCUIT_BROKEN",
+                        "SERVICE_MAINTENANCE",
+                        "DEPENDENCY_OFFLINE",
+                        "RESOURCE_EXHAUSTED",
+                    ],
+                    required_observation_capabilities=["unavailability_observed"],
+                ),
+                # 6. MALFORMED_RESPONSE (BEFORE_EFFECT)
+                CapabilityCombination(
+                    tool_id="demonstration_order_placement",
+                    fault_family=FaultFamily.MALFORMED_RESPONSE,
+                    effect_phase=EffectPhase.BEFORE_EFFECT,
+                    interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
+                    supported_occurrence_bounds=OccurrenceBounds(
+                        min_occurrence=1, max_occurrence=5
+                    ),
+                    allowed_release_rule_types=[
+                        ReleaseRuleType.ATTEMPT_BOUNDED,
+                        ReleaseRuleType.IMMEDIATE,
+                    ],
+                    supported_payload_modes=[
+                        "INVALID_JSON",
+                        "TRUNCATED_JSON",
+                        "SCHEMA_VIOLATION",
+                        "EMPTY_BODY",
+                    ],
+                    required_observation_capabilities=["malformed_response_observed"],
+                ),
             ],
         )
 
@@ -370,7 +484,9 @@ class DemonstrationToolAdapter(DomainToolAdapter):
             quantity = int(arguments.get("quantity", 1))
             unit_price = int(arguments.get("unit_price", 100))
             total_amount = quantity * unit_price
-            order_id = f"ord-demo-{int(time.time() * 1000)}"
+            order_id = (
+                arguments.get("order_id") or f"ord-demo-{int(time.time() * 1000)}"
+            )
 
             store = self._fixture_manager._namespaces.get(namespace)
             if not store:
@@ -427,40 +543,40 @@ class DemonstrationToolAdapter(DomainToolAdapter):
 # ---------------------------------------------------------------------------
 
 
-def check_real_target_prerequisites() -> tuple[bool, list[str]]:
-    """Check whether real target (NexaCart AUT) prerequisites are available.
+def check_real_target_prerequisites(
+    adapter_id: str | None = None,
+) -> tuple[bool, list[str]]:
+    """Check whether real target (e.g. NexaCart AUT) prerequisites are available.
 
-    Returns:
-        tuple[bool, list[str]]: (is_available, missing_prerequisites_list)
+    Requires only credentials and facilities genuinely needed by the configured adapter.
     """
     missing: list[str] = []
 
-    # Check for NexaCart live target endpoint
-    target_url = os.environ.get("NEXACART_AUT_URL")
+    # Check for target endpoint
+    target_url = os.environ.get("NEXACART_AUT_URL") or os.environ.get("AUT_TARGET_URL")
     if not target_url:
         missing.append(
-            "NEXACART_AUT_URL: Target Application-Under-Test endpoint is not configured."
+            "Target Application-Under-Test endpoint is not configured (set NEXACART_AUT_URL or AUT_TARGET_URL)."
         )
 
-    # Check for OpenAPI / tool specification
-    openapi_path = os.environ.get("NEXACART_OPENAPI_SPEC")
+    # Check for verified OpenAPI specification
+    openapi_path = os.environ.get("NEXACART_OPENAPI_SPEC") or os.environ.get(
+        "AUT_OPENAPI_SPEC"
+    )
     if not openapi_path or not os.path.exists(openapi_path):
         missing.append(
-            "NEXACART_OPENAPI_SPEC: Verified NexaCart OpenAPI / tool specification not found."
+            "Verified target OpenAPI / tool specification not found (set NEXACART_OPENAPI_SPEC or AUT_OPENAPI_SPEC)."
         )
 
-    # Check for verified fixture reset API
-    reset_key = os.environ.get("NEXACART_FIXTURE_RESET_KEY")
-    if not reset_key:
+    # Check for target authorization / API key
+    auth_key = (
+        os.environ.get("NEXACART_API_KEY")
+        or os.environ.get("AUT_API_KEY")
+        or os.environ.get("NEXACART_FIXTURE_RESET_KEY")
+    )
+    if not auth_key:
         missing.append(
-            "NEXACART_FIXTURE_RESET_KEY: Target fixture reset API credentials/key not found."
-        )
-
-    # Check for independent observation facility
-    obs_key = os.environ.get("NEXACART_OBSERVATION_KEY")
-    if not obs_key:
-        missing.append(
-            "NEXACART_OBSERVATION_KEY: Target independent state observation credentials not found."
+            "Target API credentials/authorization key not found (set NEXACART_API_KEY or AUT_API_KEY)."
         )
 
     is_available = len(missing) == 0

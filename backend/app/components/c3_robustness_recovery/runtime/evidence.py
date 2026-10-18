@@ -81,6 +81,8 @@ class ForwardingDecision(str, Enum):
 
     FORWARDED = "FORWARDED"
     PREVENTED_INJECTED_TIMEOUT = "PREVENTED_INJECTED_TIMEOUT"
+    PREVENTED_INJECTED_FAULT = "PREVENTED_INJECTED_FAULT"
+    FORWARDED_COMMITTED_RESPONSE_WITHHELD = "FORWARDED_COMMITTED_RESPONSE_WITHHELD"
 
 
 class TimeoutBoundaryType(str, Enum):
@@ -183,6 +185,15 @@ class FaultEpisodeRecord(BaseModel):
     elapsed_wait_ms: float
     consumed_atomically: bool = True
 
+    # Phase 3 additions:
+    fault_status_code: int | None = None
+    retry_after_seconds: int | None = None
+    unavailability_mode: str | None = None
+    malformed_fragment: str | None = None
+    committed_operation_id: str | None = None
+    independent_observation_confirmed: bool = False
+    cancellation_reason: str | None = None
+
 
 class TrialEvidence(BaseModel):
     """Complete evidence record for one trial (CLEAN or FAULT)."""
@@ -238,6 +249,7 @@ class MatchedPairEvidence(BaseModel):
 
     fixture_comparability: FixtureComparability
     clean_qualification: CleanQualification
+    exposure_assessed: bool = True
     exposure_status: ExposureStatus
     exposure_reasons: list[str] = Field(default_factory=list)
 

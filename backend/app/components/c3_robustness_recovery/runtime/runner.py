@@ -111,36 +111,94 @@ def check_runtime_readiness(
     if not task_fixture_metadata.declared_observation_support:
         reasons.append("Task fixture metadata lacks declared observation support.")
 
-    # 4. Phase 2 Scope Constraints: Support ONLY implemented TIMEOUT_DISCONNECTION / BEFORE_EFFECT
-    if candidate_case.fault_family != FaultFamily.TIMEOUT_DISCONNECTION:
-        reasons.append(
-            f"Fault family '{candidate_case.fault_family.value}' is not implemented in Phase 2 runtime. "
-            "Only TIMEOUT_DISCONNECTION is supported."
-        )
-    else:
-        payload_mode = getattr(candidate_case.payload, "mode", None)
-        supported_modes = {
-            TimeoutDisconnectionMode.CALLER_TIMEOUT_EXCEEDED,
-            TimeoutDisconnectionMode.HANG_INDEFINITELY,
-        }
-        if payload_mode not in supported_modes:
-            mode_name = payload_mode.value if payload_mode else "unknown"
+    # 4. Phase 3 Scope Constraints: Supported fault families & hooks
+    if candidate_case.effect_phase == EffectPhase.BEFORE_EFFECT:
+        if candidate_case.interception_hook != InterceptionHook.BEFORE_TOOL_CALL:
             reasons.append(
-                f"Timeout mode '{mode_name}' is not supported in Phase 2 runtime. "
-                "Only CALLER_TIMEOUT_EXCEEDED and HANG_INDEFINITELY are implemented. "
-                "SOCKET_DROP and CONNECTION_REFUSED are not silently translated."
+                f"Interception hook '{candidate_case.interception_hook.value}' is not supported for BEFORE_EFFECT. "
+                "Only BEFORE_TOOL_CALL is implemented."
             )
 
-    if candidate_case.effect_phase != EffectPhase.BEFORE_EFFECT:
-        reasons.append(
-            f"Effect phase '{candidate_case.effect_phase.value}' is not supported in Phase 2 runtime. "
-            "Only BEFORE_EFFECT is implemented."
-        )
+        if candidate_case.fault_family == FaultFamily.TIMEOUT_DISCONNECTION:
+            payload_mode = getattr(candidate_case.payload, "mode", None)
+            supported_timeout_modes = {
+                TimeoutDisconnectionMode.CALLER_TIMEOUT_EXCEEDED,
+                TimeoutDisconnectionMode.HANG_INDEFINITELY,
+            }
+            if payload_mode not in supported_timeout_modes:
+                mode_name = payload_mode.value if payload_mode else "unknown"
+                reasons.append(
+                    f"Timeout mode '{mode_name}' is not supported in runtime. "
+                    "Only CALLER_TIMEOUT_EXCEEDED and HANG_INDEFINITELY are implemented. "
+                    "SOCKET_DROP and CONNECTION_REFUSED are not silently translated."
+                )
+        elif candidate_case.fault_family == FaultFamily.TRANSIENT_5XX:
+            status_val = getattr(candidate_case.payload, "http_status", 500)
+            valid_5xx_codes = {500, 502, 503, 504}
+            if status_val not in valid_5xx_codes:
+                reasons.append(
+                    f"Transient 5xx status '{status_val}' is not supported. Must be one of: {sorted(valid_5xx_codes)}."
+                )
+        elif candidate_case.fault_family == FaultFamily.RATE_LIMIT_429:
+            status_val = getattr(candidate_case.payload, "http_status", 429)
+            if status_val != 429:
+                reasons.append(
+                    f"Rate limit status '{status_val}' is not supported. Only 429 is implemented."
+                )
+        elif candidate_case.fault_family == FaultFamily.TOOL_UNAVAILABILITY:
+            payload_mode = getattr(candidate_case.payload, "mode", None)
+            valid_unavail = {
+                "CIRCUIT_BROKEN",
+                "SERVICE_MAINTENANCE",
+                "DEPENDENCY_OFFLINE",
+                "RESOURCE_EXHAUSTED",
+            }
+            mode_val = getattr(payload_mode, "value", str(payload_mode))
+            if mode_val not in valid_unavail:
+                reasons.append(
+                    f"Tool unavailability mode '{mode_val}' is not supported. Must be one of: {sorted(valid_unavail)}."
+                )
+        elif candidate_case.fault_family == FaultFamily.MALFORMED_RESPONSE:
+            payload_mode = getattr(candidate_case.payload, "mode", None)
+            valid_malformed = {
+                "INVALID_JSON",
+                "TRUNCATED_JSON",
+                "SCHEMA_VIOLATION",
+                "EMPTY_BODY",
+                "UNEXPECTED_CONTENT_TYPE",
+            }
+            mode_val = getattr(payload_mode, "value", str(payload_mode))
+            if mode_val not in valid_malformed:
+                reasons.append(
+                    f"Malformed response mode '{mode_val}' is not supported. Must be one of: {sorted(valid_malformed)}."
+                )
 
-    if candidate_case.interception_hook != InterceptionHook.BEFORE_TOOL_CALL:
+        else:
+            reasons.append(
+                f"Fault family '{candidate_case.fault_family.value}' is not supported for BEFORE_EFFECT in Phase 3."
+            )
+
+    elif candidate_case.effect_phase == EffectPhase.AFTER_COMMIT:
+        if candidate_case.interception_hook != InterceptionHook.APPLICATION_AWARE_HOOK:
+            reasons.append(
+                f"Interception hook '{candidate_case.interception_hook.value}' is not supported for AFTER_COMMIT. "
+                "Only APPLICATION_AWARE_HOOK is implemented."
+            )
+        if candidate_case.fault_family != FaultFamily.TIMEOUT_DISCONNECTION:
+            reasons.append(
+                f"Fault family '{candidate_case.fault_family.value}' is not supported for AFTER_COMMIT. "
+                "Only TIMEOUT_DISCONNECTION lost-response delivery is implemented."
+            )
+        if target_mode == TargetMode.LIVE_AUT:
+            reasons.append(
+                "Live AFTER_COMMIT lost-response delivery is BLOCKED: actual target hooks and verified "
+                "live state interfaces are not available."
+            )
+
+    else:
         reasons.append(
-            f"Interception hook '{candidate_case.interception_hook.value}' is not supported in Phase 2 runtime. "
-            "Only BEFORE_TOOL_CALL is implemented."
+            f"Effect phase '{candidate_case.effect_phase.value}' is not supported. "
+            "PARTIAL_EFFECT cannot be inferred and is not implemented."
         )
 
     # 5. Bounded Timing Checks
@@ -188,11 +246,13 @@ class DemonstrationCaller:
         interceptor: DomainToolInterceptor,
         caller_timeout_ms: int,
         allow_scripted_retry: bool = True,
+        fixture_manager: FixtureManager | None = None,
     ) -> None:
         self.adapter = adapter
         self.interceptor = interceptor
         self.caller_timeout_ms = caller_timeout_ms
         self.allow_scripted_retry = allow_scripted_retry
+        self.fixture_manager = fixture_manager
 
     async def run_checkout_task(
         self,
@@ -203,7 +263,10 @@ class DemonstrationCaller:
     ) -> tuple[str, list[ToolExecutionResult]]:
         """Run the task invoking the domain tool with caller timeout enforcement."""
         results: list[ToolExecutionResult] = []
-        call_context = {"namespace": namespace}
+        call_context = {
+            "namespace": namespace,
+            "fixture_manager": self.fixture_manager,
+        }
 
         async def forward_call() -> ToolExecutionResult:
             return await self.adapter.execute_tool(
@@ -215,7 +278,6 @@ class DemonstrationCaller:
 
         # Attempt 1
         try:
-            # Caller enforces its declared timeout boundary
             res = await self.interceptor.intercept_call(
                 tool_id=tool_id,
                 tool_version=tool_version,
@@ -228,7 +290,6 @@ class DemonstrationCaller:
                 return "SUCCESS", results
             return f"TOOL_ERROR: {res.error}", results
         except (TimeoutError, asyncio.CancelledError):
-            # Intercepted timeout observed by caller
             if not self.allow_scripted_retry:
                 return "TIMEOUT_ABORTED", results
 
@@ -248,7 +309,22 @@ class DemonstrationCaller:
             except Exception as retry_exc:  # noqa: BLE001
                 return f"RETRY_FAILED: {type(retry_exc).__name__}", results
         except Exception as exc:  # noqa: BLE001
-            return f"ERROR: {type(exc).__name__}", results
+            if not self.allow_scripted_retry:
+                return f"ERROR: {type(exc).__name__}", results
+            try:
+                retry_res = await self.interceptor.intercept_call(
+                    tool_id=tool_id,
+                    tool_version=tool_version,
+                    arguments=arguments,
+                    forward_callback=forward_call,
+                    context=call_context,
+                )
+                results.append(retry_res)
+                if retry_res.success:
+                    return "SUCCESS_AFTER_RETRY", results
+                return f"RETRY_FAILED: {retry_res.error}", results
+            except Exception as retry_exc:  # noqa: BLE001
+                return f"RETRY_FAILED: {type(retry_exc).__name__}", results
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +383,8 @@ class HarnessRunner:
             "timestamp": time.time(),
         }
 
-        # If readiness check fails, return linked unexecuted pair evidence
+        # Gap C: If readiness check fails, return linked unexecuted pair evidence
+        # with cleanup_status = NOT_ASSESSED and exposure_assessed = False
         if readiness.status != ReadinessStatus.READY:
             empty_clean = TrialEvidence(
                 project_id=project_id,
@@ -324,7 +401,7 @@ class HarnessRunner:
                 final_state_fingerprint="",
                 execution_status=ExecutionStatus.EXECUTION_ERROR,
                 caller_outcome="NOT_RUN",
-                cleanup_status=CleanupStatus.CLEANED_AND_VERIFIED,
+                cleanup_status=CleanupStatus.NOT_ASSESSED,
                 evidence_complete=False,
             )
             empty_fault = TrialEvidence(
@@ -342,7 +419,7 @@ class HarnessRunner:
                 final_state_fingerprint="",
                 execution_status=ExecutionStatus.EXECUTION_ERROR,
                 caller_outcome="NOT_RUN",
-                cleanup_status=CleanupStatus.CLEANED_AND_VERIFIED,
+                cleanup_status=CleanupStatus.NOT_ASSESSED,
                 evidence_complete=False,
             )
             return MatchedPairEvidence(
@@ -361,7 +438,8 @@ class HarnessRunner:
                 clean_qualification=CleanQualification.UNKNOWN,
                 exposure_status=ExposureStatus.NOT_TRIGGERED,
                 exposure_reasons=["Execution blocked by runtime readiness check."],
-                cleanup_status=CleanupStatus.CLEANED_AND_VERIFIED,
+                cleanup_status=CleanupStatus.NOT_ASSESSED,
+                exposure_assessed=False,
                 recovery_verdict=None,
                 interpretation_limitations=[
                     "Trial was not run due to readiness failure."
@@ -388,6 +466,7 @@ class HarnessRunner:
             interceptor=clean_interceptor,
             caller_timeout_ms=candidate_case.caller_timeout_ms or 3000,
             allow_scripted_retry=False,
+            fixture_manager=self.fixture_manager,
         )
 
         task_args = {
@@ -487,6 +566,11 @@ class HarnessRunner:
             caller_timeout_ms=candidate_case.caller_timeout_ms or 3000,
             fault_timing_ms=getattr(candidate_case.payload, "timing_ms", None),
             timeout_boundary_type=TimeoutBoundaryType.CALLER_TIMEOUT_EXCEEDED,
+            payload_details=(
+                candidate_case.payload.model_dump(mode="json")
+                if hasattr(candidate_case.payload, "model_dump")
+                else {}
+            ),
         )
 
         fault_interceptor = DomainToolInterceptor(
@@ -497,6 +581,7 @@ class HarnessRunner:
             interceptor=fault_interceptor,
             caller_timeout_ms=candidate_case.caller_timeout_ms or 3000,
             allow_scripted_retry=allow_scripted_retry,
+            fixture_manager=self.fixture_manager,
         )
 
         fault_outcome, fault_results = await fault_caller.run_checkout_task(
@@ -592,6 +677,7 @@ class HarnessRunner:
                 )
                 else CleanupStatus.UNCERTAIN
             ),
+            exposure_assessed=True,
             recovery_verdict=None,  # Always null
             interpretation_limitations=interpretation_limitations,
         )
@@ -608,11 +694,11 @@ class HarnessRunner:
         reasons: list[str] = []
 
         if not fault_trial.episodes:
-            # Check if tool was even called
             hook_entries = [
                 ev
                 for ev in fault_trial.events
                 if ev.event_type.startswith("HOOK_ENTRY")
+                or ev.event_type.startswith("APPLICATION_AWARE_HOOK")
             ]
             if not hook_entries:
                 return (
@@ -639,16 +725,86 @@ class HarnessRunner:
             reasons.append(
                 f"Episode occurrence {episode.target_occurrence} != planned {plan.target_occurrence}."
             )
-        if not episode.prevented_forwarding:
-            reasons.append("Episode failed to prevent forwarding to target.")
-        if not episode.caller_observed_timeout:
-            reasons.append("Caller did not observe the intended timeout boundary.")
+        if episode.interception_hook != plan.interception_hook:
+            reasons.append(
+                f"Episode hook '{episode.interception_hook.value}' != planned '{plan.interception_hook.value}'."
+            )
+        if episode.effect_phase != plan.effect_phase:
+            reasons.append(
+                f"Episode phase '{episode.effect_phase.value}' != planned '{plan.effect_phase.value}'."
+            )
+
+        # Family & Phase specific exposure verification
+        if plan.effect_phase == EffectPhase.BEFORE_EFFECT:
+            if not episode.prevented_forwarding:
+                reasons.append("Episode failed to prevent forwarding to target.")
+
+            if plan.fault_family == FaultFamily.TIMEOUT_DISCONNECTION:
+                if not episode.caller_observed_timeout:
+                    reasons.append(
+                        "Caller did not observe the intended timeout boundary (e.g. premature cancellation)."
+                    )
+                # Gap B check: Caller must actually experience timeout
+                if fault_trial.caller_outcome == "SUCCESS":
+                    reasons.append(
+                        "Caller reported SUCCESS on the first attempt without experiencing timeout."
+                    )
+            elif plan.fault_family == FaultFamily.TRANSIENT_5XX:
+                if episode.fault_status_code not in (500, 502, 503, 504):
+                    reasons.append(
+                        f"Episode status code {episode.fault_status_code} is not a valid 5xx code."
+                    )
+                if fault_trial.caller_outcome == "SUCCESS":
+                    reasons.append(
+                        "Caller reported SUCCESS despite 5xx transient fault."
+                    )
+            elif plan.fault_family == FaultFamily.RATE_LIMIT_429:
+                if episode.fault_status_code != 429:
+                    reasons.append(
+                        f"Episode status code {episode.fault_status_code} != 429 for rate limit fault."
+                    )
+                if fault_trial.caller_outcome == "SUCCESS":
+                    reasons.append(
+                        "Caller reported SUCCESS despite 429 rate limit fault."
+                    )
+            elif plan.fault_family == FaultFamily.TOOL_UNAVAILABILITY:
+                if not episode.unavailability_mode:
+                    reasons.append("Episode missing unavailability_mode.")
+                if fault_trial.caller_outcome == "SUCCESS":
+                    reasons.append(
+                        "Caller reported SUCCESS despite tool unavailability fault."
+                    )
+            elif plan.fault_family == FaultFamily.MALFORMED_RESPONSE:
+                if not episode.malformed_fragment:
+                    reasons.append("Episode missing malformed_fragment evidence.")
+                if fault_trial.caller_outcome == "SUCCESS":
+                    reasons.append(
+                        "Caller reported SUCCESS despite malformed response fault."
+                    )
+
+        elif plan.effect_phase == EffectPhase.AFTER_COMMIT:
+            if not episode.independent_observation_confirmed:
+                reasons.append(
+                    "Missing commit observation prevented confirmed post-commit exposure: "
+                    "independent observation could not confirm that the operation committed before withholding reply."
+                )
+            if not episode.committed_operation_id:
+                reasons.append("Episode missing committed_operation_id.")
+            if not episode.caller_observed_timeout:
+                reasons.append("Caller did not observe the lost-response timeout.")
+            if fault_trial.caller_outcome == "SUCCESS":
+                reasons.append(
+                    "Caller reported SUCCESS on first attempt without lost-response timeout."
+                )
 
         if reasons:
             return ExposureStatus.EXPOSURE_UNKNOWN, reasons
 
         return ExposureStatus.CONFIRMED, [
-            "Correlated evidence confirms BEFORE_TOOL_CALL hook entry, prevented forwarding, and caller-observed timeout."
+            (
+                f"Correlated evidence confirms {plan.interception_hook.value} hook entry, "
+                f"delivery for {plan.fault_family.value} ({plan.effect_phase.value}), and caller-observed outcome."
+            )
         ]
 
 
@@ -710,7 +866,15 @@ def make_demonstration_task_fixture_metadata() -> TaskFixtureMetadata:
         associated_recovery_contract_ids=["rec-demo-01"],
         declared_reset_support=True,
         declared_observation_support=True,
-        supported_observations=["caller_timeout_observed"],
+        supports_committed_effect_observation=True,
+        supported_observations=[
+            "caller_timeout_observed",
+            "transient_5xx_observed",
+            "rate_limit_observed",
+            "unavailability_observed",
+            "malformed_observed",
+            "committed_order_verified",
+        ],
     )
 
 
@@ -728,7 +892,7 @@ def make_demonstration_recovery_contract() -> RecoveryContract:
         max_total_timeout_ms=5000,
         required_state_assertions=["state_order_created"],
         allow_duplicate_side_effects=False,
-        allow_retry_on_unverified_commit=False,
+        allow_retry_on_unverified_commit=True,
         require_truthful_completion_reporting=True,
     )
 

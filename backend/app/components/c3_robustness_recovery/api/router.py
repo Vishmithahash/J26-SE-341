@@ -5,10 +5,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
+from app.components.c3_robustness_recovery.contracts.generation import (
+    FaultGenerationRequest,
+    FaultGenerationResponse,
+)
 from app.components.c3_robustness_recovery.contracts.schemas import (
     FaultCatalogResponse,
     FaultValidationRequest,
     FaultValidationResponse,
+)
+from app.components.c3_robustness_recovery.services.generation import (
+    generate_feasible_cases,
 )
 from app.components.c3_robustness_recovery.services.validation import (
     get_fault_catalog,
@@ -90,3 +97,21 @@ def validate_case(
 ) -> FaultValidationResponse:
     """Validate declared candidate fault case metadata deterministically."""
     return validate_fault_case(request)
+
+
+@router.post(
+    "/cases/generate",
+    response_model=FaultGenerationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Generate Feasible Fault Cases and Frozen Suite",
+    description=(
+        "Performs pure deterministic generation, deduplication, and selection of feasible fault "
+        "cases from declared capability combinations and task metadata. Returns a frozen suite "
+        "with SHA256 digest and static-only validation scope. No target or runner execution."
+    ),
+)
+def generate_cases(
+    request: FaultGenerationRequest,
+) -> FaultGenerationResponse:
+    """Deterministically generate and freeze feasible fault cases without executing them."""
+    return generate_feasible_cases(request)

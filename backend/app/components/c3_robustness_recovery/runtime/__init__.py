@@ -31,6 +31,11 @@ from app.components.c3_robustness_recovery.runtime.evidence import (
     export_evidence_to_file,
     validate_evidence_linkage,
 )
+from app.components.c3_robustness_recovery.runtime.faults import (
+    FaultDeliveryHandler,
+    FaultDeliveryResult,
+    get_fault_handler,
+)
 from app.components.c3_robustness_recovery.runtime.interceptor import (
     DomainToolInterceptor,
     InterceptionPlan,
@@ -47,6 +52,8 @@ __all__ = [
     "DomainToolInterceptor",
     "ExecutionStatus",
     "ExposureStatus",
+    "FaultDeliveryHandler",
+    "FaultDeliveryResult",
     "FaultEpisodeRecord",
     "FixtureComparability",
     "FixtureManager",
@@ -62,5 +69,6 @@ __all__ = [
     "TrialEvidence",
     "TrialRole",
     "export_evidence_to_file",
+    "get_fault_handler",
     "validate_evidence_linkage",
 ]
