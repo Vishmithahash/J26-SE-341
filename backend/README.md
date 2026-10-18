@@ -128,16 +128,16 @@ The backend is structured as a **FastAPI modular monolith**:
 |---|---|---|
 | `app/components/c1_tool_call_correctness` | **C1: Explainable Tool-Call Correctness Testing** | Reserved (Not implemented) |
 | `app/components/c2_state_aware_workflow` | **C2: State-Aware Multi-Step Workflow Testing** | Reserved (Not implemented) |
-| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phase 1 Implemented** (Phases 2–6 Unimplemented) |
+| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phase 1 & Phase 2 Implemented** (Phases 3–6 Unimplemented) |
 | `app/components/c4_policy_prompt_injection` | **C4: Policy-Aware Safety and Prompt-Injection Testing** | Reserved (Not implemented) |
 
 ---
 
-## Component 3: Robustness and Failure Recovery Testing (Phase 1)
+## Component 3: Robustness and Failure Recovery Testing
 
 ### Six-Phase Implementation Roadmap
 1. **Phase 1: Contracts, Fault Catalogue, Static Validation and APIs** &mdash; **IMPLEMENTED (Stateless Foundation)**
-2. **Phase 2: One-Tool Integration, Matched Trials, Verified Timeout Exposure and Safeguards** &mdash; *UNIMPLEMENTED*
+2. **Phase 2: One-Tool Integration, Matched Trials, Verified Timeout Exposure and Safeguards** &mdash; **IMPLEMENTED (Demonstrated Vertical Slice)**
 3. **Phase 3: Automatic Generation, Frozen Suites, Remaining Fault Families and Supported Post-Commit Experiments** &mdash; *UNIMPLEMENTED*
 4. **Phase 4: Recovery Evaluation Using Evidence and C2 Facts** &mdash; *UNIMPLEMENTED*
 5. **Phase 5: Shared Persistence, Execution Tracking, Results and Reporting** &mdash; *UNIMPLEMENTED*
@@ -304,6 +304,78 @@ Run all unit tests including C3 Phase 1:
 ```powershell
 python -m pytest tests/test_c3_phase1.py
 python -m pytest
+```
+
+---
+
+## Component 3: Phase 2 Runtime (One-Tool Integration & Verified Exposure)
+
+Phase 2 builds an executable vertical slice demonstrating bounded fault interception, isolated matched trials, and verified exposure evidence.
+
+### Canonical Runtime Structure
+```text
+backend/app/components/c3_robustness_recovery/runtime/
+    __init__.py       # Package marker with clean exports (no eager runner import)
+    adapter.py        # Tool and fixture contracts, demonstration implementations, live blocker checks
+    evidence.py       # Linked runtime records, sanitization, linkage validation, and local export
+    interceptor.py    # Trial-scoped, bounded one-shot timeout interception on the domain tool path
+    runner.py         # Matched trial harness runner and developer CLI
+backend/tests/test_c3_phase2.py
+```
+
+### Supported Timeout Mode & Boundary
+- **Fault Family**: `TIMEOUT_DISCONNECTION`
+- **Supported Modes**: `CALLER_TIMEOUT_EXCEEDED` and bounded `HANG_INDEFINITELY`. Other modes (`SOCKET_DROP`, `CONNECTION_REFUSED`) are rejected prior to execution and are **never** silently translated.
+- **Interception Hook**: `BEFORE_TOOL_CALL` on the domain tool path (not LLM-provider path).
+- **Effect Phase**: `BEFORE_EFFECT`. The targeted domain tool call is prevented from forwarding to the target.
+- **Timeout Boundary**: Distinguishes elapsed tool-call deadlines from synthetic immediate exceptions and actual socket timeouts. Enforces the declared `caller_timeout_ms` boundary.
+
+### Demonstration Scope vs. Live Limitations
+- **Demonstration Scope**: Uses `DemonstrationToolAdapter` (`demonstration_order_placement`) and `DemonstrationFixtureManager` (`fix-demonstration-cart`) providing isolated in-memory logical state stores, deterministic state fingerprinting, and simulated caller retry behavior (`RecoveryActor.SCRIPTED_CALLER`).
+- **Live NexaCart AUT Status**: **BLOCKED**. NexaCart source code, live endpoints, and OpenAPI definitions are not present in this workspace. Live mode (`--live` or `TargetMode.LIVE_AUT`) evaluates prerequisites and halts with exit code 2 and explicit blocked prerequisite reporting. It **never** silently falls back to demonstration mode.
+
+### Real Target Prerequisites
+To integrate a live target (such as NexaCart), the following external facilities must be provided:
+1. `NEXACART_AUT_URL`: Reachable live HTTP/gRPC domain service endpoint.
+2. `NEXACART_OPENAPI_SPEC`: Verified OpenAPI tool schema definitions matching domain methods.
+3. `NEXACART_FIXTURE_RESET_KEY`: Isolated test tenant / database reset facility.
+4. `NEXACART_OBSERVATION_KEY`: Out-of-band state observation access for independent effect verification.
+
+### Fixture Isolation, Reset & Cleanup
+- **Unique Namespaces**: Clean and fault trials run under isolated namespaces (`ns_{pair_id}_clean_{uuid}` and `ns_{pair_id}_fault_{uuid}`).
+- **Logical State Comparability**: Independent observations before each trial verify that clean and fault runs start from equivalent logical states (`FixtureComparability.EQUIVALENT_LOGICAL_STATE`).
+- **Settling & In-Flight Tracking**: Cleanup verifies all active in-flight operations have settled. Unfinished operations produce `CleanupStatus.UNCERTAIN` and permanently mark the namespace as non-reusable.
+
+### Linked Evidence & Status Semantics
+- **Linkage Identifiers**: Every record correlates `project_id`, `case_id`, `pair_id`, `trial_id`, `run_id`, `event_id`, and `episode_id`. Linkage is strictly validated before export.
+- **Secret Hygiene**: Passwords, tokens, API keys, and Authorization headers are stripped or redacted. Hashing is never used as a substitute for excluding credentials.
+- **Distinct Statuses**:
+  - `ReadinessStatus`: `READY`, `NOT_READY`, or `BLOCKED`.
+  - `ExecutionStatus`: `COMPLETED`, `EXECUTION_ERROR`, `CANCELLED`, or `TIMEOUT`.
+  - `ExposureStatus`: `CONFIRMED` (correlated proof of hook entry, prevented forwarding, and caller-observed timeout), `NOT_TRIGGERED` (unreached trigger), or `EXPOSURE_UNKNOWN` (incomplete/contradictory evidence).
+  - `CleanQualification`: `QUALIFIED` (clean run achieved goal), `DISQUALIFIED` (clean run failed), or `UNKNOWN`.
+  - `FixtureComparability`: `EQUIVALENT_LOGICAL_STATE` or `NON_EQUIVALENT`.
+  - `CleanupStatus`: `CLEANED_AND_VERIFIED`, `UNCERTAIN`, or `FAILED`.
+  - `RecoveryVerdict`: Strictly `null` (`None`). Recovery scoring is deferred to Phase 4.
+
+### Local Developer CLI
+Run the demonstration paired trials:
+```powershell
+python -m app.components.c3_robustness_recovery.runtime.runner --synthetic
+```
+Options:
+- `--synthetic`: Runs hermetic demonstration matched pair. Exits `0` on successful harness execution.
+- `--live`: Attempts execution against live target AUT. Exits `2` (blocked/configuration error) when prerequisites are missing.
+- `--export-dir <path>`: Exports sanitized JSON evidence to the specified directory (defaults to `evidence_output/`, which is ignored by Git).
+- `--no-retry`: Disables scripted caller retry upon encountering the injected timeout.
+
+### Testing Commands
+Run all unit tests across Phase 1 and Phase 2:
+```powershell
+python -m pytest tests/test_c3_phase2.py
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
 ```
 
 ---

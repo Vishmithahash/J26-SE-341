@@ -417,3 +417,64 @@ def test_all_endpoints_registered_and_existing_intact(client):
     assert "/health/db" in paths
     assert "/api/v1/c3/fault-catalog" in paths
     assert "/api/v1/c3/cases/validate" in paths
+
+
+def test_after_commit_rejects_generic_after_tool_call_hook():
+    request = make_valid_request()
+    case_dict = request.candidate_case.model_dump()
+    case_dict["effect_phase"] = EffectPhase.AFTER_COMMIT.value
+    case_dict["interception_hook"] = InterceptionHook.AFTER_TOOL_CALL.value
+    request.candidate_case = CandidateFaultCase.model_validate(case_dict)
+
+    manifest_dict = request.adapter_manifest.model_dump()
+    manifest_dict["supported_combinations"][0]["effect_phase"] = (
+        EffectPhase.AFTER_COMMIT.value
+    )
+    manifest_dict["supported_combinations"][0]["interception_hook"] = (
+        InterceptionHook.AFTER_TOOL_CALL.value
+    )
+    request.adapter_manifest = AdapterCapabilityManifest.model_validate(manifest_dict)
+
+    response = validate_fault_case(request)
+    assert response.validation_status == ValidationStatus.TEST_NOT_READY
+    assert any(
+        r.code == "AFTER_COMMIT_REQUIRES_APPLICATION_AWARE_HOOK"
+        for r in response.reasons
+    )
+
+
+def test_caller_timeout_and_fault_duration_distinctions():
+    request = make_valid_request()
+    # Case where fault duration does not exceed caller timeout
+    case_dict = request.candidate_case.model_dump()
+    case_dict["caller_timeout_ms"] = 5000
+    case_dict["payload"]["timing_ms"] = 3000  # timing <= caller_timeout_ms
+    request.candidate_case = CandidateFaultCase.model_validate(case_dict)
+
+    response = validate_fault_case(request)
+    assert response.validation_status == ValidationStatus.TEST_NOT_READY
+    assert any(
+        r.code == "FAULT_DURATION_MUST_EXCEED_CALLER_TIMEOUT" for r in response.reasons
+    )
+
+
+def test_task_attempts_do_not_assume_tool_calls_and_non_initial_counting():
+    # Budget with max_tool_calls_budget < max_task_attempts is allowed
+    # (e.g. 5 task attempts permitted, but overall budget allows only 2 tool calls)
+    contract_data = {
+        "contract_id": "rec-02",
+        "contract_version": "1.0.0",
+        "permitted_terminal_outcomes": ["SUCCESS_CLEAN_RECOVERY"],
+        "initial_invocation_counts_as_attempt": False,
+        "max_task_attempts": 3,
+        "max_retries": 3,  # When initial doesn't count, task_attempts == max_retries
+        "max_tool_calls_budget": 2,  # less than max_task_attempts (3), valid because attempts != tool calls
+        "max_total_timeout_ms": 10000,
+        "required_state_assertions": ["state_ok"],
+        "allow_duplicate_side_effects": False,
+        "allow_retry_on_unverified_commit": False,
+        "require_truthful_completion_reporting": True,
+    }
+    contract = RecoveryContract.model_validate(contract_data)
+    assert contract.max_task_attempts == 3
+    assert contract.max_tool_calls_budget == 2

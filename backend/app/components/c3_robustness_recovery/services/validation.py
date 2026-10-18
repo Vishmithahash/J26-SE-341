@@ -7,6 +7,7 @@ from app.components.c3_robustness_recovery.contracts.schemas import (
     FaultValidationResponse,
     InterceptionHook,
     ReleaseRuleType,
+    TimeoutDisconnectionMode,
     ToolMutability,
     ValidationReason,
     ValidationScope,
@@ -345,16 +346,20 @@ def validate_fault_case(
             )
 
         # Payload mode support
-        payload_mode_str = getattr(
-            case.payload, "mode", None
-        )  # Enum with .value or None
-        mode_val = (
-            payload_mode_str.value
-            if hasattr(payload_mode_str, "value")
-            else str(payload_mode_str)
-            if payload_mode_str
-            else None
-        )
+        payload_mode_str = getattr(case.payload, "mode", None)
+        if payload_mode_str is not None:
+            mode_val = (
+                payload_mode_str.value
+                if hasattr(payload_mode_str, "value")
+                else str(payload_mode_str)
+            )
+        elif hasattr(case.payload, "http_status"):
+            if case.fault_family == FaultFamily.RATE_LIMIT_429:
+                mode_val = "RATE_LIMIT_EXCEEDED"
+            else:
+                mode_val = f"HTTP_{case.payload.http_status}"
+        else:
+            mode_val = None
 
         if (
             mode_val
@@ -413,14 +418,14 @@ def validate_fault_case(
 
     # 6. Effect Phase Specific Metadata Requirements
     if case.effect_phase == EffectPhase.AFTER_COMMIT:
-        if case.interception_hook not in (
-            InterceptionHook.APPLICATION_AWARE_HOOK,
-            InterceptionHook.AFTER_TOOL_CALL,
-        ):
+        if case.interception_hook != InterceptionHook.APPLICATION_AWARE_HOOK:
             reasons.append(
                 ValidationReason(
-                    code="AFTER_COMMIT_REQUIRES_AWARE_HOOK",
-                    message="AFTER_COMMIT effect phase requires an application-aware or AFTER_TOOL_CALL hook.",
+                    code="AFTER_COMMIT_REQUIRES_APPLICATION_AWARE_HOOK",
+                    message=(
+                        "AFTER_COMMIT effect phase requires an APPLICATION_AWARE_HOOK. "
+                        "A generic AFTER_TOOL_CALL hook alone does not establish AFTER_COMMIT."
+                    ),
                     field_path="candidate_case.interception_hook",
                 )
             )
@@ -508,7 +513,65 @@ def validate_fault_case(
             )
         )
 
-    # 9. Response Formation
+    # 9. Timeout & Duration Distinctions
+    if case.fault_family == FaultFamily.TIMEOUT_DISCONNECTION:
+        payload_mode = getattr(case.payload, "mode", None)
+        if payload_mode == TimeoutDisconnectionMode.CALLER_TIMEOUT_EXCEEDED:
+            if case.caller_timeout_ms is None or case.caller_timeout_ms <= 0:
+                reasons.append(
+                    ValidationReason(
+                        code="MISSING_CALLER_TIMEOUT",
+                        message=(
+                            "CALLER_TIMEOUT_EXCEEDED mode requires candidate_case.caller_timeout_ms "
+                            "to be specified and positive."
+                        ),
+                        field_path="candidate_case.caller_timeout_ms",
+                    )
+                )
+            elif (
+                case.payload.timing_ms is not None
+                and case.payload.timing_ms <= case.caller_timeout_ms
+            ):
+                reasons.append(
+                    ValidationReason(
+                        code="FAULT_DURATION_MUST_EXCEED_CALLER_TIMEOUT",
+                        message=(
+                            f"CALLER_TIMEOUT_EXCEEDED requires fault duration timing_ms ({case.payload.timing_ms}) "
+                            f"to exceed caller_timeout_ms ({case.caller_timeout_ms})."
+                        ),
+                        field_path="candidate_case.payload.timing_ms",
+                    )
+                )
+        if (
+            case.caller_timeout_ms is not None
+            and case.caller_timeout_ms > recovery.max_total_timeout_ms
+        ):
+            reasons.append(
+                ValidationReason(
+                    code="CALLER_TIMEOUT_EXCEEDS_TRIAL_DEADLINE",
+                    message=(
+                        f"Caller timeout ({case.caller_timeout_ms} ms) cannot exceed "
+                        f"recovery contract max_total_timeout_ms ({recovery.max_total_timeout_ms} ms)."
+                    ),
+                    field_path="candidate_case.caller_timeout_ms",
+                )
+            )
+        if (
+            getattr(case.payload, "timing_ms", None) is not None
+            and case.payload.timing_ms > recovery.max_total_timeout_ms
+        ):
+            reasons.append(
+                ValidationReason(
+                    code="FAULT_DURATION_EXCEEDS_TRIAL_DEADLINE",
+                    message=(
+                        f"Fault duration ({case.payload.timing_ms} ms) cannot exceed "
+                        f"recovery contract max_total_timeout_ms ({recovery.max_total_timeout_ms} ms)."
+                    ),
+                    field_path="candidate_case.payload.timing_ms",
+                )
+            )
+
+    # 10. Response Formation
     if reasons:
         return FaultValidationResponse(
             validation_scope=ValidationScope.STATIC_ONLY,

@@ -364,18 +364,21 @@ class RecoveryContract(BaseModel):
 
     @model_validator(mode="after")
     def verify_attempt_retry_consistency(self) -> "RecoveryContract":
-        if (
-            self.initial_invocation_counts_as_attempt
-            and self.max_retries is not None
-            and self.max_task_attempts != 1 + self.max_retries
-        ):
-            raise ValueError(
-                f"Contradictory attempt/retry budget: max_task_attempts ({self.max_task_attempts}) must equal 1 + max_retries ({self.max_retries}) when initial invocation counts as attempt 1."
-            )
-        if self.max_tool_calls_budget < self.max_task_attempts:
-            raise ValueError(
-                f"Contradictory call budget: max_tool_calls_budget ({self.max_tool_calls_budget}) cannot be less than max_task_attempts ({self.max_task_attempts})."
-            )
+        if self.max_retries is not None:
+            if (
+                self.initial_invocation_counts_as_attempt
+                and self.max_task_attempts != 1 + self.max_retries
+            ):
+                raise ValueError(
+                    f"Contradictory attempt/retry budget: max_task_attempts ({self.max_task_attempts}) must equal 1 + max_retries ({self.max_retries}) when initial invocation counts as attempt 1."
+                )
+            if (
+                not self.initial_invocation_counts_as_attempt
+                and self.max_task_attempts != self.max_retries
+            ):
+                raise ValueError(
+                    f"Contradictory attempt/retry budget: max_task_attempts ({self.max_task_attempts}) must equal max_retries ({self.max_retries}) when initial invocation does not count as a task attempt."
+                )
         return self
 
 
