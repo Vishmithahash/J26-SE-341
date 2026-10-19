@@ -124,6 +124,7 @@ class ObservedCoverageEngine:
         supporting_evidence: dict[str, list[str]] | None = None,
         infeasible_targets: list[dict[str, Any]] | None = None,
         is_terminal_accepting: bool = True,
+        is_terminal_rejection: bool = False,
     ) -> DetailedObservedCoverage:
         """Compute observed coverage with explicit numerators, denominators, and target sets."""
         evidence_map = supporting_evidence or {}
@@ -216,18 +217,37 @@ class ObservedCoverageEngine:
         # -------------------------------------------------------------
         path_catalogue = self.build_selected_path_catalogue()
         catalogue_path_ids = sorted(path_catalogue.keys())
+        transitions_by_id = {t.id: t for t in self.model.transitions}
 
         history = completed_path_history or []
         completed_paths: list[str] = []
 
-        if is_terminal_accepting and history:
+        if history:
             for pid, p_seq in path_catalogue.items():
                 if (
                     p_seq
                     and len(p_seq) <= len(history)
                     and (history[: len(p_seq)] == p_seq or history == p_seq)
                 ):
-                    completed_paths.append(pid)
+                    last_trans = transitions_by_id.get(p_seq[-1])
+                    target_state = last_trans.target_state if last_trans else None
+                    is_rejection_path = pid.startswith("path_rejection") or (
+                        target_state is not None
+                        and target_state in self.model.rejection_state_ids
+                    )
+                    if is_rejection_path:
+                        # Declared rejection paths count when terminal rejection or expected rejection pass reached
+                        if (
+                            is_terminal_rejection
+                            or is_terminal_accepting
+                            or (
+                                target_state
+                                and target_state in self.model.rejection_state_ids
+                            )
+                        ):
+                            completed_paths.append(pid)
+                    elif is_terminal_accepting:
+                        completed_paths.append(pid)
 
         completed_paths = sorted(set(completed_paths))
         uncovered_paths = sorted(set(catalogue_path_ids) - set(completed_paths))
@@ -288,7 +308,8 @@ class ObservedCoverageEngine:
             violated_checks=viol_effs,
             unknown_checks=unk_effs,
             effect_check_ratio=effect_ratio,
-            fault_detection_accuracy=1.0,
+            fault_detection_accuracy=None,
+            fault_detection_status="UNAVAILABLE_REQUIRES_LABELLED_FAULTY_EVALUATIONS",
             supporting_evidence_references={
                 eff: evidence_map.get(eff.split("_effect_")[0], [])
                 for eff in checked_effects
@@ -311,6 +332,11 @@ class ObservedCoverageEngine:
             selected_path_coverage=path_detail,
             state_effect_coverage=effect_detail,
             overall_observed_coverage_ratio=overall_ratio,
+            composite_coverage_status="COMPOSITE_INFORMATIONAL_ONLY",
+            composite_coverage_formula=(
+                "unweighted_arithmetic_mean: (transition + guard + path + effect) / 4.0; "
+                "separate metrics remain primary."
+            ),
             aggregation_basis="exact_pinned_model_targets_v1",
         )
 

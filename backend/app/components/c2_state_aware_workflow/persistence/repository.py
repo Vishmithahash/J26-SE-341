@@ -17,6 +17,9 @@ from app.components.c2_state_aware_workflow.contracts.efsm_model import (
 from app.components.c2_state_aware_workflow.contracts.evaluation_result import (
     EvaluationResultContract,
 )
+from app.components.c2_state_aware_workflow.contracts.experiment import (
+    ExperimentDatasetManifest,
+)
 from app.components.c2_state_aware_workflow.contracts.test_definition import (
     GeneratedTestSuite,
 )
@@ -26,6 +29,9 @@ from app.components.c2_state_aware_workflow.persistence.hashing import (
 from app.components.c2_state_aware_workflow.persistence.models import (
     C2EvaluationResult,
     C2ExecutionEvidence,
+    C2Experiment,
+    C2ExperimentCaseResult,
+    C2ExperimentDataset,
     C2TestCase,
     C2TestSuite,
     C2ValidationReport,
@@ -62,11 +68,23 @@ class TestCaseNotFoundError(C2PersistenceError):
 
 
 class ConflictingEvidenceIntegrityError(C2PersistenceError):
-    """Raised when conflicting evidence is submitted under an already claimed execution identity."""
+    """Raised when re-saving evidence under the same run_id with conflicting digests."""
 
 
 class EvaluationResultNotFoundError(C2PersistenceError):
-    """Raised when a requested evaluation result is not found."""
+    """Raised when a requested evaluation result record is not found."""
+
+
+class DatasetNotFoundError(C2PersistenceError):
+    """Raised when a requested experiment dataset is not found."""
+
+
+class DatasetAlreadyExistsError(C2PersistenceError):
+    """Raised when attempting to create a dataset that already exists."""
+
+
+class ExperimentNotFoundError(C2PersistenceError):
+    """Raised when a requested experiment run is not found."""
 
 
 class C2ModelRepository:
@@ -662,4 +680,151 @@ class C2ModelRepository:
         if verdict:
             stmt = stmt.where(C2EvaluationResult.verdict == verdict)
         stmt = stmt.order_by(C2EvaluationResult.created_at.desc())
+        return list(self.db.execute(stmt).scalars().all())
+
+    # --- Experiment Datasets and Ground-Truth Manifests ---
+
+    def save_experiment_dataset(
+        self, manifest: ExperimentDatasetManifest
+    ) -> C2ExperimentDataset:
+        """Create or update a versioned experiment dataset manifest."""
+        stmt = select(C2ExperimentDataset).where(
+            C2ExperimentDataset.project_id == manifest.project_id,
+            C2ExperimentDataset.dataset_id == manifest.dataset_id,
+            C2ExperimentDataset.version == manifest.version,
+        )
+        record = self.db.execute(stmt).scalar_one_or_none()
+
+        if record is not None and record.is_frozen:
+            raise ApprovedModelImmutableError(
+                f"Dataset {manifest.dataset_id} v{manifest.version} is frozen and immutable."
+            )
+
+        if record is None:
+            record = C2ExperimentDataset(
+                project_id=manifest.project_id,
+                dataset_id=manifest.dataset_id,
+                name=manifest.name,
+                version=manifest.version,
+                description=manifest.description,
+                is_frozen=manifest.is_frozen,
+                frozen_at=manifest.frozen_at,
+                manifest_digest=manifest.manifest_digest,
+                case_count=manifest.case_count,
+                development_count=manifest.development_count,
+                held_out_count=manifest.held_out_count,
+                manifest_payload=manifest.model_dump(mode="json"),
+            )
+            self.db.add(record)
+        else:
+            record.name = manifest.name
+            record.description = manifest.description
+            record.is_frozen = manifest.is_frozen
+            record.frozen_at = manifest.frozen_at
+            record.manifest_digest = manifest.manifest_digest
+            record.case_count = manifest.case_count
+            record.development_count = manifest.development_count
+            record.held_out_count = manifest.held_out_count
+            record.manifest_payload = manifest.model_dump(mode="json")
+
+        self.db.commit()
+        self.db.refresh(record)
+        return record
+
+    def get_experiment_dataset(
+        self, project_id: str, dataset_id: str, version: str
+    ) -> C2ExperimentDataset | None:
+        """Retrieve an experiment dataset by project_id, dataset_id, and version."""
+        stmt = select(C2ExperimentDataset).where(
+            C2ExperimentDataset.project_id == project_id,
+            C2ExperimentDataset.dataset_id == dataset_id,
+            C2ExperimentDataset.version == version,
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+
+    def list_experiment_datasets(self, project_id: str) -> list[C2ExperimentDataset]:
+        """List all experiment datasets for a project."""
+        stmt = (
+            select(C2ExperimentDataset)
+            .where(C2ExperimentDataset.project_id == project_id)
+            .order_by(C2ExperimentDataset.created_at.desc())
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+    def freeze_experiment_dataset(
+        self, project_id: str, dataset_id: str, version: str
+    ) -> C2ExperimentDataset:
+        """Freeze an experiment dataset manifest to prevent partition or label drift."""
+        record = self.get_experiment_dataset(project_id, dataset_id, version)
+        if record is None:
+            raise DatasetNotFoundError(
+                f"Dataset {dataset_id} v{version} not found in project {project_id}."
+            )
+        record.is_frozen = True
+        record.frozen_at = utc_now()
+        self.db.commit()
+        self.db.refresh(record)
+        return record
+
+    # --- Experiment Runs and Baseline Evaluations ---
+
+    def create_or_update_experiment(self, experiment: C2Experiment) -> C2Experiment:
+        """Persist or update an experiment run."""
+        stmt = select(C2Experiment).where(
+            C2Experiment.project_id == experiment.project_id,
+            C2Experiment.experiment_id == experiment.experiment_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+
+        if existing is None:
+            self.db.add(experiment)
+            self.db.commit()
+            self.db.refresh(experiment)
+            return experiment
+        else:
+            existing.status = experiment.status
+            existing.results_summary = experiment.results_summary
+            existing.completed_at = experiment.completed_at
+            self.db.commit()
+            self.db.refresh(existing)
+            return existing
+
+    def get_experiment(
+        self, project_id: str, experiment_id: str
+    ) -> C2Experiment | None:
+        """Retrieve an experiment by project_id and experiment_id."""
+        stmt = select(C2Experiment).where(
+            C2Experiment.project_id == project_id,
+            C2Experiment.experiment_id == experiment_id,
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+
+    def list_experiments(
+        self, project_id: str, dataset_id: str | None = None
+    ) -> list[C2Experiment]:
+        """List experiments for a project with optional dataset filter."""
+        stmt = select(C2Experiment).where(C2Experiment.project_id == project_id)
+        if dataset_id:
+            stmt = stmt.where(C2Experiment.dataset_id == dataset_id)
+        stmt = stmt.order_by(C2Experiment.created_at.desc())
+        return list(self.db.execute(stmt).scalars().all())
+
+    def save_experiment_case_results(
+        self, results: list[C2ExperimentCaseResult]
+    ) -> None:
+        """Batch save baseline prediction records for experiment cases."""
+        self.db.add_all(results)
+        self.db.commit()
+
+    def get_experiment_case_results(
+        self, project_id: str, experiment_id: str, method_id: str | None = None
+    ) -> list[C2ExperimentCaseResult]:
+        """Retrieve case evaluation records for an experiment."""
+        stmt = select(C2ExperimentCaseResult).where(
+            C2ExperimentCaseResult.project_id == project_id,
+            C2ExperimentCaseResult.experiment_id == experiment_id,
+        )
+        if method_id:
+            stmt = stmt.where(C2ExperimentCaseResult.method_id == method_id)
+        stmt = stmt.order_by(C2ExperimentCaseResult.created_at.asc())
         return list(self.db.execute(stmt).scalars().all())

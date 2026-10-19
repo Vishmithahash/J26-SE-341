@@ -67,7 +67,8 @@ class StateEffectCoverageDetail(MetricCoverageDetail):
     violated_checks: list[str] = Field(default_factory=list)
     unknown_checks: list[str] = Field(default_factory=list)
     effect_check_ratio: float = 0.0
-    fault_detection_accuracy: float = 1.0
+    fault_detection_accuracy: float | None = None
+    fault_detection_status: str = "UNAVAILABLE_WITHOUT_LABELLED_FAULTY_DATASET"
 
 
 class DetailedObservedCoverage(BaseModel):
@@ -82,5 +83,7 @@ class DetailedObservedCoverage(BaseModel):
     guard_outcome_coverage: GuardOutcomeCoverageDetail
     selected_path_coverage: SelectedPathCoverageDetail
     state_effect_coverage: StateEffectCoverageDetail
-    overall_observed_coverage_ratio: float = 0.0
+    overall_observed_coverage_ratio: float | None = None
+    composite_coverage_status: str = "UNAVAILABLE_PREFER_SEPARATE_METRICS"
+    composite_coverage_formula: str | None = None
     aggregation_basis: str = "exact_pinned_model_targets_v1"

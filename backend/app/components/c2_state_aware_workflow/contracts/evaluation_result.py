@@ -119,3 +119,21 @@ class EvaluationResultContract(BaseModel):
     detailed_coverage: Any = None
     evaluator_timing_ms: float = 0.0
     evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ReproductionVerificationResult(BaseModel):
+    """Result of independent replay verification against retained execution evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    is_reproducible: bool
+    original_evaluation_id: str
+    run_id: str
+    original_verdict: RuntimeVerdict
+    replay_verdict: RuntimeVerdict
+    semantic_equality: bool
+    differences: list[str] = Field(default_factory=list)
+    original_evidence_digest: str
+    replay_evaluator_version: str
+    evaluated_freshly: bool = True
+    verified_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

@@ -1,0 +1,5 @@
+method_id,precision,recall,f1_score,localization_accuracy,mutation_detection,state_fault_detection,overhead_median_ms,overhead_p95_ms
+B1_FINAL_STATE_ONLY,1.0,1.0,1.0,None,1.0,1.0,0.05,0.106
+B2_TRACE_ONLY,1.0,0.6667,0.8,0.6667,0.6667,0.0,0.058,0.104
+B3_MILESTONE_BASED,1.0,1.0,1.0,None,1.0,1.0,0.055,0.101
+B4_FULL_C2,0.9375,1.0,0.9677,0.6667,1.0,1.0,0.357,0.872

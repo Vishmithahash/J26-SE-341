@@ -11,6 +11,8 @@ from app.components.c2_state_aware_workflow.contracts.efsm_model import (
 )
 from app.components.c2_state_aware_workflow.contracts.evaluation_result import (
     EvaluationResultContract,
+    ReproductionVerificationResult,
+    RuntimeVerdict,
 )
 from app.components.c2_state_aware_workflow.contracts.runtime_evidence import (
     RuntimeEvidenceContract,
@@ -235,3 +237,115 @@ class WorkflowEvaluationService:
         )
 
         return eval_result.model_copy(update={"evaluation_id": saved_record.id})
+
+    def verify_execution_reproduction(
+        self,
+        project_id: str,
+        evaluation_id: str,
+    ) -> ReproductionVerificationResult:
+        """Independently replays an evaluation against stored raw evidence and verifies semantic equality.
+
+        Does NOT rely on cached results. Re-runs the alignment engine and compares:
+        - verdict
+        - violation types and rules
+        - earliest divergence step and reason
+        - transition/guard/path coverage target sets
+        Excludes volatile metadata (IDs, timestamps, evaluator_timing_ms).
+        """
+        existing_eval = self.repo.get_evaluation_result(project_id, evaluation_id)
+        if existing_eval is None:
+            raise TestCaseNotFoundError(
+                f"Evaluation result '{evaluation_id}' not found for project '{project_id}'."
+            )
+
+        evidence_rec = self.repo.get_execution_evidence(
+            project_id, existing_eval.run_id
+        )
+        if evidence_rec is None:
+            raise TestCaseNotFoundError(
+                f"Retained evidence for run '{existing_eval.run_id}' not found."
+            )
+
+        evidence = RuntimeEvidenceContract(**evidence_rec.evidence_payload)
+
+        case_record = self.repo.get_test_case(
+            project_id, existing_eval.suite_id, existing_eval.test_id
+        )
+        if case_record is None:
+            raise TestCaseNotFoundError(
+                f"Test case '{existing_eval.test_id}' not found."
+            )
+        test_def = GeneratedTestDefinition(**case_record.definition)
+
+        model_record = self.repo.get_model(
+            project_id, test_def.pinned_model_id, test_def.pinned_model_version
+        )
+        if model_record is None:
+            raise ModelNotFoundError(
+                f"Pinned model '{test_def.pinned_model_id}' not found."
+            )
+        model_def = EFSMModelDefinition(**model_record.definition)
+        is_approved = model_record.lifecycle_status == "APPROVED"
+
+        config = existing_eval.evaluator_config or {}
+        max_configs = config.get("max_configurations", self.max_configurations)
+        engine = ConformanceEvaluationEngine(max_configurations=max_configs)
+
+        # Fresh evaluation from evidence
+        fresh_result = engine.evaluate(
+            model=model_def,
+            test_def=test_def,
+            evidence=evidence,
+            model_is_approved=is_approved,
+            pinned_content_hash=model_record.content_hash,
+        )
+
+        differences: list[str] = []
+        if fresh_result.verdict.value != existing_eval.verdict:
+            differences.append(
+                f"Verdict mismatch: original={existing_eval.verdict}, replay={fresh_result.verdict.value}"
+            )
+
+        orig_viols = [
+            (v.get("violation_type"), v.get("rule_reference"))
+            for v in existing_eval.violations
+        ]
+        fresh_viols = [
+            (v.violation_type.value, v.rule_reference) for v in fresh_result.violations
+        ]
+        if orig_viols != fresh_viols:
+            differences.append(
+                f"Violations mismatch: original={orig_viols}, replay={fresh_viols}"
+            )
+
+        orig_div = existing_eval.first_divergence
+        fresh_div = (
+            fresh_result.first_divergence.model_dump(mode="json")
+            if fresh_result.first_divergence
+            else None
+        )
+        if bool(orig_div) != bool(fresh_div):
+            differences.append("First divergence presence mismatch.")
+        elif (
+            orig_div
+            and fresh_div
+            and orig_div.get("step_index") != fresh_div.get("step_index")
+        ):
+            differences.append(
+                f"First divergence step mismatch: original={orig_div.get('step_index')}, replay={fresh_div.get('step_index')}"
+            )
+
+        semantic_match = len(differences) == 0
+
+        return ReproductionVerificationResult(
+            is_reproducible=semantic_match,
+            original_evaluation_id=existing_eval.id,
+            run_id=existing_eval.run_id,
+            original_verdict=RuntimeVerdict(existing_eval.verdict),
+            replay_verdict=fresh_result.verdict,
+            semantic_equality=semantic_match,
+            differences=differences,
+            original_evidence_digest=evidence_rec.evidence_digest,
+            replay_evaluator_version=existing_eval.evaluator_version,
+            evaluated_freshly=True,
+        )

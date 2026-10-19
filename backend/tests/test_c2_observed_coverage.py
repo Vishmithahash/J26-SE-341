@@ -199,8 +199,12 @@ def test_state_effect_coverage_satisfaction_violation_unknown(refund_model):
     assert eff_cov.numerator == 2
     assert eff_cov.denominator == 2
     assert eff_cov.coverage_ratio == 1.0
-    # Fault detection accuracy remains separate from coverage ratio
-    assert eff_cov.fault_detection_accuracy == 1.0
+    # Fault detection accuracy requires labelled evaluations and is not computed from normal effect checks
+    assert eff_cov.fault_detection_accuracy is None
+    assert (
+        eff_cov.fault_detection_status
+        == "UNAVAILABLE_REQUIRES_LABELLED_FAULTY_EVALUATIONS"
+    )
 
 
 def test_suite_aggregation_deduplication_and_model_isolation(refund_model):

@@ -780,7 +780,8 @@ class TraceToEFSMAlignmentEngine:
             unknown_effects=unknown_effects,
             completed_path_history=final_path_history,
             supporting_evidence=supporting_evidence,
-            is_terminal_accepting=True,
+            is_terminal_accepting=not is_negative_task,
+            is_terminal_rejection=is_negative_task,
         )
 
         return AlignmentResult(
