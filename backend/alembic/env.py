@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from sqlalchemy import create_engine, pool
 
 from alembic import context
+from app.components.c4_policy_aware_safety.persistence import models as _c4_models  # noqa: F401
 from app.config import get_settings
 from app.database import Base, normalize_database_url
 

@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.components.c4_policy_aware_safety.api import router as c4_router
 from app.database import engine
 from app.health import router as health_router
 
@@ -21,3 +22,4 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(c4_router)

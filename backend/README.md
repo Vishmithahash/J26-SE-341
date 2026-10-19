@@ -129,17 +129,25 @@ The backend is structured as a **FastAPI modular monolith**:
 | `app/components/c1_tool_call_correctness` | **C1: Explainable Tool-Call Correctness Testing** |
 | `app/components/c2_state_aware_workflow` | **C2: State-Aware Multi-Step Workflow Testing** |
 | `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** |
-| `app/components/c4_policy_prompt_injection` | **C4: Policy-Aware Safety and Prompt-Injection Testing** |
+| `app/components/c4_policy_aware_safety` (alias: `c4_policy_prompt_injection`) | **C4: Policy-Aware Safety and Prompt-Injection Testing** (Phase 1 Implemented — see [docs/c4_phase1_foundation.md](docs/c4_phase1_foundation.md)) |
 
-### Future Internal Component Organization (Document Only)
-When component implementation begins, components will use meaningful subpackages rather than flat root files (canonical subpackage imports will be used without duplicate root wrappers).
-For **C3**, the agreed future organization will be:
-- `contracts/`: Typed input/output contracts and schemas.
-- `services/`: Validation, fault generation, and domain evaluation logic.
-- `runtime/`: Target adapters, fault injection, execution hooks, and evidence handling.
-- `api/`: FastAPI route handlers and request/response models.
+### Internal Component Organization
+- **C4 (Phase 1 Implemented)**:
+  - `contracts/`: Typed Pydantic v2 schemas for artifacts, rules, contracts, evidence packages, findings, and future integration protocols.
+  - `predicates/`: Safe, allowlisted declarative predicate evaluation engine with Kleene 3-valued logic and integer minor units / Decimal support.
+  - `derivation/`: Intake normalization, section offset detection, controlled-language rule extraction, and structured JSON import with source provenance verification.
+  - `validation/`: Contract validation, duplicate and conflict detection, and explicit review acceptance.
+  - `evaluator/`: Deterministic policy evaluator against supplied evidence with exact verdicts (`PASS`, `FAIL`, `INCONCLUSIVE`, `NOT_EXERCISED`), boundary evaluation (attempt vs. effect vs. disclosure), and attribution reporting.
+  - `persistence/`: SQLAlchemy models and repository for artifact versions, candidate rules, policy contracts, and evaluation findings.
+  - `api/`: FastAPI route handlers under `/projects/{project_id}/c4`.
 
-Other components will define responsibility-based subpackages aligned with their specific research requirements. Nested subpackages will only be created when actual implementation starts.
+- **C3**:
+  - `contracts/`: Typed input/output contracts and schemas.
+  - `services/`: Validation, fault generation, and domain evaluation logic.
+  - `runtime/`: Target adapters, fault injection, execution hooks, and evidence handling.
+  - `api/`: FastAPI route handlers and request/response models.
+
+Other components will define responsibility-based subpackages aligned with their specific research requirements.
 
 ---
 
