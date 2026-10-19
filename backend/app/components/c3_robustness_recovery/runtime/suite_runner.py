@@ -388,17 +388,25 @@ async def main_async(args: list[str]) -> int:
         default="evidence_output",
         help="Directory to save exported JSON artifacts.",
     )
+    parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Persist execution manifest, progress, and matched pair evidence into QA database.",
+    )
+    parser.add_argument(
+        "--project-id",
+        default="proj-demo-qa",
+        help="Project scope identifier when running in persisted mode (default: proj-demo-qa).",
+    )
 
     parsed = parser.parse_args(args)
 
     fixture_mgr = DemonstrationFixtureManager()
     adapter = DemonstrationToolAdapter(fixture_manager=fixture_mgr)
-    metadata = make_demonstration_task_fixture_metadata()
-    recovery = make_demonstration_recovery_contract()
 
     target_mode = TargetMode.LIVE_AUT if parsed.live else TargetMode.DEMONSTRATION
 
-    print(f"[C3 Phase 3 Suite Runner] Mode: {target_mode.value}")
+    print(f"[C3 Suite Runner] Mode: {target_mode.value} | Persisted: {parsed.persist}")
 
     # 1. Obtain or load the frozen suite
     suite: FrozenSuite | None = None
@@ -412,6 +420,21 @@ async def main_async(args: list[str]) -> int:
         with open(suite_path, encoding="utf-8") as f:  # noqa: ASYNC230
             data = json.load(f)
         suite = FrozenSuite.model_validate(data)
+        if suite.selected_cases:
+            declared_proj = suite.selected_cases[0].project_id
+            if (
+                declared_proj
+                and parsed.project_id != "proj-demo-qa"
+                and parsed.project_id != declared_proj
+            ):
+                print(
+                    f"Error: Project scope mismatch: Suite declares project '{declared_proj}', "
+                    f"which does not match specified --project-id '{parsed.project_id}'.",
+                    file=sys.stderr,
+                )
+                return 1
+            if declared_proj and parsed.project_id == "proj-demo-qa":
+                parsed.project_id = declared_proj
         print(f"Loaded suite '{suite.suite_id}' (digest: {suite.suite_digest[:16]}...)")
     else:
         # Generate on the fly
@@ -426,8 +449,8 @@ async def main_async(args: list[str]) -> int:
             f"(digest: {suite.suite_digest[:16]}...)"
         )
 
-    # If AFTER_COMMIT scenario requested explicitly and not present in selected cases, add demonstration case
-    if parsed.after_commit:
+    # If AFTER_COMMIT scenario requested explicitly and not present in on-the-fly selected cases
+    if parsed.after_commit and not parsed.suite_file:
         after_commit_case = make_demonstration_after_commit_case()
         has_ac = any(
             c.effect_phase == EffectPhase.AFTER_COMMIT for c in suite.selected_cases
@@ -448,11 +471,54 @@ async def main_async(args: list[str]) -> int:
             )
             print("Appended application-aware AFTER_COMMIT case to suite.")
 
+    # 2. If persistence requested, validate database readiness and record execution manifest
+    execution_id = f"exec-{uuid4().hex[:12]}"
+    db_session = None
+
+    if parsed.persist:
+        from app.components.c3_robustness_recovery.contracts.persistence import (
+            ExecutionCreateRequest,
+        )
+        from app.components.c3_robustness_recovery.services.run_tracking import (
+            create_execution_manifest,
+        )
+        from app.components.c3_robustness_recovery.services.storage import (
+            store_frozen_suite,
+        )
+        from app.database import SessionLocal
+
+        try:
+            db_session = SessionLocal()
+            store_frozen_suite(db_session, parsed.project_id, suite)
+            exec_create_req = ExecutionCreateRequest(
+                execution_id=execution_id,
+                suite_digest=suite.suite_digest,
+                project_id=parsed.project_id,
+                target_mode=target_mode.value,
+                caller_identity="SCRIPTED_CALLER",
+                planned_cases=[c.case_id for c in suite.selected_cases],
+                configuration_snapshot={
+                    "target_mode": target_mode.value,
+                    "max_suite_duration_sec": 60.0,
+                    "per_case_timeout_sec": 10.0,
+                },
+            )
+            create_execution_manifest(db_session, parsed.project_id, exec_create_req)
+            print(f"Created planned execution manifest: {execution_id}")
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"Error initializing persistence: {exc}. Persisted execution blocked.",
+                file=sys.stderr,
+            )
+            if db_session:
+                db_session.close()
+            return 1
+
     suite_runner = SuiteRunner(
         adapter=adapter,
         fixture_manager=fixture_mgr,
-        task_fixture_metadata=metadata,
-        recovery_contract=recovery,
+        task_fixture_metadata=suite.task_fixture_metadata,
+        recovery_contract=suite.recovery_contract,
         target_mode=target_mode,
         caller_identity=CallerIdentity.SCRIPTED_CALLER,
     )
@@ -485,6 +551,56 @@ async def main_async(args: list[str]) -> int:
             if r.blocked_reasons:
                 for b in r.blocked_reasons:
                     print(f"    - {b}")
+
+        # 3. If persistence requested, commit progress and finalized summary
+        if parsed.persist and db_session:
+            from app.components.c3_robustness_recovery.services.run_tracking import (
+                finalize_execution_lifecycle,
+                record_case_execution_progress,
+                save_local_fallback_artifact,
+            )
+
+            try:
+                for r in summary.case_results:
+                    record_case_execution_progress(
+                        db=db_session,
+                        project_id=parsed.project_id,
+                        execution_id=execution_id,
+                        case_id=r.case_id,
+                        status=r.status,
+                        evidence=r.evidence,
+                    )
+                finalize_execution_lifecycle(
+                    db=db_session,
+                    project_id=parsed.project_id,
+                    execution_id=execution_id,
+                    summary=summary,
+                )
+                print(f"Persisted execution lifecycle and results for {execution_id}.")
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"Warning: Database writing failed after execution: {exc}. Saving local fallback artifact.",
+                    file=sys.stderr,
+                )
+                save_local_fallback_artifact(
+                    export_dir=Path(parsed.export_dir),
+                    execution_id=execution_id,
+                    payload={
+                        "execution_id": execution_id,
+                        "suite_id": summary.suite_id,
+                        "suite_digest": summary.suite_digest,
+                        "summary": {
+                            "executed_count": summary.executed_count,
+                            "blocked_count": summary.blocked_count,
+                            "unsupported_count": summary.unsupported_count,
+                            "cancelled_count": summary.cancelled_count,
+                            "error_count": summary.error_count,
+                            "confirmed_exposure_count": summary.confirmed_exposure_count,
+                        },
+                    },
+                )
+            finally:
+                db_session.close()
 
         # Save summary artifact to export directory
         export_dir = Path(parsed.export_dir)
@@ -521,6 +637,9 @@ async def main_async(args: list[str]) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"[C3 Phase 3 Suite Runner] ERROR: {exc}", file=sys.stderr)
         return 1
+
+
+run_suite_cli = main_async
 
 
 def main() -> None:

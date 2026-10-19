@@ -240,15 +240,15 @@ class DomainToolInterceptor:
             await asyncio.sleep(hold_sec)
         except asyncio.CancelledError:
             elapsed_ms = (self._clock() - start_time) * 1000.0
-            # Gap A fix: Cancellation vs Timeout
-            # Require elapsed time >= 90% of declared caller timeout to establish deadline expiry.
-            is_deadline_expiry = elapsed_ms >= (plan.caller_timeout_ms * 0.9)
+            # Phase 4 correction: Remove 90% threshold heuristic.
+            # External cancellation alone (before, near, or after deadline) does not prove caller deadline expiry.
+            # Preserve uncertainty: without explicit caller deadline confirmation, caller_observed_timeout is False.
+            caller_observed = False
             cancellation_reason = (
-                "CALLER_DEADLINE_EXPIRY"
-                if is_deadline_expiry
-                else "PREMATURE_EXTERNAL_CANCELLATION"
+                "PREMATURE_EXTERNAL_CANCELLATION"
+                if elapsed_ms < plan.caller_timeout_ms
+                else "EXTERNAL_CANCELLATION_UNVERIFIED_CAUSE"
             )
-            caller_observed = is_deadline_expiry
 
             episode_record = FaultEpisodeRecord(
                 episode_id=episode_id,
@@ -274,9 +274,9 @@ class DomainToolInterceptor:
             self._episode_records.append(episode_record)
 
             event_type = (
-                "CALLER_TIMEOUT_OBSERVED_ON_CANCELLATION"
-                if is_deadline_expiry
-                else "INTERCEPTION_CANCELLED_BEFORE_TIMEOUT"
+                "INTERCEPTION_CANCELLED_BEFORE_TIMEOUT"
+                if elapsed_ms < plan.caller_timeout_ms
+                else "INTERCEPTION_CANCELLED_UNVERIFIED_CAUSE"
             )
             self._events.append(
                 RuntimeEvent(
@@ -290,7 +290,7 @@ class DomainToolInterceptor:
                         "elapsed_ms": elapsed_ms,
                         "boundary": (
                             "Caller timeout interrupted operation"
-                            if is_deadline_expiry
+                            if caller_observed
                             else "Operation cancelled before timeout boundary"
                         ),
                         "cancellation_reason": cancellation_reason,
@@ -563,7 +563,13 @@ class DomainToolInterceptor:
             await asyncio.sleep(hold_sec)
         except asyncio.CancelledError:
             elapsed_ms = (self._clock() - start_time) * 1000.0
-            is_deadline = elapsed_ms >= (plan.caller_timeout_ms * 0.9)
+            # Phase 4 correction: Remove 90% threshold heuristic. External cancellation does not manufacture timeout.
+            caller_observed = False
+            cancellation_reason = (
+                "PREMATURE_EXTERNAL_CANCELLATION"
+                if elapsed_ms < plan.caller_timeout_ms
+                else "EXTERNAL_CANCELLATION_UNVERIFIED_CAUSE"
+            )
             episode_record = FaultEpisodeRecord(
                 episode_id=episode_id,
                 target_tool_id=tool_id,
@@ -575,16 +581,12 @@ class DomainToolInterceptor:
                 declared_caller_timeout_ms=plan.caller_timeout_ms,
                 timeout_boundary_type=plan.timeout_boundary_type,
                 prevented_forwarding=False,
-                caller_observed_timeout=is_deadline,
+                caller_observed_timeout=caller_observed,
                 elapsed_wait_ms=elapsed_ms,
                 consumed_atomically=True,
                 committed_operation_id=operation_id,
                 independent_observation_confirmed=True,
-                cancellation_reason=(
-                    "CALLER_DEADLINE_EXPIRY"
-                    if is_deadline
-                    else "PREMATURE_EXTERNAL_CANCELLATION"
-                ),
+                cancellation_reason=cancellation_reason,
             )
             self._episode_records.append(episode_record)
             raise

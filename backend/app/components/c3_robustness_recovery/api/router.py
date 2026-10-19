@@ -5,6 +5,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
+from app.components.c3_robustness_recovery.api.persistence_router import (
+    router as persistence_router,
+)
+from app.components.c3_robustness_recovery.contracts.evaluation import (
+    RecoveryEvaluationRequest,
+    RecoveryEvaluationResult,
+)
 from app.components.c3_robustness_recovery.contracts.generation import (
     FaultGenerationRequest,
     FaultGenerationResponse,
@@ -16,6 +23,9 @@ from app.components.c3_robustness_recovery.contracts.schemas import (
 )
 from app.components.c3_robustness_recovery.services.generation import (
     generate_feasible_cases,
+)
+from app.components.c3_robustness_recovery.services.recovery_evaluation import (
+    evaluate_recovery,
 )
 from app.components.c3_robustness_recovery.services.validation import (
     get_fault_catalog,
@@ -64,6 +74,8 @@ router = APIRouter(
     tags=["Component 3: Robustness and Failure Recovery"],
     route_class=C3SafeRoute,
 )
+
+router.include_router(persistence_router)
 
 
 @router.get(
@@ -115,3 +127,21 @@ def generate_cases(
 ) -> FaultGenerationResponse:
     """Deterministically generate and freeze feasible fault cases without executing them."""
     return generate_feasible_cases(request)
+
+
+@router.post(
+    "/recovery/evaluate",
+    response_model=RecoveryEvaluationResult,
+    status_code=status.HTTP_200_OK,
+    summary="Evaluate Recovery From Evidence and C2 Facts",
+    description=(
+        "Performs pure deterministic evaluation of recovery rules against frozen contracts, "
+        "linked trial evidence, and C2 assertion facts. Returns explainable recovery verdicts "
+        "(PASS_COMPLETED, PASS_GRACEFUL, FAIL, INCONCLUSIVE) without target execution."
+    ),
+)
+def evaluate_recovery_endpoint(
+    request: RecoveryEvaluationRequest,
+) -> RecoveryEvaluationResult:
+    """Deterministically evaluate recovery rules from submitted evidence and C2 facts."""
+    return evaluate_recovery(request)

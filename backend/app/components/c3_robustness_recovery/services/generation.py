@@ -315,7 +315,7 @@ def generate_feasible_cases(
 
                         candidate_dict = {
                             "schema_version": "1.0.0",
-                            "project_id": f"{metadata.domain}-qa",
+                            "project_id": request.project_id or f"{metadata.domain}-qa",
                             "case_id": "case-candidate-provisional",
                             "case_family_id": "fam-candidate-provisional",
                             "domain": metadata.domain,

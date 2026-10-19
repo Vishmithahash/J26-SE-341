@@ -152,20 +152,21 @@ Other components will define responsibility-based subpackages aligned with their
 |---|---|---|
 | `app/components/c1_tool_call_correctness` | **C1: Explainable Tool-Call Correctness Testing** | Reserved (Not implemented) |
 | `app/components/c2_state_aware_workflow` | **C2: State-Aware Multi-Step Workflow Testing** | Reserved (Not implemented) |
-| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phase 1, Phase 2 & Phase 3 Implemented** (Phases 4–6 Unimplemented) |
+| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phases 1–7 Implemented & Verified Offline** (Cross-Component Integration Pending) |
 | `app/components/c4_policy_prompt_injection` | **C4: Policy-Aware Safety and Prompt-Injection Testing** | Reserved (Not implemented) |
 
 ---
 
 ## Component 3: Robustness and Failure Recovery Testing
 
-### Six-Phase Implementation Roadmap
+### Implementation Roadmap
 1. **Phase 1: Contracts, Fault Catalogue, Static Validation and APIs** &mdash; **IMPLEMENTED (Stateless Foundation)**
 2. **Phase 2: One-Tool Integration, Matched Trials, Verified Timeout Exposure and Safeguards** &mdash; **IMPLEMENTED (Demonstrated Vertical Slice)**
 3. **Phase 3: Automatic Generation, Frozen Suites, Remaining Fault Families and Supported Post-Commit Experiments** &mdash; **IMPLEMENTED (Pure Generation & Bounded Suites)**
-4. **Phase 4: Recovery Evaluation Using Evidence and C2 Facts** &mdash; *UNIMPLEMENTED*
-5. **Phase 5: Shared Persistence, Execution Tracking, Results and Reporting** &mdash; *UNIMPLEMENTED*
-6. **Phase 6: Second Domain, Research Experiments, Baselines, Metrics and Final Validation** &mdash; *UNIMPLEMENTED*
+4. **Phase 4: Recovery Evaluation Using Evidence and C2 Facts** &mdash; **IMPLEMENTED (Deterministic Recovery Evaluator)**
+5. **Phase 5: Shared Persistence, Execution Tracking, Results and Reporting** &mdash; **IMPLEMENTED (C3 Persistence & Reporting)**
+6. **Phase 6: Second Domain, Research Experiments, Baselines, Metrics and Acceptance Reporting** &mdash; **IMPLEMENTED (Research Architecture & Baselines)**
+7. **Phase 7: C3 Internal Completion and Offline Verification** &mdash; **IMPLEMENTED (Offline Completion & Hermetic Verification)**
 
 ### Phase 1 Canonical Structure
 ```text
@@ -563,6 +564,384 @@ python -m pytest
 
 # Run Phase 3 specific tests
 python -m pytest tests/test_c3_phase3.py
+
+# Check code formatting and linting
+python -m ruff check .
+python -m ruff format --check .
+
+# Verify dependency consistency
+python -m pip check
+```
+
+---
+
+## Component 3: Phase 4 (Recovery Evaluation Using Evidence and C2 Facts)
+
+Phase 4 introduces deterministic, explainable evaluation of recovery behavior from frozen recovery contracts, linked trial evidence, and versioned Component 2 workflow assertion facts. It produces authoritative recovery verdicts without executing targets, modifying agent recovery, or evaluating C2 workflow state machines internally.
+
+### Canonical Phase 4 Structure
+```text
+backend/app/components/c3_robustness_recovery/
+    contracts/
+        evaluation.py           # Pydantic v2 models: RecoveryEvaluationRequest/Result, RecoveryVerdict, RuleEvaluationStatus
+    services/
+        recovery_evaluation.py  # Pure deterministic evaluator implementing 6 fixed recovery rules and 4 verdicts
+        c2_facts.py             # Minimal C2 assertion fact interface, scope conflict detection, and status checking
+    runtime/
+        evaluate.py             # Offline evaluation developer CLI
+backend/tests/test_c3_phase4.py # Comprehensive hermetic test suite (21 unit and integration tests)
+```
+
+### Confirmed Phase 3 Corrections
+1. **Timeout / Cancellation Heuristic Removal**:
+   - Removed the 90% elapsed time threshold from `DomainToolInterceptor`. External or manual cancellation before, near, or after the configured deadline no longer manufactures confirmed timeout exposure.
+   - Without explicit caller deadline confirmation, cancellation records `PREMATURE_EXTERNAL_CANCELLATION` or `EXTERNAL_CANCELLATION_UNVERIFIED_CAUSE` with `caller_observed_timeout = False` (`ExposureStatus.EXPOSURE_UNKNOWN`).
+2. **AFTER_COMMIT Causal Event Ordering**:
+   - Exposure verification strictly enforces per-trial causal event ordering:
+     `APPLICATION_AWARE_HOOK_ENTERED` &rarr; `INDEPENDENT_COMMIT_OBSERVATION` &rarr; `POST_COMMIT_REPLY_WITHHELD` &rarr; caller lost-response timeout.
+   - Contradictory order, missing commit confirmation, or unverified operation IDs immediately rejects exposure.
+3. **Malformed Response Consumption Boundary**:
+   - Requires evidence that corrupted content reached the caller consumption boundary and produced an observable parser, schema, or decode failure matching the declared mode.
+4. **Frozen Artifact Consumption**:
+   - `SuiteRunner` loads exported suite JSON artifacts from disk, verifies cryptographic suite digests, and consumes frozen `task_fixture_metadata` and `recovery_contract` without mutating cases or relying on hardcoded lists.
+
+---
+
+### Component 2 Workflow Facts Interface
+Component 2 (C2) owns multi-step state machine modeling, workflow state assertion definitions, and evaluation of truth values. Component 3 (C3) consumes discrete facts without recomputing domain state:
+- **Fact Schema (`C2AssertionFact`)**: `assertion_id`, `assertion_version`, `value` (`TRUE`, `FALSE`, `UNKNOWN`), `entity_id`, `snapshot_id`, `time_scope`, `evaluator_version`, `provenance`, and `supporting_evidence_refs`.
+- **Conflict Detection**: Detects contradictory truth values (both `TRUE` and `FALSE`) within the identical `(assertion_id, entity_id, snapshot_id, time_scope)` scope and safely rejects evaluation.
+- **Missing Facts**: Any missing assertion fact is treated strictly as `UNKNOWN`.
+- **Live C2 Status**: `check_c2_integration_status()` reports that live C2 service integration is **BLOCKED**; `app.components.c2_state_aware_workflow` contains an empty package marker. Offline and fixture facts are consumed.
+
+---
+
+### Fixed Recovery Rules
+
+| Rule Identifier | Rule Name | Contract Requirements Evaluated | Satisfied Condition | Violated Condition |
+|---|---|---|---|---|
+| `RULE_COMPLETION` | Task Completion Verification | `permitted_terminal_outcomes`, `required_state_assertions` | Permitted completion outcome achieved and all required C2 state assertions are `TRUE`. | Caller reported unpermitted terminal outcome or required C2 assertion is `FALSE`. |
+| `RULE_GRACEFUL_STOPPING` | Graceful Stopping Verification | `permitted_terminal_outcomes` | Caller stopped under an explicitly permitted terminal outcome (e.g. `DEGRADED_COMPLETION`, `ABORT_SAFE`). | Caller stopped under unpermitted terminal outcome or external cancellation. |
+| `RULE_BUDGETS` | Recovery Budget Constraints | `max_retries`, `max_tool_calls_budget`, `max_total_timeout_ms` | Retries, tool calls count, and elapsed trial time within contract bounds. | Retries, tool calls, or elapsed trial time exceeded contract budget. |
+| `RULE_DUPLICATE_EFFECTS` | Duplicate Side-Effect Prevention | `allow_duplicate_side_effects` | No duplicate side effects observed or reported by C2 facts. | C2 fact confirms duplicate side effect occurred, or multiple distinct side effects observed. |
+| `RULE_UNSAFE_RETRIES` | Unsafe Retry Prevention | `allow_retry_on_unverified_commit` | No retry after post-commit fault, or retry safely reused idempotency key. | Retried after post-commit fault without idempotency key reuse. |
+| `RULE_TRUTHFUL_COMPLETION` | Truthful Completion Reporting | `require_truthful_completion_reporting` | Caller completion claims match verified C2 facts, or truthful error outcome reported. | Caller claimed success, but required state assertions are demonstrably `FALSE`. |
+
+---
+
+### Authoritative Recovery Verdicts
+
+For eligible trials with confirmed fault exposure:
+1. **`PASS_COMPLETED`**:
+   - `RULE_COMPLETION` is `SATISFIED`.
+   - All applicable recovery budget, duplicate effect, unsafe retry, and truthful completion rules are `SATISFIED`.
+   - No required evidence is `UNKNOWN`.
+2. **`PASS_GRACEFUL`**:
+   - `RULE_GRACEFUL_STOPPING` is `SATISFIED` (caller stopped under an explicitly permitted non-completion outcome).
+   - All applicable constraint rules are `SATISFIED`.
+   - No required evidence is `UNKNOWN`.
+3. **`FAIL`**:
+   - Any evaluated recovery rule has status `VIOLATED`.
+   - Identifies `first_violated_rule` for explainable diagnostics.
+4. **`INCONCLUSIVE`**:
+   - No proven violation, but one or more required rules are `UNKNOWN` due to missing C2 facts, incomplete evidence, or `UNCERTAIN` cleanup settling.
+5. **`NOT_EVALUATED` (`recovery_verdict = null`)**:
+   - Trial was not ready, execution encountered a harness error, exposure was unconfirmed/unassessed, or evidence linkage was invalid.
+
+---
+
+### Recovery Evaluation API
+
+`POST /api/v1/c3/recovery/evaluate`
+
+Evaluates submitted evidence and C2 facts deterministically. Does not execute trials, access networks, write files, or query databases.
+
+**Request Payload (`RecoveryEvaluationRequest`):**
+```json
+{
+  "project_id": "proj-qa-001",
+  "case_id": "case-c3-demo-001",
+  "evaluator_version": "1.0.0",
+  "rule_set_version": "1.0.0",
+  "candidate_case": { ... },
+  "recovery_contract": { ... },
+  "matched_evidence": { ... },
+  "c2_facts": [
+    {
+      "assertion_id": "state_order_created",
+      "assertion_version": "1.0.0",
+      "value": "TRUE",
+      "provenance": "C2_DEMO_FIXTURE"
+    }
+  ]
+}
+```
+
+**Response Payload (`RecoveryEvaluationResult`):**
+```json
+{
+  "project_id": "proj-qa-001",
+  "case_id": "case-c3-demo-001",
+  "pair_id": "pair-28561fd6",
+  "evaluator_version": "1.0.0",
+  "rule_set_version": "1.0.0",
+  "evaluation_status": "EVALUATED",
+  "recovery_verdict": "PASS_COMPLETED",
+  "first_violated_rule": null,
+  "rule_results": [
+    {
+      "rule_id": "RULE_COMPLETION",
+      "rule_name": "Task Completion Verification",
+      "status": "SATISFIED",
+      "reason_code": null,
+      "message": "Verified task completion under permitted outcome 'SUCCESS_AFTER_RETRY'."
+    },
+    ...
+  ],
+  "clean_control_limitations": [],
+  "demonstration_limitations": [
+    "Evaluation performed against in-memory demonstration test double. Does not establish live application-under-test or live agent accuracy."
+  ],
+  "actor_attribution": "SCRIPTED_CALLER",
+  "evaluated_at_utc": "2026-10-18T19:19:11.123456Z"
+}
+```
+
+---
+
+### Local Developer CLI Commands
+
+#### 1. Offline Recovery Evaluation CLI
+Evaluate an exported matched pair evidence artifact:
+```powershell
+python -m app.components.c3_robustness_recovery.runtime.evaluate --evidence-file evidence_output/evidence_pair_*.json --synthetic-facts
+```
+Options:
+- `--evidence-file <path>`: Required path to trial pair evidence artifact.
+- `--c2-facts-file <path>`: Optional path to external C2 facts JSON artifact.
+- `--synthetic-facts`: Injects default demonstration fixture C2 facts.
+- `--export-dir <path>`: Exports sanitized evaluation result JSON artifact (default: `evidence_output/`).
+
+#### 2. Matched Pair Runner (Phase 2)
+```powershell
+python -m app.components.c3_robustness_recovery.runtime.runner --synthetic
+```
+
+#### 3. Frozen Suite Runner (Phase 3 & Phase 5)
+```powershell
+# Offline demonstration execution (stateless)
+python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic
+python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --after-commit
+python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --suite-file <path>
+
+# Persisted execution with database lifecycle tracking (Phase 5)
+python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --persist --project-id proj-demo-qa
+python -m app.components.c3_robustness_recovery.runtime.evaluate --evidence-file evidence_output/evidence_pair_*.json --synthetic-facts --persist --project-id proj-demo-qa
+```
+
+---
+
+## Component 3 Phase 5: Shared Persistence, Execution Tracking, Results and Reporting
+
+Phase 5 introduces scoped database persistence for versioned C3 experiment artifacts, execution tracking, append-only recovery evaluation history, and backend reporting in the modular monolith.
+
+### Canonical Phase 5 Structure
+```text
+backend/app/components/c3_robustness_recovery/
+    contracts/
+        persistence.py         # Typed Pydantic v2 storage, import, query, and reporting contracts
+    models/
+        __init__.py            # Model export package
+        persistence.py         # C3-owned SQLAlchemy models (C3SuiteModel, C3CaseModel, etc.)
+    repositories/
+        persistence.py         # Scoped repository enforcing project isolation, digests, and transactions
+    services/
+        storage.py             # Transactional validation, idempotent persistence, and evaluator invocation
+        run_tracking.py        # Execution manifest and lifecycle progress tracking
+        reporting.py           # Structured JSON aggregation and downloadable CSV summaries
+    api/
+        persistence_router.py  # REST endpoints for suites, cases, executions, pairs, evals, and reports
+        router.py              # Canonical C3 router mounting stateless and persisted routers
+    runtime/
+        suite_runner.py        # Integrated --persist execution flag and lifecycle updates
+        evaluate.py            # Integrated --persist flag for re-evaluating stored evidence
+backend/alembic/
+    env.py                     # Registered C3 models on shared Base.metadata
+    versions/
+        e75342624f8c_create_c3_persistence_tables.py # Additive migration for C3 persistence tables
+backend/tests/
+    test_c3_phase5.py          # Hermetic tests covering all Phase 5 requirements
+```
+
+### Data Ownership & Shared-Record References
+C3 defines and owns 5 focused database tables in the QA framework database:
+- **`c3_suites`**: Immutable snapshots of frozen suites, content digests, schemas, and generator versions.
+- **`c3_cases`**: Selected candidate fault cases with case fingerprints and ordering.
+- **`c3_executions`**: Execution manifests, lifecycle status (`PLANNED`, `RUNNING`, `COMPLETED`, `CANCELLED`, `ERROR`), target mode, and configuration snapshots.
+- **`c3_matched_pairs`**: Differential trial pairs linking clean baseline and fault trials, exposure outcomes, clean qualification, and evidence digests.
+- **`c3_evaluations`**: Append-only evaluation history linking input digests, rule evaluation outcomes, actor attributions, and recovery verdicts.
+
+**Shared-Record References**:
+- Shared identifiers (`project_id`, `run_id`, `event_id`) are preserved as documented opaque references.
+- Suite executions maintain a dedicated `execution_id` without corrupting existing single-trial `run_id` semantics.
+- Competing global `Project`, `Run`, or `Event` tables are strictly avoided. Shared platform integrations remain documented as pending until the shared platform contracts are delivered.
+
+### Alembic Migration & Setup Commands
+The additive migration `e75342624f8c` registers all C3 persistence tables on the shared `Base.metadata`.
+
+```powershell
+# Inspect current heads and status
+alembic heads
+alembic current
+
+# Apply additive migration to QA framework database
+alembic upgrade head
+```
+> **Database Scope & Safeguards:**
+> - Migrations must ONLY be applied to the QA framework PostgreSQL database.
+> - Application-Under-Test (AUT) databases are **NEVER** migrated or reset.
+> - Default unit and integration tests run against isolated in-memory SQLite (`sqlite:///:memory:`).
+> - Opt-in PostgreSQL migration and round-trip verification can be enabled by setting `TEST_DATABASE_URL` against an isolated PostgreSQL test instance.
+
+### Phase 5 REST API Reference (`/api/v1/c3`)
+All persistence routes require explicit logical `project_id` scoping, support deterministic sorting, and apply bounded pagination (`limit <= 200`, `offset >= 0`).
+
+| Method | Endpoint | Description | Key Query / Body Parameters |
+|---|---|---|---|
+| `POST` | `/api/v1/c3/suites/import` | Idempotently import a verified frozen suite and case snapshots. | Body: `SuiteImportRequest` |
+| `GET` | `/api/v1/c3/suites` | List stored suites with bounded pagination. | `project_id`, `domain`, `limit`, `offset` |
+| `GET` | `/api/v1/c3/suites/{suite_id_or_digest}` | Retrieve stored frozen suite. | `project_id` |
+| `GET` | `/api/v1/c3/cases` | List stored candidate cases. | `project_id`, `suite_digest`, `fault_family`, `effect_phase`, `limit`, `offset` |
+| `GET` | `/api/v1/c3/cases/{case_id}` | Retrieve individual stored case. | `project_id`, `suite_digest` |
+| `POST` | `/api/v1/c3/executions/import` | Import completed/partial execution artifact without executing. | Body: `ExecutionImportRequest` |
+| `GET` | `/api/v1/c3/executions` | List tracked executions. | `project_id`, `status`, `target_mode`, `suite_digest`, `limit`, `offset` |
+| `GET` | `/api/v1/c3/executions/{execution_id}` | Retrieve tracked execution manifest. | `project_id` |
+| `GET` | `/api/v1/c3/matched-pairs` | List matched trial pairs and trial evidence. | `project_id`, `execution_id`, `case_id`, `exposure_status`, `clean_qualification` |
+| `GET` | `/api/v1/c3/matched-pairs/{pair_id}` | Retrieve individual matched pair. | `project_id` |
+| `POST` | `/api/v1/c3/evaluations/compute` | Authoritatively evaluate stored inputs and append versioned result. | Body: `EvaluationComputeRequest` |
+| `GET` | `/api/v1/c3/evaluations` | List recovery evaluation results. | `project_id`, `pair_id`, `case_id`, `recovery_verdict`, `evaluator_version` |
+| `GET` | `/api/v1/c3/evaluations/{evaluation_id}` | Retrieve recovery evaluation record. | `project_id` |
+| `GET` | `/api/v1/c3/reports/executions/{execution_id}` | Retrieve structured execution report with explicit denominators. | `project_id` |
+| `GET` | `/api/v1/c3/reports/executions/{execution_id}/csv` | Download execution summary as CSV file. | `project_id` |
+
+*Existing stateless validation and evaluation endpoints (`/cases/validate`, `/generate`, `/recovery/evaluate`) remain 100% side-effect free.*
+
+### Evaluation History & Idempotency Rules
+1. **Append-Only History**: Evaluator executions never overwrite existing records. Re-evaluating stored evidence produces a distinct `evaluation_id` linked to the input digest and current `evaluator_version` (`"1.1.0"`).
+2. **Idempotent Imports**:
+   - Submitting an identical frozen suite or execution artifact returns the existing persisted record (`200 OK`).
+   - Submitting a payload with the same identifier but differing content digest returns a clean conflict (`409 Conflict`).
+3. **No Client-Supplied Verdicts**: Clients cannot inject arbitrary verdicts. `/evaluations/compute` loads the authoritative persisted evidence and candidate contracts and executes the canonical evaluator service.
+4. **Data Redaction**: Sensitive attributes (credentials, passwords, authorization headers, database connection strings) are strictly excluded and redacted before persistence or export.
+
+### Run Interruption & Failure Handling
+- **Harness Failure vs Recovery Verdict**: A harness crash or run cancellation does NOT map to a `FAIL` verdict. Harness errors are recorded with execution status `ERROR` or `CANCELLED`; recovery verdicts remain `null`.
+- **Database Write Failure**: If a database write fails following a tool operation, the runner **never** re-executes the tool to reproduce evidence. Instead, it serializes a sanitized local fallback artifact to `--export-dir` for subsequent idempotent import via `/api/v1/c3/executions/import`.
+- **Partial Executions**: Executions stopped mid-run preserve planned, executed, blocked, unsupported, and cancelled counts without marking incomplete runs successful.
+
+### Backend Reporting & Denominators
+Reports generated via `/api/v1/c3/reports/executions/{execution_id}` provide explicit, non-overlapping counts and clear denominators:
+- **Planned Cases Denominator**: Total cases scheduled in the frozen suite manifest.
+- **Executed Pairs Denominator**: Total matched baseline-fault pairs initiated by the runner.
+- **Evaluated Trials Denominator**: Total confirmed-exposure fault trials evaluated by the recovery evaluation engine.
+- **Verdict Counts**: `PASS_COMPLETED`, `PASS_GRACEFUL`, `FAIL`, `INCONCLUSIVE`, `NOT_EVALUATED`.
+- **Demonstration Attribution**: Reports generated from in-memory test doubles are explicitly flagged with `demonstration_mode=true` and carry diagnostic limitations preventing misuse as live agent benchmarks.
+
+### Phase 4 Audit Corrections (Evaluator Version 1.1.0)
+Before persisting verdicts in Phase 5, confirmed Phase 4 evaluation defects were audited and corrected:
+- **Alternative Outcomes**: Fixed boolean branch bug in `RULE_GRACEFUL_STOPPING`. Graceful stopping under an explicitly permitted non-completion branch is respected. Ordinary incomplete tasks fail `RULE_GRACEFUL_STOPPING`. Harness cancellation never establishes graceful stopping.
+- **Duplicate Effects**: Repeated observations of a single effect in `BEFORE_EFFECT` are not counted as duplicates. For `AFTER_COMMIT` retries, missing duplicate facts return `UNKNOWN` (`MISSING_DUPLICATE_EFFECT_FACT`).
+- **Retry Safety**: Reused idempotency keys alone do not establish safety without verified target enforcement; unverified guarantees return `UNKNOWN` (`UNVERIFIED_TARGET_IDEMPOTENCY_ENFORCEMENT`).
+- **Fact Scoping**: `get_c2_fact_value` and `validate_c2_facts` match exact assertion versions, run scopes, and entity IDs. Conflicting facts within scope return `UNKNOWN`.
+- **Budgets & Causal Order**: Traces missing budget observations return `UNKNOWN` (`INCOMPLETE_BUDGET_EVIDENCE`). First violation selection follows causal/event order rather than rule list position.
+
+---
+
+## Component 3: Phase 6 — Research Validation, Baselines, Metrics & Acceptance
+
+Phase 6 completes the agreed six-phase research and backend-acceptance plan for Component 3. It establishes reproducible experiment manifest planning with zero family-split leakage, two-domain adapter generality, independent reviewer label provenance, comparative baselines and ablations, pure research metrics with explicit denominators, and bounded multi-project batch execution.
+
+### Canonical Phase 6 Structure
+```text
+backend/app/components/c3_robustness_recovery/
+    contracts/
+        research.py            # Typed Pydantic v2 experiment manifests, splits, reviewer labels, and metric contracts
+    services/
+        experiment_plan.py     # Deterministic manifest generation, split leakage verification, and label validation
+        research_metrics.py    # Pure mathematical metric calculation with explicit denominators and safe undefined handling
+    runtime/
+        banking_adapter.py     # Second domain adapter (wire transfers) with out-of-band ledger commit observation
+        research_runner.py     # Bounded batch runner, baseline/ablation evaluation runner, and concurrency verifier
+backend/tests/
+    test_c3_phase6.py          # Hermetic tests covering Phase 5 defect fixes, splits, metrics, baselines, and batch runs
+backend/docs/
+    c3_final_acceptance_report.md # Final acceptance matrix and verification report
+```
+
+### Key Research Capabilities
+
+1. **Family-Split Isolation & Leakage Prevention**:
+   - Cases belong to cohesive `case_family_id` groupings.
+   - Partitions into `TRAIN_DEV` and `HELD_OUT_TEST` occur strictly at the case-family level. Sibling variants never cross split boundaries.
+   - `verify_split_leakage()` guarantees disjointness; overlapping families raise immediate validation errors.
+
+2. **Two-Domain Target Generality & Honest Prerequisites**:
+   - **Domain 1 (E-Commerce)**: `demonstration_order_placement` with order state verification.
+   - **Domain 2 (Banking Wire Transfer)**: `wire_transfer` with double-entry balance updates and out-of-band transaction receipt verification (`verify_committed_transfer`).
+   - **Live Integration Blockers**: `check_two_domain_prerequisites()` accurately reports live integration as `BLOCKED` since live target endpoints and tested agents are not present in the workspace.
+
+3. **Comparative Baselines & Ablations**:
+   - **`OUTCOME_ONLY_BASELINE`**: Re-evaluates evidence without C2 state assertions, blindly trusting caller outcome strings. Production C3 correctly catches silent failures that the baseline misses.
+   - **`NO_STATE_FACTS`**: Evaluates recovery with state facts ablated to `UNKNOWN`, proving graceful degradation to `INCONCLUSIVE` without fabricating `True`.
+   - **`NO_EXPOSURE_RECEIPTS`**: Ablates injection receipts to `EXPOSURE_UNKNOWN`, accurately classifying trials as ineligible (`NOT_EVALUATED`).
+
+4. **Pure Research Metrics & Denominators**:
+   - Standard-library math only (`math`, `collections.Counter`).
+   - Clear distinction of units: candidate, case family, matched pair, evaluated trial.
+   - Explicit denominators for Accuracy, Precision, Recall, F1, False-Pass Rate, Exposure Rate, and Clean Control Qualification Rate.
+   - Undefined cases (e.g., zero positive predictions) return `is_defined=False` with explanatory reasons rather than manufactured 100% scores.
+
+5. **Multi-Project Concurrency Isolation**:
+   - Concurrent suite executions across separate tenants (`project_id`) maintain strict boundary isolation without data corruption or cross-tenant query leaks.
+
+### Phase 6 Final Acceptance Report
+See [`docs/c3_final_acceptance_report.md`](docs/c3_final_acceptance_report.md) for the comprehensive acceptance matrix, verification evidence, planned vs. achieved counts, and explicit blockers.
+
+---
+
+## Component 3: Phase 7 — Internal Completion & Offline Verification
+
+Phase 7 completes internal C3 functionality, offline research capabilities, confirmed defect corrections, and pure mathematical metrics:
+1. **Three-Way Split Protocol (v2.0.0)**: Supports `DEVELOPMENT` (40%), `VALIDATION` (20%), and `HELD_OUT_TEST` (40%) partitions with deterministic case-family allocation, documented integer rounding, and pairwise zero-leakage enforcement (`verify_split_leakage()`).
+2. **Offline Baselines and Ablations**:
+   - **B1 (Fixed Suite Comparison)**: Predefined cases compared against generated suites under matched budgets.
+   - **B2 (Outcome-Only Evaluation)**: Evaluates terminal outcome and final application state, while excluding recovery-trace contract rules (`RULE_BUDGETS`, `RULE_DUPLICATE_EFFECTS`, `RULE_UNSAFE_RETRIES`). Fails if final state is FALSE; does not blindly accept caller success strings.
+   - **A1–A4 Ablations**: A1 (capability validation offline), A2 (isolated exposure receipt analysis), A3 (no state facts yields inconclusive), A4 (no effect-phase distinction evaluated as `BEFORE_EFFECT`).
+3. **Pure Research Metrics**: Four-way multiclass matrix (`PASS_COMPLETED`, `PASS_GRACEFUL`, `FAIL`, `INCONCLUSIVE`) with accuracy and macro-F1, clean-to-fault outcome transitions, duration overhead, and deterministic family-cluster bootstrap confidence intervals with honest reporting when clusters < 5. Token and cost telemetry are transparently flagged as unavailable offline.
+4. **Independent Reviewer Support**: Blinded packet export hiding evaluator verdicts and baseline tags, dual-reviewer Cohen's kappa with explicit category and zero-variance handling, and append-only dispute reconciliation audit trail.
+5. **Runtime Safeguards & Persistence Correctness**: Verification of single-fault episodes, BEFORE_EFFECT / AFTER_COMMIT observation, cancellation vs timeout distinction, uncertain cleanup preventing fixture reuse, conflicting case content rejection, and identical cases across multiple suites.
+
+### Phase 7 Delivery Report
+See [`docs/c3_phase7_completion_report.md`](docs/c3_phase7_completion_report.md) for the complete Phase 7 delivery report, metrics provenance, and 6-part acceptance breakdown.
+
+---
+
+### Testing & Verification Commands
+```powershell
+# Run all Phase 1 through Phase 7 tests + Health tests (148 passed, 2 opt-in skipped)
+python -m pytest
+
+# Run Phase 7 specific tests (23 tests hermetic SQLite)
+python -m pytest tests/test_c3_phase7.py -v
+
+# Run Phase 6 specific tests (15 tests hermetic SQLite, 1 skipped PostgreSQL opt-in)
+python -m pytest tests/test_c3_phase6.py -v
+
+# Run Phase 5 persistence tests (13 tests hermetic SQLite, 1 skipped PostgreSQL opt-in)
+python -m pytest tests/test_c3_phase5.py -v
+
+# Run Phase 4 recovery evaluation tests (31 tests)
+python -m pytest tests/test_c3_phase4.py -v
 
 # Check code formatting and linting
 python -m ruff check .
