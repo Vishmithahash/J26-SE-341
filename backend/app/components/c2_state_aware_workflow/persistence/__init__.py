@@ -4,6 +4,8 @@ from app.components.c2_state_aware_workflow.persistence.hashing import (
     compute_model_content_hash,
 )
 from app.components.c2_state_aware_workflow.persistence.models import (
+    C2TestCase,
+    C2TestSuite,
     C2ValidationReport,
     C2WorkflowModel,
 )
@@ -14,6 +16,8 @@ from app.components.c2_state_aware_workflow.persistence.repository import (
     C2PersistenceError,
     ModelAlreadyExistsError,
     ModelNotFoundError,
+    TestCaseNotFoundError,
+    TestSuiteNotFoundError,
 )
 
 __all__ = [
@@ -21,9 +25,13 @@ __all__ = [
     "ApprovedModelImmutableError",
     "C2ModelRepository",
     "C2PersistenceError",
+    "C2TestCase",
+    "C2TestSuite",
     "C2ValidationReport",
     "C2WorkflowModel",
     "ModelAlreadyExistsError",
     "ModelNotFoundError",
+    "TestCaseNotFoundError",
+    "TestSuiteNotFoundError",
     "compute_model_content_hash",
 ]

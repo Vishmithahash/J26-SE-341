@@ -160,6 +160,10 @@ class FinalOutcome(BaseModel):
     terminal_state_id: str
     description: str
     predicate: StructuredPredicate | None = None
+    task_prompt: str | None = Field(
+        default=None,
+        description="Optional specific natural language task prompt for this terminal outcome",
+    )
 
 
 class EFSMModelDefinition(BaseModel):

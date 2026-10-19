@@ -28,12 +28,18 @@ from app.components.c2_state_aware_workflow.contracts.runtime_evidence import (
     StateObservation,
 )
 from app.components.c2_state_aware_workflow.contracts.test_definition import (
+    AgentTaskPayload,
+    ExecutionMode,
     ExpectedOutcomeType,
     GeneratedTestDefinition,
+    GeneratedTestSuite,
+    GenerateTestSuiteRequest,
     MutationProvenance,
     MutationType,
+    QASuiteExport,
     TestCategory,
     TestReadinessStatus,
+    TestSuiteDiagnostics,
 )
 from app.components.c2_state_aware_workflow.contracts.workflow_input import (
     BusinessRule,
@@ -46,21 +52,26 @@ from app.components.c2_state_aware_workflow.contracts.workflow_input import (
 )
 
 __all__ = [
+    "AgentTaskPayload",
     "BusinessRule",
     "EFSMModelDefinition",
     "EntityContinuityRule",
     "EvaluationResultContract",
     "EventMapping",
     "EvidenceCompleteness",
+    "ExecutionMode",
     "ExpectedOutcomeType",
     "FinalOutcome",
     "FirstDivergenceDetail",
+    "GenerateTestSuiteRequest",
     "GeneratedTestDefinition",
+    "GeneratedTestSuite",
     "MilestoneDefinition",
     "MutationProvenance",
     "MutationType",
     "ObservableStateMapping",
     "ProtectedField",
+    "QASuiteExport",
     "RuleCategory",
     "RuntimeEvent",
     "RuntimeEvidenceContract",
@@ -71,6 +82,7 @@ __all__ = [
     "SyntheticFixtureReference",
     "TestCategory",
     "TestReadinessStatus",
+    "TestSuiteDiagnostics",
     "ToolParameterSpec",
     "ToolSpecification",
     "TransitionDefinition",

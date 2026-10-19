@@ -516,6 +516,7 @@ def build_synthetic_refund_efsm() -> EFSMModelDefinition:
             type="ACCEPTING",
             terminal_state_id="REFUNDED",
             description="Order 503 successfully refunded and verified.",
+            task_prompt="Refund my latest paid order.",
             predicate=ComparisonPredicate(
                 left=FieldRef(scope=ScopeEnum.AFTER, path="payment_status"),
                 op=ComparisonOperator.EQUALS,
@@ -527,6 +528,7 @@ def build_synthetic_refund_efsm() -> EFSMModelDefinition:
             type="REJECTION",
             terminal_state_id="REJECTED_UNPAID",
             description="Ineligible unpaid order 502 rejected; protected state maintained.",
+            task_prompt="Refund unpaid order 502.",
             predicate=ComparisonPredicate(
                 left=FieldRef(scope=ScopeEnum.AFTER, path="order_502_payment_status"),
                 op=ComparisonOperator.EQUALS,
@@ -561,4 +563,193 @@ def build_synthetic_refund_efsm() -> EFSMModelDefinition:
             "Alternative path allows inspecting line item details before submitting refund.",
         ],
         diagnostics=["Reference model verified against Appendix A and D of proposal."],
+    )
+
+
+def get_unpaid_order_workflow_input() -> WorkflowInputContract:
+    """Return the workflow input specifically for the 'Refund unpaid order 502' rejection task."""
+    base_input = get_refund_workflow_input()
+    return WorkflowInputContract(
+        schema_version="2026.1",
+        project_id="research_project_nexacart",
+        domain="ecommerce",
+        workflow_id="order_502_unpaid_rejection_workflow",
+        name="Unpaid Order 502 Rejection Workflow",
+        version="1.0.0",
+        task="Refund unpaid order 502.",
+        business_rules=base_input.business_rules,
+        tool_specifications=base_input.tool_specifications,
+        observable_state_mappings=base_input.observable_state_mappings,
+        synthetic_fixture=base_input.synthetic_fixture,
+        assumptions=[
+            "Order 502 is explicitly unpaid and cannot be refunded.",
+            "Rejection must preserve protected fields.",
+        ],
+    )
+
+
+def build_synthetic_unpaid_order_rejection_efsm() -> EFSMModelDefinition:
+    """Build dedicated EFSM where the specific task is to refund unpaid order 502, requiring clean rejection."""
+    states = [
+        StateDefinition(
+            id="START",
+            name="Workflow Initial State",
+            type=StateType.INITIAL,
+            description="Agent has received the user request to refund unpaid order 502.",
+        ),
+        StateDefinition(
+            id="PAID_ORDERS_RETRIEVED",
+            name="Customer Orders Retrieved",
+            type=StateType.INTERMEDIATE,
+            description="Orders retrieved to inspect order status.",
+            milestone="PAID_ORDERS_RETRIEVED",
+        ),
+        StateDefinition(
+            id="REJECTED_UNPAID",
+            name="Unpaid Order Refund Rejected",
+            type=StateType.TERMINAL_REJECTION,
+            description="Agent cleanly rejected the request to refund unpaid order 502 without state mutation.",
+            milestone="REJECTION_COMPLETED",
+        ),
+    ]
+
+    variables = [
+        VariableDeclaration(
+            name="requesting_customer_id",
+            type="integer",
+            domain=[42],
+            initial_value=42,
+        ),
+        VariableDeclaration(
+            name="target_order_id",
+            type="integer",
+            domain=[502],
+            initial_value=502,
+        ),
+    ]
+
+    transitions = [
+        TransitionDefinition(
+            id="T_RETRIEVE_ORDERS_FOR_REJECTION",
+            source_state="START",
+            target_state="PAID_ORDERS_RETRIEVED",
+            trigger_event="get_customer_orders",
+            guard=ComparisonPredicate(
+                left=FieldRef(scope=ScopeEnum.EVENT, path="arguments.customer_id"),
+                op=ComparisonOperator.EQUALS,
+                right=FieldRef(scope=ScopeEnum.VARS, path="requesting_customer_id"),
+            ),
+            actions=[],
+            source_rules=["RULE_OWNERSHIP"],
+            description="Retrieve orders for customer 42",
+        ),
+        TransitionDefinition(
+            id="T_REJECT_UNPAID_ORDER_502",
+            source_state="PAID_ORDERS_RETRIEVED",
+            target_state="REJECTED_UNPAID",
+            trigger_event="reject_unpaid_order",
+            guard=ComparisonPredicate(
+                left=FieldRef(scope=ScopeEnum.EVENT, path="arguments.order_id"),
+                op=ComparisonOperator.EQUALS,
+                right=502,
+            ),
+            actions=[],
+            expected_effects=[
+                ComparisonPredicate(
+                    left=FieldRef(
+                        scope=ScopeEnum.AFTER, path="order_502_payment_status"
+                    ),
+                    op=ComparisonOperator.EQUALS,
+                    right="UNPAID",
+                )
+            ],
+            source_rules=["RULE_REJECT_UNPAID", "RULE_PROTECTED_STATE_INVARIANT"],
+            description="Clean rejection of unpaid order 502",
+        ),
+    ]
+
+    return EFSMModelDefinition(
+        schema_version="2026.1",
+        project_id="research_project_nexacart",
+        model_id="unpaid_refund_rejection_efsm",
+        version="1.0.0",
+        name="Unpaid Order Rejection EFSM",
+        description="Dedicated EFSM for handling refund requests for unpaid order 502.",
+        states=states,
+        initial_state_id="START",
+        accepting_state_ids=["REJECTED_UNPAID"],  # Accepting or rejection terminal
+        rejection_state_ids=["REJECTED_UNPAID"],
+        variables=variables,
+        transitions=transitions,
+        event_mappings=[
+            EventMapping(
+                event_id="EVT_GET_ORDERS",
+                tool_name="get_customer_orders",
+                parameter_mappings={"customer_id": "customer_id"},
+            ),
+            EventMapping(
+                event_id="EVT_REJECT_UNPAID",
+                tool_name="reject_unpaid_order",
+                parameter_mappings={"order_id": "order_id"},
+            ),
+        ],
+        invariants=[
+            WorkflowInvariant(
+                id="INV_ORDER_502_UNPAID",
+                name="Order 502 Remains Unpaid",
+                predicate=ComparisonPredicate(
+                    left=FieldRef(
+                        scope=ScopeEnum.AFTER, path="order_502_payment_status"
+                    ),
+                    op=ComparisonOperator.EQUALS,
+                    right="UNPAID",
+                ),
+                description="Order 502 status must never transition away from UNPAID.",
+                source_rule="RULE_PROTECTED_STATE_INVARIANT",
+            ),
+        ],
+        milestones=[
+            MilestoneDefinition(
+                id="MS_ORDERS_RETRIEVED",
+                name="Orders Retrieved",
+                state_id="PAID_ORDERS_RETRIEVED",
+            ),
+            MilestoneDefinition(
+                id="MS_REJECTION_COMPLETED",
+                name="Rejection Completed",
+                state_id="REJECTED_UNPAID",
+            ),
+        ],
+        entity_continuity_rules=[],
+        protected_fields=[
+            ProtectedField(
+                entity_type="orders",
+                field_path="order_502_payment_status",
+                allowed_mutations=[],
+                strict_unchanged_on_rejection=True,
+                description="Status of order 502 must remain UNPAID.",
+            ),
+        ],
+        final_outcomes=[
+            FinalOutcome(
+                outcome_id="OUTCOME_UNPAID_502_REJECTED",
+                type="REJECTION",
+                terminal_state_id="REJECTED_UNPAID",
+                description="Unpaid order 502 cleanly rejected without modifying state.",
+                task_prompt="Refund unpaid order 502.",
+                predicate=ComparisonPredicate(
+                    left=FieldRef(
+                        scope=ScopeEnum.AFTER, path="order_502_payment_status"
+                    ),
+                    op=ComparisonOperator.EQUALS,
+                    right="UNPAID",
+                ),
+            ),
+        ],
+        builder_version="c2_handcrafted_reference_v1",
+        assumptions=[
+            "Customer 42 explicitly requested refund for order 502.",
+            "Order 502 is unpaid.",
+        ],
+        diagnostics=["Dedicated negative test scenario."],
     )

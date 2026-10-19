@@ -125,6 +125,7 @@ class BoundedSemanticValidator:
         queue = deque([(model.initial_state_id, 0, [model.initial_state_id])])
         feasible_accepting_found = False
         valid_paths_found = 0
+        depth_limit_hit = False
 
         while queue:
             curr_state, depth, path = queue.popleft()
@@ -148,15 +149,33 @@ class BoundedSemanticValidator:
                     # Prevent cycles along the current exploration path
                     if nxt not in path:
                         queue.append((nxt, depth + 1, path + [nxt]))
+            else:
+                depth_limit_hit = True
 
         if not feasible_accepting_found:
-            errors.append(
-                {
-                    "check": "feasible_accepting_reachability",
-                    "message": "No feasible accepting path exists from initial state within depth bound.",
-                    "severity": "CRITICAL",
-                }
-            )
+            if depth_limit_hit:
+                # Bounded limit reached without proof of infeasibility
+                warnings.append(
+                    {
+                        "check": "bounded_search_depth_limit",
+                        "message": (
+                            f"Accepting state reachability unresolved within bounded search depth {self.max_search_depth}. "
+                            "Treated as an unresolved check rather than proof of infeasibility or unreachability."
+                        ),
+                        "severity": "WARNING",
+                    }
+                )
+                diagnostics["unresolved_checks"] = diagnostics.get(
+                    "unresolved_checks", []
+                ) + ["feasible_accepting_reachability_bounded_limit"]
+            else:
+                errors.append(
+                    {
+                        "check": "feasible_accepting_reachability",
+                        "message": "No feasible accepting path exists from initial state (reachable state space exhausted).",
+                        "severity": "CRITICAL",
+                    }
+                )
 
         # 5. Invariant / Effect Compatibility
         # Check if an expected effect on a transition directly contradicts any declared invariant
