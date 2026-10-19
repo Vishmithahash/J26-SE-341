@@ -20,7 +20,13 @@ from app.components.c4_policy_aware_safety.contracts.evaluator import (
 from app.components.c4_policy_aware_safety.contracts.execution import (
     C4ExecutionRunRecord,
 )
+from app.components.c4_policy_aware_safety.contracts.extraction import (
+    C4ExtractionJobRecord,
+)
 from app.components.c4_policy_aware_safety.contracts.generation import GenerationReport
+from app.components.c4_policy_aware_safety.contracts.onboarding import (
+    C4OnboardingJobRecord,
+)
 from app.components.c4_policy_aware_safety.contracts.rules import (
     CandidateRule,
     PolicyContractVersion,
@@ -32,8 +38,10 @@ from app.components.c4_policy_aware_safety.persistence.models import (
     C4ContractModel,
     C4DomainBindingModel,
     C4ExecutionRunModel,
+    C4ExtractionJobModel,
     C4FindingModel,
     C4GenerationBatchModel,
+    C4OnboardingJobModel,
     C4TestCaseModel,
 )
 
@@ -99,6 +107,10 @@ class C4Repository:
             metadata=model.meta_data,
             created_at=model.created_at,
         )
+
+    # Aliases for artifact versioning
+    save_artifact = save_artifact_version
+    get_artifact = get_artifact_version
 
     # 2. Candidate Rules
     def save_candidate_rule(self, rule: CandidateRule) -> CandidateRule:
@@ -236,6 +248,10 @@ class C4Repository:
             created_at=model.created_at,
             updated_at=model.updated_at,
         )
+
+    # Aliases for contract retrieval
+    save_contract = save_contract_version
+    get_contract = get_contract_version
 
     # 4. Findings
     def save_finding(self, finding: RuleEvaluationFinding) -> RuleEvaluationFinding:
@@ -496,6 +512,15 @@ class C4Repository:
                 task_utility_outcome=run.task_utility_outcome.value,
                 cleanup_status=run.cleanup_status.value,
                 idempotency_key=run.idempotency_key,
+                request_digest=run.request_digest,
+                injection_target_verdict=run.injection_target_verdict,
+                attempt_goal_outcome=run.attempt_goal_outcome.value
+                if run.attempt_goal_outcome
+                else None,
+                commit_goal_outcome=run.commit_goal_outcome.value
+                if run.commit_goal_outcome
+                else None,
+                backend_rejection_observed=run.backend_rejection_observed,
                 run_data=run_dict,
                 error_message=run.error_message,
                 created_at=run.created_at,
@@ -549,5 +574,225 @@ class C4Repository:
 
         models = self.db.execute(stmt).scalars().all()
         return [C4ExecutionRunRecord.model_validate(m.run_data) for m in models]
+
+    # 8. Extraction Jobs
+    def save_extraction_job(
+        self, job: C4ExtractionJobRecord
+    ) -> C4ExtractionJobRecord:
+        stmt = select(C4ExtractionJobModel).where(
+            C4ExtractionJobModel.project_id == job.project_id,
+            C4ExtractionJobModel.job_id == job.job_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+
+        if existing:
+            existing.status = job.status.value
+            existing.readiness_status = job.readiness_status.value
+            existing.options = job.options
+            existing.job_metadata = job.job_metadata
+            existing.candidates_extracted = job.candidates_extracted
+            existing.validation_issues = job.validation_issues
+            existing.error_message = job.error_message
+            existing.completed_at = job.completed_at
+        else:
+            model = C4ExtractionJobModel(
+                job_id=job.job_id,
+                project_id=job.project_id,
+                artifact_id=job.artifact_id,
+                artifact_version=job.artifact_version,
+                provider_id=job.provider_id,
+                model_identifier=job.model_identifier,
+                status=job.status.value,
+                readiness_status=job.readiness_status.value,
+                prompt_template_version=job.prompt_template_version,
+                schema_version=job.schema_version,
+                options=job.options,
+                job_metadata=job.job_metadata,
+                candidates_extracted=job.candidates_extracted,
+                validation_issues=job.validation_issues,
+                error_message=job.error_message,
+                created_at=job.created_at,
+                completed_at=job.completed_at,
+            )
+            self.db.add(model)
+
+        self.db.commit()
+        return job
+
+    def get_extraction_job(
+        self, project_id: str, job_id: str
+    ) -> C4ExtractionJobRecord | None:
+        stmt = select(C4ExtractionJobModel).where(
+            C4ExtractionJobModel.project_id == project_id,
+            C4ExtractionJobModel.job_id == job_id,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return C4ExtractionJobRecord(
+            job_id=model.job_id,
+            project_id=model.project_id,
+            artifact_id=model.artifact_id,
+            artifact_version=model.artifact_version,
+            provider_id=model.provider_id,
+            model_identifier=model.model_identifier,
+            status=model.status,
+            readiness_status=model.readiness_status,
+            prompt_template_version=model.prompt_template_version,
+            schema_version=model.schema_version,
+            options=model.options,
+            job_metadata=model.job_metadata,
+            candidates_extracted=model.candidates_extracted,
+            validation_issues=model.validation_issues,
+            error_message=model.error_message,
+            created_at=model.created_at,
+            completed_at=model.completed_at,
+        )
+
+    def list_extraction_jobs(
+        self, project_id: str, limit: int = 50
+    ) -> list[C4ExtractionJobRecord]:
+        stmt = (
+            select(C4ExtractionJobModel)
+            .where(C4ExtractionJobModel.project_id == project_id)
+            .order_by(desc(C4ExtractionJobModel.created_at))
+            .limit(limit)
+        )
+        models = self.db.execute(stmt).scalars().all()
+        return [
+            C4ExtractionJobRecord(
+                job_id=m.job_id,
+                project_id=m.project_id,
+                artifact_id=m.artifact_id,
+                artifact_version=m.artifact_version,
+                provider_id=m.provider_id,
+                model_identifier=m.model_identifier,
+                status=m.status,
+                readiness_status=m.readiness_status,
+                prompt_template_version=m.prompt_template_version,
+                schema_version=m.schema_version,
+                options=m.options,
+                job_metadata=m.job_metadata,
+                candidates_extracted=m.candidates_extracted,
+                validation_issues=m.validation_issues,
+                error_message=m.error_message,
+                created_at=m.created_at,
+                completed_at=m.completed_at,
+            )
+            for m in models
+        ]
+
+    # 9. Onboarding Jobs
+    def save_onboarding_job(
+        self, job: C4OnboardingJobRecord
+    ) -> C4OnboardingJobRecord:
+        stmt = select(C4OnboardingJobModel).where(
+            C4OnboardingJobModel.project_id == job.project_id,
+            C4OnboardingJobModel.job_id == job.job_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+
+        if existing:
+            existing.status = job.status.value
+            existing.current_step = job.current_step.value
+            existing.extraction_job_id = job.extraction_job_id
+            existing.draft_contract_id = job.draft_contract_id
+            existing.contract_version = job.contract_version
+            existing.batch_id = job.batch_id
+            existing.step_results = job.step_results
+            existing.gaps = job.gaps
+            existing.error_message = job.error_message
+            existing.updated_at = job.updated_at
+        else:
+            model = C4OnboardingJobModel(
+                job_id=job.job_id,
+                project_id=job.project_id,
+                domain_id=job.domain_id,
+                binding_id=job.binding_id,
+                binding_version=job.binding_version,
+                artifact_id=job.artifact_id,
+                artifact_version=job.artifact_version,
+                extraction_job_id=job.extraction_job_id,
+                draft_contract_id=job.draft_contract_id,
+                contract_version=job.contract_version,
+                batch_id=job.batch_id,
+                status=job.status.value,
+                current_step=job.current_step.value,
+                step_results=job.step_results,
+                gaps=job.gaps,
+                error_message=job.error_message,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+            self.db.add(model)
+
+        self.db.commit()
+        return job
+
+    def get_onboarding_job(
+        self, project_id: str, job_id: str
+    ) -> C4OnboardingJobRecord | None:
+        stmt = select(C4OnboardingJobModel).where(
+            C4OnboardingJobModel.project_id == project_id,
+            C4OnboardingJobModel.job_id == job_id,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return C4OnboardingJobRecord(
+            job_id=model.job_id,
+            project_id=model.project_id,
+            domain_id=model.domain_id,
+            binding_id=model.binding_id,
+            binding_version=model.binding_version,
+            artifact_id=model.artifact_id,
+            artifact_version=model.artifact_version,
+            extraction_job_id=model.extraction_job_id,
+            draft_contract_id=model.draft_contract_id,
+            contract_version=model.contract_version,
+            batch_id=model.batch_id,
+            status=model.status,
+            current_step=model.current_step,
+            step_results=model.step_results,
+            gaps=model.gaps,
+            error_message=model.error_message,
+            created_at=model.created_at,
+            updated_at=model.updated_at,
+        )
+
+    def list_onboarding_jobs(
+        self, project_id: str, limit: int = 50
+    ) -> list[C4OnboardingJobRecord]:
+        stmt = (
+            select(C4OnboardingJobModel)
+            .where(C4OnboardingJobModel.project_id == project_id)
+            .order_by(desc(C4OnboardingJobModel.created_at))
+            .limit(limit)
+        )
+        models = self.db.execute(stmt).scalars().all()
+        return [
+            C4OnboardingJobRecord(
+                job_id=m.job_id,
+                project_id=m.project_id,
+                domain_id=m.domain_id,
+                binding_id=m.binding_id,
+                binding_version=m.binding_version,
+                artifact_id=m.artifact_id,
+                artifact_version=m.artifact_version,
+                extraction_job_id=m.extraction_job_id,
+                draft_contract_id=m.draft_contract_id,
+                contract_version=m.contract_version,
+                batch_id=m.batch_id,
+                status=m.status,
+                current_step=m.current_step,
+                step_results=m.step_results,
+                gaps=m.gaps,
+                error_message=m.error_message,
+                created_at=m.created_at,
+                updated_at=m.updated_at,
+            )
+            for m in models
+        ]
+
 
 

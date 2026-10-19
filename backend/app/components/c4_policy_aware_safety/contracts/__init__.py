@@ -41,12 +41,27 @@ from app.components.c4_policy_aware_safety.contracts.evidence import (
     ToolExecutionEvidence,
     TraceCompletenessEvidence,
 )
+from app.components.c4_policy_aware_safety.contracts.extraction import (
+    C4ExtractionJobRecord,
+    CandidateRuleReviewRequest,
+    ExtractionJobCreate,
+    ExtractionJobStatus,
+    ExtractionReadinessReport,
+    ExtractionReadinessStatus,
+)
 from app.components.c4_policy_aware_safety.contracts.future import (
     ExecutionEvidenceConsumer,
     PolicyExtractionProvider,
     PolicyTestCaseStub,
     ReportingExporter,
     TestCaseKind,
+)
+from app.components.c4_policy_aware_safety.contracts.onboarding import (
+    C4OnboardingJobRecord,
+    DomainProfileDefinition,
+    OnboardingJobCreate,
+    OnboardingJobStatus,
+    OnboardingStep,
 )
 from app.components.c4_policy_aware_safety.contracts.predicates import (
     CompoundOperator,
@@ -78,7 +93,10 @@ __all__ = [
     "AttackOutcome",
     "AuthorizationDecisionEvidence",
     "BenignUtilityOutcome",
+    "C4ExtractionJobRecord",
+    "C4OnboardingJobRecord",
     "CandidateRule",
+    "CandidateRuleReviewRequest",
     "CompoundOperator",
     "CompoundPredicate",
     "ContractAcceptanceRequest",
@@ -86,6 +104,7 @@ __all__ = [
     "ContractLifecycleState",
     "ContractValidationResult",
     "DisclosureEvidence",
+    "DomainProfileDefinition",
     "EffectEvidence",
     "EvaluationBoundary",
     "EvaluationEvidencePackage",
@@ -94,8 +113,15 @@ __all__ = [
     "ExecutionEvidenceConsumer",
     "ExposureEvidence",
     "ExposureStatus",
+    "ExtractionJobCreate",
+    "ExtractionJobStatus",
+    "ExtractionReadinessReport",
+    "ExtractionReadinessStatus",
     "InstructionSourceEvidence",
     "InstructionSourceType",
+    "OnboardingJobCreate",
+    "OnboardingJobStatus",
+    "OnboardingStep",
     "PolicyContractVersion",
     "PolicyExtractionProvider",
     "PolicyFamily",

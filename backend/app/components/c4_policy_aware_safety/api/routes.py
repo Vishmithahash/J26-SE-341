@@ -34,12 +34,24 @@ from app.components.c4_policy_aware_safety.contracts.execution import (
     C4ExecutionRequest,
     C4ExecutionRunRecord,
     C4RuntimeReadinessReport,
+    IdempotencyConflictError,
     TargetExecutionMode,
+)
+from app.components.c4_policy_aware_safety.contracts.extraction import (
+    C4ExtractionJobRecord,
+    CandidateRuleReviewRequest,
+    ExtractionJobCreate,
+    ExtractionReadinessReport,
 )
 from app.components.c4_policy_aware_safety.contracts.future import TestCaseKind
 from app.components.c4_policy_aware_safety.contracts.generation import (
     GenerationReport,
     GenerationRequest,
+)
+from app.components.c4_policy_aware_safety.contracts.onboarding import (
+    C4OnboardingJobRecord,
+    DomainProfileDefinition,
+    OnboardingJobCreate,
 )
 from app.components.c4_policy_aware_safety.contracts.rules import (
     CandidateRule,
@@ -56,6 +68,7 @@ from app.components.c4_policy_aware_safety.derivation.importer import (
     StructuredRuleImporter,
 )
 from app.components.c4_policy_aware_safety.derivation.intake import normalize_artifact
+from app.components.c4_policy_aware_safety.domains.registry import domain_registry
 from app.components.c4_policy_aware_safety.evaluator.engine import (
     DeterministicPolicyEvaluator,
 )
@@ -64,9 +77,15 @@ from app.components.c4_policy_aware_safety.execution.adapters import (
     SimulatedC4ApplicationAdapter,
 )
 from app.components.c4_policy_aware_safety.execution.runner import C4ExecutionRunner
+from app.components.c4_policy_aware_safety.extraction.provider import (
+    get_extraction_provider,
+)
 from app.components.c4_policy_aware_safety.freezing.service import CaseFreezingService
 from app.components.c4_policy_aware_safety.generation.generator import (
     PolicyTestGenerator,
+)
+from app.components.c4_policy_aware_safety.onboarding.service import (
+    C4OnboardingService,
 )
 from app.components.c4_policy_aware_safety.persistence.repository import C4Repository
 from app.components.c4_policy_aware_safety.validation.case_validator import (
@@ -835,13 +854,19 @@ def execute_test_case(
         adapter = SimulatedC4ApplicationAdapter(behavior=exec_req.simulated_behavior)
 
     runner = C4ExecutionRunner(repo)
-    return runner.execute_case(
-        case=case,
-        contract=contract,
-        binding=binding,
-        adapter=adapter,
-        idempotency_key=exec_req.idempotency_key,
-    )
+    try:
+        return runner.execute_case(
+            case=case,
+            contract=contract,
+            binding=binding,
+            adapter=adapter,
+            idempotency_key=exec_req.idempotency_key,
+        )
+    except IdempotencyConflictError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
 
 
 @router.get(
@@ -914,5 +939,258 @@ def export_run_report(
         "created_at": run_rec.created_at.isoformat(),
         "completed_at": run_rec.completed_at.isoformat() if run_rec.completed_at else None,
     }
+
+
+# ==============================================================================
+# Phase 4: Natural-Language Policy Extraction & Review Endpoints
+# ==============================================================================
+
+
+@router.get(
+    "/extraction/readiness",
+    response_model=ExtractionReadinessReport,
+    summary="Check extraction provider configuration and operational readiness",
+)
+def check_extraction_readiness(
+    project_id: str,
+    provider_id: str = Query(default="offline_mock"),
+):
+    provider = get_extraction_provider(provider_id=provider_id)
+    return provider.check_readiness()
+
+
+@router.post(
+    "/extraction/jobs",
+    response_model=C4ExtractionJobRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Initiate a natural-language policy extraction job",
+)
+def start_extraction_job(
+    project_id: str,
+    req: ExtractionJobCreate,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    artifact = repo.get_artifact(project_id, req.artifact_id, req.artifact_version)
+    if not artifact:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source artifact '{req.artifact_id}' v{req.artifact_version} not found in project '{project_id}'.",
+        )
+
+    # Use default ecommerce binding for generic extraction validation
+    profile = domain_registry.get_profile("domain-ecommerce-c4")
+    service = C4OnboardingService(repository=repo)
+    onboard_req = OnboardingJobCreate(
+        domain_id=profile.domain_id,
+        artifact_id=req.artifact_id,
+        artifact_version=req.artifact_version,
+        binding_id=profile.binding.binding_id,
+        binding_version=profile.binding.version,
+        provider_id=req.provider_id,
+    )
+    job = service.start_onboarding(project_id, onboard_req)
+    if not job.extraction_job_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to initialize extraction job.",
+        )
+    ext_job = repo.get_extraction_job(project_id, job.extraction_job_id)
+    if not ext_job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Extraction job '{job.extraction_job_id}' not found.",
+        )
+    return ext_job
+
+
+@router.get(
+    "/extraction/jobs/{job_id}",
+    response_model=C4ExtractionJobRecord,
+    summary="Retrieve extraction job status and results",
+)
+def get_extraction_job(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    job = repo.get_extraction_job(project_id, job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Extraction job '{job_id}' not found in project '{project_id}'.",
+        )
+    return job
+
+
+@router.post(
+    "/candidates/{rule_id}/review",
+    response_model=CandidateRule,
+    summary="Explicit human or dev review gate for an extracted candidate rule",
+)
+def review_candidate_rule(
+    project_id: str,
+    rule_id: str,
+    req: CandidateRuleReviewRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.review_candidate(project_id, rule_id, req)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ==============================================================================
+# Phase 4: Domain Profiles & Onboarding Pipeline Endpoints
+# ==============================================================================
+
+
+@router.get(
+    "/domains",
+    response_model=list[DomainProfileDefinition],
+    summary="List available domain profiles (E-Commerce, Booking)",
+)
+def list_domains(project_id: str):
+    return domain_registry.list_profiles()
+
+
+@router.get(
+    "/domains/{domain_id}/readiness",
+    summary="Check runtime and integration readiness for a domain",
+)
+def check_domain_readiness_endpoint(
+    project_id: str,
+    domain_id: str,
+    mode: str = Query(default="SIMULATED", description="'SIMULATED' or 'LIVE'"),
+):
+    try:
+        return domain_registry.check_domain_readiness(domain_id, mode)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs",
+    response_model=C4OnboardingJobRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start domain onboarding workflow across policy artifacts and domain bindings",
+)
+def start_onboarding(
+    project_id: str,
+    req: OnboardingJobCreate,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.start_onboarding(project_id, req)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/onboarding/jobs/{job_id}",
+    response_model=C4OnboardingJobRecord,
+    summary="Get status and details of an onboarding job",
+)
+def get_onboarding_job(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.get_onboarding_status(project_id, job_id)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs/{job_id}/build-draft-contract",
+    response_model=PolicyContractVersion,
+    summary="Assemble draft policy contract from explicitly accepted candidates",
+)
+def build_onboarding_draft_contract(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.build_draft_contract(project_id, job_id)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs/{job_id}/accept-contract",
+    response_model=PolicyContractVersion,
+    summary="Explicitly accept draft contract (DRAFT -> ACCEPTED review gate)",
+)
+def accept_onboarding_contract(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    reviewer: str = Query(default="dev_reviewer"),
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.accept_contract(project_id, job_id, reviewer=reviewer)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs/{job_id}/generate-cases",
+    response_model=list[PolicyTestCase],
+    summary="Generate and freeze policy test cases for accepted contract",
+)
+def generate_onboarding_cases(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.generate_and_freeze_cases(project_id, job_id)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs/{job_id}/execute",
+    response_model=list[C4ExecutionRunRecord],
+    summary="Execute frozen onboarding cases against controlled target adapter",
+)
+def execute_onboarding_cases(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    execution_mode: str = Query(default="SIMULATED", description="'SIMULATED' or 'LIVE'"),
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.execute_onboarding_cases(
+            project_id, job_id, execution_mode=execution_mode
+        )
+    except RuntimeError as e:
+        if "blocked" in str(e).lower():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
 
 

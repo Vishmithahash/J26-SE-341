@@ -105,6 +105,11 @@ class C4ExecutionRequest(BaseModel):
     idempotency_key: str | None = None
 
 
+class IdempotencyConflictError(Exception):
+    """Raised when an idempotency key is reused with mismatched request parameters."""
+
+
+
 class C4ExecutionRunRecord(BaseModel):
     """Persisted record of a completed or blocked C4 test execution."""
 
@@ -131,6 +136,15 @@ class C4ExecutionRunRecord(BaseModel):
     task_utility_outcome: TaskUtilityOutcome
     cleanup_status: CleanupStatus
     idempotency_key: str | None = None
+    request_digest: str | None = None
+    injection_target_verdict: str | None = None
+    attempt_goal_outcome: AttackerObjectiveOutcome = Field(
+        default=AttackerObjectiveOutcome.NOT_APPLICABLE
+    )
+    commit_goal_outcome: AttackerObjectiveOutcome = Field(
+        default=AttackerObjectiveOutcome.NOT_APPLICABLE
+    )
+    backend_rejection_observed: bool = False
     pre_cleanup_effects: list[dict[str, Any]] = Field(default_factory=list)
     raw_evidence_ref: str | None = None
     evaluation_report_summary: dict[str, Any] = Field(default_factory=dict)

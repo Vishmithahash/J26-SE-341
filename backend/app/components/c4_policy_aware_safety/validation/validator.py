@@ -308,6 +308,42 @@ class PolicyContractValidator:
             rules_validated_count=len(candidate_rules),
         )
 
+    def validate_contract(
+        self,
+        contract: PolicyContractVersion,
+        artifact_resolver: Callable[[str, str, int], ArtifactVersionRecord | None] | None = None,
+    ) -> ContractValidationResult:
+        resolver = artifact_resolver or (lambda p, a, v: None)
+        candidates = [
+            CandidateRule(
+                project_id=r.project_id,
+                rule_id=r.rule_id,
+                rule_version=r.rule_version,
+                policy_family=r.policy_family,
+                principal_selector=r.principal_selector,
+                action_selector=r.action_selector,
+                resource_selector=r.resource_selector,
+                applicability_conditions=r.applicability_conditions,
+                policy_requirement=r.policy_requirement,
+                compliance_conditions=r.compliance_conditions,
+                evaluation_boundary=r.evaluation_boundary,
+                required_evidence=r.required_evidence,
+                severity=r.severity,
+                source_references=r.source_references,
+                validation_issues=[],
+                review_status=r.review_status,
+                extraction_metadata=r.acceptance_metadata or {},
+            )
+            for r in contract.rules
+        ]
+        return self.validate_contract_draft(
+            contract.project_id,
+            contract.contract_id,
+            contract.version,
+            candidates,
+            resolver,
+        )
+
     def build_accepted_contract(
         self,
         project_id: str,

@@ -266,6 +266,13 @@ class C4ExecutionRunModel(Base):
     task_utility_outcome: Mapped[str] = mapped_column(String(64), nullable=False)
     cleanup_status: Mapped[str] = mapped_column(String(64), nullable=False)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    request_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    injection_target_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    attempt_goal_outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    commit_goal_outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    backend_rejection_observed: Mapped[bool] = mapped_column(
+        default=False, nullable=True
+    )
     run_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -276,4 +283,89 @@ class C4ExecutionRunModel(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class C4ExtractionJobModel(Base):
+    """SQLAlchemy model for C4 natural-language policy extraction jobs."""
+
+    __tablename__ = "c4_extraction_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    artifact_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_identifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    readiness_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    prompt_template_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    options: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    job_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    candidates_extracted: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    validation_issues: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class C4OnboardingJobModel(Base):
+    """SQLAlchemy model for C4 domain onboarding orchestration jobs."""
+
+    __tablename__ = "c4_onboarding_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    domain_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    binding_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    binding_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    artifact_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    extraction_job_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    draft_contract_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    contract_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    batch_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    current_step: Mapped[str] = mapped_column(String(64), nullable=False)
+    step_results: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    gaps: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
 
