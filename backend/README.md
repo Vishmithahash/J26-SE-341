@@ -128,7 +128,7 @@ The backend is structured as a **FastAPI modular monolith**:
 |---|---|---|
 | `app/components/c1_tool_call_correctness` | **C1: Explainable Tool-Call Correctness Testing** | Reserved (Not implemented) |
 | `app/components/c2_state_aware_workflow` | **C2: State-Aware Multi-Step Workflow Testing** | Reserved (Not implemented) |
-| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phase 1, Phase 2 & Phase 3 Implemented** (Phases 4–6 Unimplemented) |
+| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phase 1, Phase 2, Phase 3 & Phase 4 Implemented** (Phases 5–6 Unimplemented) |
 | `app/components/c4_policy_prompt_injection` | **C4: Policy-Aware Safety and Prompt-Injection Testing** | Reserved (Not implemented) |
 
 ---
@@ -139,7 +139,7 @@ The backend is structured as a **FastAPI modular monolith**:
 1. **Phase 1: Contracts, Fault Catalogue, Static Validation and APIs** &mdash; **IMPLEMENTED (Stateless Foundation)**
 2. **Phase 2: One-Tool Integration, Matched Trials, Verified Timeout Exposure and Safeguards** &mdash; **IMPLEMENTED (Demonstrated Vertical Slice)**
 3. **Phase 3: Automatic Generation, Frozen Suites, Remaining Fault Families and Supported Post-Commit Experiments** &mdash; **IMPLEMENTED (Pure Generation & Bounded Suites)**
-4. **Phase 4: Recovery Evaluation Using Evidence and C2 Facts** &mdash; *UNIMPLEMENTED*
+4. **Phase 4: Recovery Evaluation Using Evidence and C2 Facts** &mdash; **IMPLEMENTED (Deterministic Recovery Evaluator)**
 5. **Phase 5: Shared Persistence, Execution Tracking, Results and Reporting** &mdash; *UNIMPLEMENTED*
 6. **Phase 6: Second Domain, Research Experiments, Baselines, Metrics and Final Validation** &mdash; *UNIMPLEMENTED*
 
@@ -539,6 +539,185 @@ python -m pytest
 
 # Run Phase 3 specific tests
 python -m pytest tests/test_c3_phase3.py
+
+# Check code formatting and linting
+python -m ruff check .
+python -m ruff format --check .
+
+# Verify dependency consistency
+python -m pip check
+```
+
+---
+
+## Component 3: Phase 4 (Recovery Evaluation Using Evidence and C2 Facts)
+
+Phase 4 introduces deterministic, explainable evaluation of recovery behavior from frozen recovery contracts, linked trial evidence, and versioned Component 2 workflow assertion facts. It produces authoritative recovery verdicts without executing targets, modifying agent recovery, or evaluating C2 workflow state machines internally.
+
+### Canonical Phase 4 Structure
+```text
+backend/app/components/c3_robustness_recovery/
+    contracts/
+        evaluation.py           # Pydantic v2 models: RecoveryEvaluationRequest/Result, RecoveryVerdict, RuleEvaluationStatus
+    services/
+        recovery_evaluation.py  # Pure deterministic evaluator implementing 6 fixed recovery rules and 4 verdicts
+        c2_facts.py             # Minimal C2 assertion fact interface, scope conflict detection, and status checking
+    runtime/
+        evaluate.py             # Offline evaluation developer CLI
+backend/tests/test_c3_phase4.py # Comprehensive hermetic test suite (21 unit and integration tests)
+```
+
+### Confirmed Phase 3 Corrections
+1. **Timeout / Cancellation Heuristic Removal**:
+   - Removed the 90% elapsed time threshold from `DomainToolInterceptor`. External or manual cancellation before, near, or after the configured deadline no longer manufactures confirmed timeout exposure.
+   - Without explicit caller deadline confirmation, cancellation records `PREMATURE_EXTERNAL_CANCELLATION` or `EXTERNAL_CANCELLATION_UNVERIFIED_CAUSE` with `caller_observed_timeout = False` (`ExposureStatus.EXPOSURE_UNKNOWN`).
+2. **AFTER_COMMIT Causal Event Ordering**:
+   - Exposure verification strictly enforces per-trial causal event ordering:
+     `APPLICATION_AWARE_HOOK_ENTERED` &rarr; `INDEPENDENT_COMMIT_OBSERVATION` &rarr; `POST_COMMIT_REPLY_WITHHELD` &rarr; caller lost-response timeout.
+   - Contradictory order, missing commit confirmation, or unverified operation IDs immediately rejects exposure.
+3. **Malformed Response Consumption Boundary**:
+   - Requires evidence that corrupted content reached the caller consumption boundary and produced an observable parser, schema, or decode failure matching the declared mode.
+4. **Frozen Artifact Consumption**:
+   - `SuiteRunner` loads exported suite JSON artifacts from disk, verifies cryptographic suite digests, and consumes frozen `task_fixture_metadata` and `recovery_contract` without mutating cases or relying on hardcoded lists.
+
+---
+
+### Component 2 Workflow Facts Interface
+Component 2 (C2) owns multi-step state machine modeling, workflow state assertion definitions, and evaluation of truth values. Component 3 (C3) consumes discrete facts without recomputing domain state:
+- **Fact Schema (`C2AssertionFact`)**: `assertion_id`, `assertion_version`, `value` (`TRUE`, `FALSE`, `UNKNOWN`), `entity_id`, `snapshot_id`, `time_scope`, `evaluator_version`, `provenance`, and `supporting_evidence_refs`.
+- **Conflict Detection**: Detects contradictory truth values (both `TRUE` and `FALSE`) within the identical `(assertion_id, entity_id, snapshot_id, time_scope)` scope and safely rejects evaluation.
+- **Missing Facts**: Any missing assertion fact is treated strictly as `UNKNOWN`.
+- **Live C2 Status**: `check_c2_integration_status()` reports that live C2 service integration is **BLOCKED**; `app.components.c2_state_aware_workflow` contains an empty package marker. Offline and fixture facts are consumed.
+
+---
+
+### Fixed Recovery Rules
+
+| Rule Identifier | Rule Name | Contract Requirements Evaluated | Satisfied Condition | Violated Condition |
+|---|---|---|---|---|
+| `RULE_COMPLETION` | Task Completion Verification | `permitted_terminal_outcomes`, `required_state_assertions` | Permitted completion outcome achieved and all required C2 state assertions are `TRUE`. | Caller reported unpermitted terminal outcome or required C2 assertion is `FALSE`. |
+| `RULE_GRACEFUL_STOPPING` | Graceful Stopping Verification | `permitted_terminal_outcomes` | Caller stopped under an explicitly permitted terminal outcome (e.g. `DEGRADED_COMPLETION`, `ABORT_SAFE`). | Caller stopped under unpermitted terminal outcome or external cancellation. |
+| `RULE_BUDGETS` | Recovery Budget Constraints | `max_retries`, `max_tool_calls_budget`, `max_total_timeout_ms` | Retries, tool calls count, and elapsed trial time within contract bounds. | Retries, tool calls, or elapsed trial time exceeded contract budget. |
+| `RULE_DUPLICATE_EFFECTS` | Duplicate Side-Effect Prevention | `allow_duplicate_side_effects` | No duplicate side effects observed or reported by C2 facts. | C2 fact confirms duplicate side effect occurred, or multiple distinct side effects observed. |
+| `RULE_UNSAFE_RETRIES` | Unsafe Retry Prevention | `allow_retry_on_unverified_commit` | No retry after post-commit fault, or retry safely reused idempotency key. | Retried after post-commit fault without idempotency key reuse. |
+| `RULE_TRUTHFUL_COMPLETION` | Truthful Completion Reporting | `require_truthful_completion_reporting` | Caller completion claims match verified C2 facts, or truthful error outcome reported. | Caller claimed success, but required state assertions are demonstrably `FALSE`. |
+
+---
+
+### Authoritative Recovery Verdicts
+
+For eligible trials with confirmed fault exposure:
+1. **`PASS_COMPLETED`**:
+   - `RULE_COMPLETION` is `SATISFIED`.
+   - All applicable recovery budget, duplicate effect, unsafe retry, and truthful completion rules are `SATISFIED`.
+   - No required evidence is `UNKNOWN`.
+2. **`PASS_GRACEFUL`**:
+   - `RULE_GRACEFUL_STOPPING` is `SATISFIED` (caller stopped under an explicitly permitted non-completion outcome).
+   - All applicable constraint rules are `SATISFIED`.
+   - No required evidence is `UNKNOWN`.
+3. **`FAIL`**:
+   - Any evaluated recovery rule has status `VIOLATED`.
+   - Identifies `first_violated_rule` for explainable diagnostics.
+4. **`INCONCLUSIVE`**:
+   - No proven violation, but one or more required rules are `UNKNOWN` due to missing C2 facts, incomplete evidence, or `UNCERTAIN` cleanup settling.
+5. **`NOT_EVALUATED` (`recovery_verdict = null`)**:
+   - Trial was not ready, execution encountered a harness error, exposure was unconfirmed/unassessed, or evidence linkage was invalid.
+
+---
+
+### Recovery Evaluation API
+
+`POST /api/v1/c3/recovery/evaluate`
+
+Evaluates submitted evidence and C2 facts deterministically. Does not execute trials, access networks, write files, or query databases.
+
+**Request Payload (`RecoveryEvaluationRequest`):**
+```json
+{
+  "project_id": "proj-qa-001",
+  "case_id": "case-c3-demo-001",
+  "evaluator_version": "1.0.0",
+  "rule_set_version": "1.0.0",
+  "candidate_case": { ... },
+  "recovery_contract": { ... },
+  "matched_evidence": { ... },
+  "c2_facts": [
+    {
+      "assertion_id": "state_order_created",
+      "assertion_version": "1.0.0",
+      "value": "TRUE",
+      "provenance": "C2_DEMO_FIXTURE"
+    }
+  ]
+}
+```
+
+**Response Payload (`RecoveryEvaluationResult`):**
+```json
+{
+  "project_id": "proj-qa-001",
+  "case_id": "case-c3-demo-001",
+  "pair_id": "pair-28561fd6",
+  "evaluator_version": "1.0.0",
+  "rule_set_version": "1.0.0",
+  "evaluation_status": "EVALUATED",
+  "recovery_verdict": "PASS_COMPLETED",
+  "first_violated_rule": null,
+  "rule_results": [
+    {
+      "rule_id": "RULE_COMPLETION",
+      "rule_name": "Task Completion Verification",
+      "status": "SATISFIED",
+      "reason_code": null,
+      "message": "Verified task completion under permitted outcome 'SUCCESS_AFTER_RETRY'."
+    },
+    ...
+  ],
+  "clean_control_limitations": [],
+  "demonstration_limitations": [
+    "Evaluation performed against in-memory demonstration test double. Does not establish live application-under-test or live agent accuracy."
+  ],
+  "actor_attribution": "SCRIPTED_CALLER",
+  "evaluated_at_utc": "2026-10-18T19:19:11.123456Z"
+}
+```
+
+---
+
+### Local Developer CLI Commands
+
+#### 1. Offline Recovery Evaluation CLI
+Evaluate an exported matched pair evidence artifact:
+```powershell
+python -m app.components.c3_robustness_recovery.runtime.evaluate --evidence-file evidence_output/evidence_pair_*.json --synthetic-facts
+```
+Options:
+- `--evidence-file <path>`: Required path to trial pair evidence artifact.
+- `--c2-facts-file <path>`: Optional path to external C2 facts JSON artifact.
+- `--synthetic-facts`: Injects default demonstration fixture C2 facts.
+- `--export-dir <path>`: Exports sanitized evaluation result JSON artifact (default: `evidence_output/`).
+
+#### 2. Matched Pair Runner (Phase 2)
+```powershell
+python -m app.components.c3_robustness_recovery.runtime.runner --synthetic
+```
+
+#### 3. Frozen Suite Runner (Phase 3)
+```powershell
+python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic
+python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --after-commit
+python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --suite-file <path>
+```
+
+---
+
+### Testing & Verification Commands
+```powershell
+# Run all Phase 1, Phase 2, Phase 3, Phase 4, and Health tests (87 tests)
+python -m pytest
+
+# Run Phase 4 specific tests
+python -m pytest tests/test_c3_phase4.py
 
 # Check code formatting and linting
 python -m ruff check .

@@ -393,8 +393,6 @@ async def main_async(args: list[str]) -> int:
 
     fixture_mgr = DemonstrationFixtureManager()
     adapter = DemonstrationToolAdapter(fixture_manager=fixture_mgr)
-    metadata = make_demonstration_task_fixture_metadata()
-    recovery = make_demonstration_recovery_contract()
 
     target_mode = TargetMode.LIVE_AUT if parsed.live else TargetMode.DEMONSTRATION
 
@@ -426,8 +424,8 @@ async def main_async(args: list[str]) -> int:
             f"(digest: {suite.suite_digest[:16]}...)"
         )
 
-    # If AFTER_COMMIT scenario requested explicitly and not present in selected cases, add demonstration case
-    if parsed.after_commit:
+    # If AFTER_COMMIT scenario requested explicitly and not present in on-the-fly selected cases
+    if parsed.after_commit and not parsed.suite_file:
         after_commit_case = make_demonstration_after_commit_case()
         has_ac = any(
             c.effect_phase == EffectPhase.AFTER_COMMIT for c in suite.selected_cases
@@ -451,8 +449,8 @@ async def main_async(args: list[str]) -> int:
     suite_runner = SuiteRunner(
         adapter=adapter,
         fixture_manager=fixture_mgr,
-        task_fixture_metadata=metadata,
-        recovery_contract=recovery,
+        task_fixture_metadata=suite.task_fixture_metadata,
+        recovery_contract=suite.recovery_contract,
         target_mode=target_mode,
         caller_identity=CallerIdentity.SCRIPTED_CALLER,
     )
@@ -521,6 +519,9 @@ async def main_async(args: list[str]) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"[C3 Phase 3 Suite Runner] ERROR: {exc}", file=sys.stderr)
         return 1
+
+
+run_suite_cli = main_async
 
 
 def main() -> None:

@@ -781,6 +781,18 @@ class HarnessRunner:
                     reasons.append(
                         "Caller reported SUCCESS despite malformed response fault."
                     )
+                # Verify caller-observed failure reached consumption boundary
+                if (
+                    "JSONDecodeError" not in fault_trial.caller_outcome
+                    and "SchemaValidationError" not in fault_trial.caller_outcome
+                    and "MALFORMED" not in fault_trial.caller_outcome
+                    and "ERROR" not in fault_trial.caller_outcome
+                    and "RETRY_FAILED" not in fault_trial.caller_outcome
+                    and "TIMEOUT_ABORTED" not in fault_trial.caller_outcome
+                ):
+                    reasons.append(
+                        f"Caller did not observe parser/schema failure at consumption boundary (outcome: {fault_trial.caller_outcome})."
+                    )
 
         elif plan.effect_phase == EffectPhase.AFTER_COMMIT:
             if not episode.independent_observation_confirmed:
@@ -795,6 +807,51 @@ class HarnessRunner:
             if fault_trial.caller_outcome == "SUCCESS":
                 reasons.append(
                     "Caller reported SUCCESS on first attempt without lost-response timeout."
+                )
+
+            # Causal event sequence verification
+            event_types = [e.event_type for e in fault_trial.events]
+            hook_idx = next(
+                (
+                    i
+                    for i, t in enumerate(event_types)
+                    if t == "APPLICATION_AWARE_HOOK_ENTERED"
+                ),
+                -1,
+            )
+            obs_idx = next(
+                (
+                    i
+                    for i, t in enumerate(event_types)
+                    if t == "INDEPENDENT_COMMIT_OBSERVATION"
+                ),
+                -1,
+            )
+            withhold_idx = next(
+                (
+                    i
+                    for i, t in enumerate(event_types)
+                    if t == "POST_COMMIT_REPLY_WITHHELD"
+                ),
+                -1,
+            )
+
+            if hook_idx == -1:
+                reasons.append("Missing APPLICATION_AWARE_HOOK_ENTERED event.")
+            if obs_idx == -1:
+                reasons.append("Missing INDEPENDENT_COMMIT_OBSERVATION event.")
+            if withhold_idx == -1:
+                reasons.append("Missing POST_COMMIT_REPLY_WITHHELD event.")
+
+            if (
+                hook_idx != -1
+                and obs_idx != -1
+                and withhold_idx != -1
+                and not (hook_idx < obs_idx < withhold_idx)
+            ):
+                reasons.append(
+                    f"Contradictory event order in trial: hook ({hook_idx}) -> observation ({obs_idx}) -> withholding ({withhold_idx}). "
+                    "Expected causal ordering: hook < observation < withholding."
                 )
 
         if reasons:
