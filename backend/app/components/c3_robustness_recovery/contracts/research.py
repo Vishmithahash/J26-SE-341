@@ -20,8 +20,10 @@ from app.components.c3_robustness_recovery.contracts.persistence import (
 class DatasetSplit(StrEnum):
     """Dataset partition for research evaluation."""
 
-    TRAIN_DEV = "TRAIN_DEV"
+    DEVELOPMENT = "DEVELOPMENT"
+    VALIDATION = "VALIDATION"
     HELD_OUT_TEST = "HELD_OUT_TEST"
+    TRAIN_DEV = "TRAIN_DEV"  # Retained for Phase 6 backward compatibility
 
 
 class ReviewerProvenance(StrEnum):
@@ -90,6 +92,124 @@ class ReviewerLabelRecord(BaseModel):
     created_at_utc: str
 
 
+class BlindedReviewerItem(BaseModel):
+    """Anonymized, blinded trial record presented to an independent human reviewer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pair_id: str = Field(..., min_length=1, max_length=128)
+    case_id: str = Field(..., min_length=1, max_length=128)
+    project_id: str = Field(..., min_length=1, max_length=128)
+    evidence_digest: str = Field(
+        ..., description="Deterministic digest of reviewed evidence."
+    )
+    task_id: str
+    tool_id: str
+    observed_trace_summary: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Sanitized sequence of tool invocations, returns, and caller actions (without evaluator verdicts).",
+    )
+    caller_reported_outcome: str
+    initial_state_observation: dict[str, Any] = Field(default_factory=dict)
+    final_state_observation: dict[str, Any] = Field(default_factory=dict)
+    contract_version: str = "1.0.0"
+    permitted_terminal_outcomes: list[str] = Field(default_factory=list)
+    max_retries_allowed: int | None = None
+    evidence_sufficient: bool = True
+
+
+class BlindedReviewerPacket(BaseModel):
+    """Export packet containing blinded trial items for independent human review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    packet_id: str = Field(..., min_length=1, max_length=128)
+    project_id: str = Field(..., min_length=1, max_length=128)
+    experiment_id: str = Field(..., min_length=1, max_length=128)
+    protocol_version: str = Field(default="2.0.0")
+    total_cases: int = Field(default=0, ge=0)
+    created_at_utc: str
+    items: list[BlindedReviewerItem] = Field(default_factory=list)
+
+
+class IndependentReviewerLabel(BaseModel):
+    """Explicitly attributed label authored by an independent reviewer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label_id: str = Field(..., min_length=1, max_length=128)
+    reviewer_id: str = Field(
+        ..., min_length=1, max_length=64, description="E.g. REV_A, REV_B"
+    )
+    pair_id: str = Field(..., min_length=1, max_length=128)
+    case_id: str = Field(..., min_length=1, max_length=128)
+    project_id: str = Field(..., min_length=1, max_length=128)
+    evidence_digest: str = Field(
+        ..., description="Digest of verified evidence reviewed."
+    )
+    contract_version: str = Field(default="1.0.0")
+    permitted_outcome_observed: bool
+    defect_present: bool = Field(
+        ..., description="Whether a failure recovery defect was present."
+    )
+    assigned_verdict: RecoveryVerdict | None = None
+    violation_type: str | None = None
+    first_observable_violation: str | None = None
+    evidence_sufficient: bool = True
+    reviewer_provenance: ReviewerProvenance = ReviewerProvenance.INDEPENDENT_EXPERT
+    notes: str | None = None
+    label_version: str = Field(default="1.0.0")
+    created_at_utc: str
+
+
+class MetricScore(BaseModel):
+    """Pure research metric score with explicit numerator and denominator."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: float | None = None
+    numerator: int | None = None
+    denominator: int | None = None
+    denominator_unit: str = Field(..., description="Explicit unit of the denominator.")
+    is_defined: bool = True
+    undefined_reason: str | None = None
+
+
+class InterReviewerAgreementResult(BaseModel):
+    """Inter-rater reliability analysis between two independent reviewers prior to reconciliation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reviewer_a_id: str
+    reviewer_b_id: str
+    total_pairs_compared: int
+    concordant_pairs_count: int
+    discordant_pairs_count: int
+    percentage_agreement: MetricScore
+    cohens_kappa: MetricScore
+    disputed_pair_ids: list[str] = Field(default_factory=list)
+    reconciliation_required: bool = False
+
+
+class ReconciliationRecord(BaseModel):
+    """Audit record capturing dispute reconciliation without modifying original independent labels."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reconciliation_id: str = Field(..., min_length=1, max_length=128)
+    pair_id: str = Field(..., min_length=1, max_length=128)
+    case_id: str = Field(..., min_length=1, max_length=128)
+    adjudicator_id: str = Field(..., min_length=1, max_length=64)
+    reviewer_a_id: str
+    reviewer_b_id: str
+    reviewer_a_label_id: str
+    reviewer_b_label_id: str
+    adjudicated_verdict: RecoveryVerdict
+    adjudicated_defect_present: bool
+    adjudication_rationale: str
+    adjudicated_at_utc: str
+
+
 class ExperimentBudgets(BaseModel):
     """Enforced resource and duration bounds for reproducible experiments."""
 
@@ -146,17 +266,69 @@ class ConfusionMatrix(BaseModel):
     unscored_count: int = 0  # Ineligible, unconfirmed exposure, or unscored
 
 
-class MetricScore(BaseModel):
-    """Pure research metric score with explicit numerator and denominator."""
+class MulticlassConfusionMatrix(BaseModel):
+    """4-way multiclass confusion matrix (PASS_COMPLETED, PASS_GRACEFUL, FAIL, INCONCLUSIVE)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    value: float | None = None
-    numerator: int | None = None
-    denominator: int | None = None
-    denominator_unit: str = Field(..., description="Explicit unit of the denominator.")
-    is_defined: bool = True
-    undefined_reason: str | None = None
+    classes: list[str] = Field(
+        default_factory=lambda: [
+            RecoveryVerdict.PASS_COMPLETED.value,
+            RecoveryVerdict.PASS_GRACEFUL.value,
+            RecoveryVerdict.FAIL.value,
+            RecoveryVerdict.INCONCLUSIVE.value,
+        ]
+    )
+    matrix: dict[str, dict[str, int]] = Field(default_factory=dict)
+    total_samples: int = 0
+    accuracy: MetricScore
+    per_class_precision: dict[str, MetricScore] = Field(default_factory=dict)
+    per_class_recall: dict[str, MetricScore] = Field(default_factory=dict)
+    per_class_f1: dict[str, MetricScore] = Field(default_factory=dict)
+    macro_f1: MetricScore
+
+
+class CleanToFaultOutcomeTransitions(BaseModel):
+    """Transitions from baseline clean control to fault-injected trial outcomes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    clean_pass_to_fault_recovered: int = 0
+    clean_pass_to_fault_defect: int = 0
+    clean_pass_to_fault_inconclusive: int = 0
+    clean_disqualified_count: int = 0
+    total_matched_pairs: int = 0
+
+
+class BootstrapConfidenceInterval(BaseModel):
+    """Deterministic cluster bootstrap confidence interval grouped by case family."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric_name: str
+    point_estimate: float | None
+    ci_lower: float | None = None
+    ci_upper: float | None = None
+    confidence_level: float = 0.95
+    n_bootstraps: int = 1000
+    n_clusters: int = 0
+    is_valid: bool = True
+    limitation: str | None = None
+
+
+class FixedSuiteComparisonResult(BaseModel):
+    """Comparative outcome between fixed hand-crafted test suite and automatic generation under matched budgets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fixed_cases_count: int
+    generated_cases_count: int
+    fixed_validity_rate: MetricScore
+    generated_validity_rate: MetricScore
+    fixed_feasible_coverage: MetricScore
+    generated_feasible_coverage: MetricScore
+    budget_equivalent: bool = True
+    notes: str = ""
 
 
 class ResearchMetricsReport(BaseModel):
@@ -175,6 +347,7 @@ class ResearchMetricsReport(BaseModel):
     total_case_families: int
     dev_families_count: int
     test_families_count: int
+    val_families_count: int = 0
 
     planned_cases_count: int
     executed_pairs_count: int
@@ -210,6 +383,12 @@ class ResearchMetricsReport(BaseModel):
     f1_score: MetricScore | None = None
     false_pass_rate: MetricScore | None = None
     abstention_rate: MetricScore | None = None
+
+    # Phase 7 Multiclass, Transition & Statistical Extensions
+    multiclass_confusion_matrix: MulticlassConfusionMatrix | None = None
+    outcome_transitions: CleanToFaultOutcomeTransitions | None = None
+    execution_overheads: dict[str, MetricScore] = Field(default_factory=dict)
+    bootstrap_ci: BootstrapConfidenceInterval | None = None
 
     # Comparative Setup
     baseline_type: BaselineType = BaselineType.PRODUCTION_C3

@@ -128,20 +128,21 @@ The backend is structured as a **FastAPI modular monolith**:
 |---|---|---|
 | `app/components/c1_tool_call_correctness` | **C1: Explainable Tool-Call Correctness Testing** | Reserved (Not implemented) |
 | `app/components/c2_state_aware_workflow` | **C2: State-Aware Multi-Step Workflow Testing** | Reserved (Not implemented) |
-| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phase 1, Phase 2, Phase 3, Phase 4 & Phase 5 Implemented** (Phase 6 Unimplemented) |
+| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phases 1–7 Implemented & Verified Offline** (Cross-Component Integration Pending) |
 | `app/components/c4_policy_prompt_injection` | **C4: Policy-Aware Safety and Prompt-Injection Testing** | Reserved (Not implemented) |
 
 ---
 
 ## Component 3: Robustness and Failure Recovery Testing
 
-### Six-Phase Implementation Roadmap
+### Implementation Roadmap
 1. **Phase 1: Contracts, Fault Catalogue, Static Validation and APIs** &mdash; **IMPLEMENTED (Stateless Foundation)**
 2. **Phase 2: One-Tool Integration, Matched Trials, Verified Timeout Exposure and Safeguards** &mdash; **IMPLEMENTED (Demonstrated Vertical Slice)**
 3. **Phase 3: Automatic Generation, Frozen Suites, Remaining Fault Families and Supported Post-Commit Experiments** &mdash; **IMPLEMENTED (Pure Generation & Bounded Suites)**
 4. **Phase 4: Recovery Evaluation Using Evidence and C2 Facts** &mdash; **IMPLEMENTED (Deterministic Recovery Evaluator)**
 5. **Phase 5: Shared Persistence, Execution Tracking, Results and Reporting** &mdash; **IMPLEMENTED (C3 Persistence & Reporting)**
-6. **Phase 6: Second Domain, Research Experiments, Baselines, Metrics and Final Validation** &mdash; *UNIMPLEMENTED*
+6. **Phase 6: Second Domain, Research Experiments, Baselines, Metrics and Acceptance Reporting** &mdash; **IMPLEMENTED (Research Architecture & Baselines)**
+7. **Phase 7: C3 Internal Completion and Offline Verification** &mdash; **IMPLEMENTED (Offline Completion & Hermetic Verification)**
 
 ### Phase 1 Canonical Structure
 ```text
@@ -879,15 +880,35 @@ backend/docs/
 5. **Multi-Project Concurrency Isolation**:
    - Concurrent suite executions across separate tenants (`project_id`) maintain strict boundary isolation without data corruption or cross-tenant query leaks.
 
-### Final Acceptance Report
+### Phase 6 Final Acceptance Report
 See [`docs/c3_final_acceptance_report.md`](docs/c3_final_acceptance_report.md) for the comprehensive acceptance matrix, verification evidence, planned vs. achieved counts, and explicit blockers.
+
+---
+
+## Component 3: Phase 7 — Internal Completion & Offline Verification
+
+Phase 7 completes internal C3 functionality, offline research capabilities, confirmed defect corrections, and pure mathematical metrics:
+1. **Three-Way Split Protocol (v2.0.0)**: Supports `DEVELOPMENT` (40%), `VALIDATION` (20%), and `HELD_OUT_TEST` (40%) partitions with deterministic case-family allocation, documented integer rounding, and pairwise zero-leakage enforcement (`verify_split_leakage()`).
+2. **Offline Baselines and Ablations**:
+   - **B1 (Fixed Suite Comparison)**: Predefined cases compared against generated suites under matched budgets.
+   - **B2 (Outcome-Only Evaluation)**: Evaluates terminal outcome and final application state, while excluding recovery-trace contract rules (`RULE_BUDGETS`, `RULE_DUPLICATE_EFFECTS`, `RULE_UNSAFE_RETRIES`). Fails if final state is FALSE; does not blindly accept caller success strings.
+   - **A1–A4 Ablations**: A1 (capability validation offline), A2 (isolated exposure receipt analysis), A3 (no state facts yields inconclusive), A4 (no effect-phase distinction evaluated as `BEFORE_EFFECT`).
+3. **Pure Research Metrics**: Four-way multiclass matrix (`PASS_COMPLETED`, `PASS_GRACEFUL`, `FAIL`, `INCONCLUSIVE`) with accuracy and macro-F1, clean-to-fault outcome transitions, duration overhead, and deterministic family-cluster bootstrap confidence intervals with honest reporting when clusters < 5. Token and cost telemetry are transparently flagged as unavailable offline.
+4. **Independent Reviewer Support**: Blinded packet export hiding evaluator verdicts and baseline tags, dual-reviewer Cohen's kappa with explicit category and zero-variance handling, and append-only dispute reconciliation audit trail.
+5. **Runtime Safeguards & Persistence Correctness**: Verification of single-fault episodes, BEFORE_EFFECT / AFTER_COMMIT observation, cancellation vs timeout distinction, uncertain cleanup preventing fixture reuse, conflicting case content rejection, and identical cases across multiple suites.
+
+### Phase 7 Delivery Report
+See [`docs/c3_phase7_completion_report.md`](docs/c3_phase7_completion_report.md) for the complete Phase 7 delivery report, metrics provenance, and 6-part acceptance breakdown.
 
 ---
 
 ### Testing & Verification Commands
 ```powershell
-# Run all Phase 1 through Phase 6 tests + Health tests (125 passed, 2 opt-in skipped)
+# Run all Phase 1 through Phase 7 tests + Health tests (148 passed, 2 opt-in skipped)
 python -m pytest
+
+# Run Phase 7 specific tests (23 tests hermetic SQLite)
+python -m pytest tests/test_c3_phase7.py -v
 
 # Run Phase 6 specific tests (15 tests hermetic SQLite, 1 skipped PostgreSQL opt-in)
 python -m pytest tests/test_c3_phase6.py -v

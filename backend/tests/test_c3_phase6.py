@@ -567,13 +567,17 @@ def test_compute_research_metrics_confusion_matrix_and_accuracy():
 
 
 def test_outcome_only_baseline_ignores_c2_state_facts():
-    """Outcome-only baseline awards PASS_COMPLETED solely on caller claim without state verification."""
+    """Outcome-only baseline (B2) evaluates terminal outcome and final state, excluding trace contract rules.
+
+    Does NOT blindly accept caller success messages: fails if final state assertion is FALSE!
+    Passes if terminal outcome and final state are satisfied even if trace contract rules (retries) are violated.
+    """
     case = make_demonstration_candidate_case()
     recovery = make_demonstration_recovery_contract()
     evidence = make_test_pair_evidence(caller_outcome="SUCCESS_AFTER_RETRY")
 
-    # With production C3: state assertions required. If C2 state is FALSE -> FAIL
-    req = RecoveryEvaluationRequest(
+    # 1. When C2 state assertion is FALSE, B2 does NOT blindly pass; it verifies final state and FAILS!
+    req_bad_state = RecoveryEvaluationRequest(
         project_id="proj-base-test",
         case_id=case.case_id,
         evaluator_version="1.2.0",
@@ -591,15 +595,49 @@ def test_outcome_only_baseline_ignores_c2_state_facts():
     )
 
     prod_res = evaluate_with_baseline_or_ablation(
-        eval_req=req, baseline_type=BaselineType.PRODUCTION_C3
+        eval_req=req_bad_state, baseline_type=BaselineType.PRODUCTION_C3
     )
     assert prod_res.recovery_verdict == RecoveryVerdict.FAIL
 
-    # With OUTCOME_ONLY_BASELINE: ignores state fact, blindly passes caller's claimed success!
-    baseline_res = evaluate_with_baseline_or_ablation(
-        eval_req=req, baseline_type=BaselineType.OUTCOME_ONLY_BASELINE
+    baseline_bad_state = evaluate_with_baseline_or_ablation(
+        eval_req=req_bad_state, baseline_type=BaselineType.OUTCOME_ONLY_BASELINE
     )
-    assert baseline_res.recovery_verdict == RecoveryVerdict.PASS_COMPLETED
+    # B2 does NOT blindly accept caller success when final state is FALSE!
+    assert baseline_bad_state.recovery_verdict == RecoveryVerdict.FAIL
+
+    # 2. When final state is TRUE, but trace violates retry bounds:
+    # Contract permits 1 retry, but caller trace had 3 tool attempts
+    evidence_retried = make_test_pair_evidence(caller_outcome="SUCCESS_AFTER_RETRY")
+    evidence_retried.fault_trial.subsequent_calls_count = 5  # Exceeds max_retries=1
+
+    req_retried = RecoveryEvaluationRequest(
+        project_id="proj-base-test",
+        case_id=case.case_id,
+        evaluator_version="1.2.0",
+        rule_set_version="1.2.0",
+        candidate_case=case,
+        recovery_contract=recovery,
+        matched_evidence=evidence_retried,
+        c2_facts=[
+            C2AssertionFact(
+                assertion_id="state_order_created",
+                value=C2FactValue.TRUE,  # State is verified TRUE
+                provenance="C2_DEMO_FIXTURE",
+            )
+        ],
+    )
+
+    prod_retried_res = evaluate_with_baseline_or_ablation(
+        eval_req=req_retried, baseline_type=BaselineType.PRODUCTION_C3
+    )
+    # Production C3 enforces trace retry limits
+    assert prod_retried_res.recovery_verdict == RecoveryVerdict.FAIL
+
+    # Outcome-only B2 excludes trace-level retry bound rules, seeing verified terminal outcome + state
+    baseline_retried_res = evaluate_with_baseline_or_ablation(
+        eval_req=req_retried, baseline_type=BaselineType.OUTCOME_ONLY_BASELINE
+    )
+    assert baseline_retried_res.recovery_verdict == RecoveryVerdict.PASS_COMPLETED
 
 
 def test_no_state_facts_ablation_produces_inconclusive():

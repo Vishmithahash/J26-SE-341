@@ -118,6 +118,12 @@ class BankingFixtureManager(FixtureManager):
             for t in store.get("transfers", [])
         )
 
+    def verify_committed_operation(
+        self, namespace: str, operation_reference: str
+    ) -> bool:
+        """Independently verify whether a specific operation committed out-of-band."""
+        return self.verify_committed_transfer(namespace, operation_reference)
+
     def compare_states(
         self, baseline_state: dict[str, Any], candidate_state: dict[str, Any]
     ) -> FixtureComparability:
