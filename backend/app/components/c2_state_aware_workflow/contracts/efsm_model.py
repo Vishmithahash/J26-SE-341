@@ -55,6 +55,20 @@ class VariableDeclaration(BaseModel):
     description: str | None = None
 
 
+class DeferredEffect(BaseModel):
+    """Declared state effect obligation permitted to occur at a later checkpoint state."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str | None = None
+    predicate: StructuredPredicate
+    checkpoint_state_id: str = Field(
+        ...,
+        description="Target checkpoint state where this effect obligation must be checked",
+    )
+    description: str | None = None
+
+
 class TransitionDefinition(BaseModel):
     """A transition from source_state to target_state triggered by an event."""
 
@@ -77,6 +91,10 @@ class TransitionDefinition(BaseModel):
     expected_effects: list[StructuredPredicate] = Field(
         default_factory=list,
         description="Assertions that must hold over the state after the transition completes",
+    )
+    deferred_effects: list[DeferredEffect] = Field(
+        default_factory=list,
+        description="Assertions that are permitted to occur at a later declared checkpoint state",
     )
     source_rules: list[str] = Field(
         default_factory=list,

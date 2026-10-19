@@ -113,7 +113,9 @@ class EvaluationResultContract(BaseModel):
     observed_states: list[str] = Field(default_factory=list)
     violations: list[ViolationDetail] = Field(default_factory=list)
     first_divergence: FirstDivergenceDetail | None = None
+    divergence_localisation_uncertainty: str | None = None
     evidence_references: list[str] = Field(default_factory=list)
     coverage: WorkflowCoverageSummary = Field(default_factory=WorkflowCoverageSummary)
+    detailed_coverage: Any = None
     evaluator_timing_ms: float = 0.0
     evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

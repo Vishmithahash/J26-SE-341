@@ -258,12 +258,55 @@ class C2TestCase(Base):
     )
 
 
+class C2ExecutionEvidence(Base):
+    """Stores retained runtime execution evidence, fixture snapshots, digests, and provenance."""
+
+    __tablename__ = "c2_execution_evidence"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    suite_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    test_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    evidence_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    model_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    execution_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    runner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    runner_version: Mapped[str] = mapped_column(
+        String(32), default="2026.1", nullable=False
+    )
+
+    execution_provenance: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    evidence_payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "suite_id", "test_id", "run_id", name="uq_c2_execution_run"
+        ),
+        Index("ix_c2_execution_lookup", "project_id", "suite_id", "test_id", "run_id"),
+    )
+
+
 class C2EvaluationResult(Base):
     """Stores execution evaluation outcomes and first-divergence localisation records."""
 
     __tablename__ = "c2_evaluation_results"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    execution_evidence_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("c2_execution_evidence.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     suite_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     test_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -276,6 +319,16 @@ class C2EvaluationResult(Base):
     )
     evaluator_version: Mapped[str] = mapped_column(
         String(32), default="c2_evaluator_v1", nullable=False
+    )
+    evaluator_config: Mapped[dict] = mapped_column(
+        JSON_TYPE, default=dict, nullable=False
+    )
+    evaluation_attempt: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    evidence_digest: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    reproduced_from_evaluation_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
     )
 
     verdict: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -307,7 +360,9 @@ class C2EvaluationResult(Base):
             "suite_id",
             "test_id",
             "run_id",
-            name="uq_c2_evaluation_run",
+            "evaluator_version",
+            "evaluation_attempt",
+            name="uq_c2_evaluation_attempt",
         ),
         Index("ix_c2_evaluation_lookup", "project_id", "suite_id", "test_id"),
         Index("ix_c2_evaluation_verdict", "project_id", "verdict"),

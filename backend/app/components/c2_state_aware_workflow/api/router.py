@@ -11,6 +11,9 @@ from app.components.c2_state_aware_workflow.builder.deterministic import (
     DeterministicCandidateBuilder,
     InsufficientInputError,
 )
+from app.components.c2_state_aware_workflow.contracts.coverage import (
+    DetailedObservedCoverage,
+)
 from app.components.c2_state_aware_workflow.contracts.efsm_model import (
     EFSMModelDefinition,
 )
@@ -20,6 +23,10 @@ from app.components.c2_state_aware_workflow.contracts.evaluation_result import (
     RuntimeVerdict,
     ViolationDetail,
     WorkflowCoverageSummary,
+)
+from app.components.c2_state_aware_workflow.contracts.report import (
+    C2ReportContributionContract,
+    C2SuiteReportContract,
 )
 from app.components.c2_state_aware_workflow.contracts.runtime_evidence import (
     RuntimeEvidenceContract,
@@ -60,6 +67,13 @@ from app.components.c2_state_aware_workflow.generator.readiness import (
 from app.components.c2_state_aware_workflow.generator.service import (
     TestGenerationService,
 )
+from app.components.c2_state_aware_workflow.integrations.reporting import (
+    C2ReportExportService,
+    C2ReportPublisher,
+)
+from app.components.c2_state_aware_workflow.integrations.service import (
+    C2IntegrationService,
+)
 from app.components.c2_state_aware_workflow.persistence.models import (
     C2EvaluationResult,
     C2TestCase,
@@ -68,6 +82,7 @@ from app.components.c2_state_aware_workflow.persistence.models import (
 from app.components.c2_state_aware_workflow.persistence.repository import (
     ApprovalBlockedError,
     C2ModelRepository,
+    ConflictingEvidenceIntegrityError,
     ModelAlreadyExistsError,
     ModelNotFoundError,
     TestCaseNotFoundError,
@@ -888,6 +903,19 @@ class DemonstrationRunRequest(BaseModel):
 
 
 def _format_evaluation_response(record: C2EvaluationResult) -> EvaluationResultContract:
+    cov_dict = record.coverage or {}
+    summary_data = {
+        k: v for k, v in cov_dict.items() if k in WorkflowCoverageSummary.model_fields
+    }
+    det_cov = None
+    if "detailed_coverage" in cov_dict and isinstance(
+        cov_dict["detailed_coverage"], dict
+    ):
+        try:
+            det_cov = DetailedObservedCoverage(**cov_dict["detailed_coverage"])
+        except (ValueError, TypeError, KeyError):
+            det_cov = None
+
     return EvaluationResultContract(
         schema_version="2026.1",
         evaluation_id=record.id,
@@ -910,7 +938,8 @@ def _format_evaluation_response(record: C2EvaluationResult) -> EvaluationResultC
             else None
         ),
         evidence_references=record.evidence_references,
-        coverage=WorkflowCoverageSummary(**record.coverage),
+        coverage=WorkflowCoverageSummary(**summary_data),
+        detailed_coverage=det_cov,
         evaluator_timing_ms=record.evaluator_timing_ms,
         evaluated_at=record.created_at,
     )
@@ -954,6 +983,10 @@ def evaluate_test_run(
     except ModelNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ConflictingEvidenceIntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
 
 
@@ -1171,3 +1204,257 @@ def run_synthetic_demonstration(
             "evaluation_id": f"eval_{run_id}",
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Day 3 Part A: Integration Orchestration, Coverage, and Reporting Endpoints
+# ---------------------------------------------------------------------------
+
+
+class SuiteRunRequest(BaseModel):
+    max_cases: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Maximum cases to execute in bounded suite run",
+    )
+
+
+class ReEvaluateRequest(BaseModel):
+    evaluator_version: str | None = Field(
+        default=None, description="Optional new evaluator version"
+    )
+    evaluator_config: dict[str, Any] | None = Field(
+        default=None, description="Optional evaluator configuration override"
+    )
+
+
+# 23. Run a C2 Case with Orchestration Pipeline
+@router.post(
+    "/projects/{project_id}/suites/{suite_id}/cases/{test_id}/run",
+    response_model=EvaluationResultContract,
+)
+def run_case_orchestration(
+    project_id: str,
+    suite_id: str,
+    test_id: str,
+    db: DbSession,
+    run_id: str | None = None,
+):
+    """Run an isolated test case through fixture reset, runner, evidence collection, and evaluation."""
+    service = C2IntegrationService(db)
+    try:
+        return service.run_case(project_id, suite_id, test_id, run_id=run_id)
+    except TestCaseNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ModelNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ConflictingEvidenceIntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+
+
+# 24. Run Bounded Test Suite
+@router.post(
+    "/projects/{project_id}/suites/{suite_id}/run",
+    response_model=C2SuiteReportContract,
+)
+def run_suite_orchestration(
+    project_id: str,
+    suite_id: str,
+    request: SuiteRunRequest,
+    db: DbSession,
+):
+    """Execute a bounded batch of test cases for a suite and produce aggregate report."""
+    repo = C2ModelRepository(db)
+    suite = repo.get_test_suite(project_id, suite_id)
+    if suite is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test suite '{suite_id}' not found for project '{project_id}'.",
+        )
+    service = C2IntegrationService(db)
+    return service.run_suite(project_id, suite_id, max_cases=request.max_cases)
+
+
+# 25. Retrieve Retained Execution Evidence
+@router.get(
+    "/projects/{project_id}/evidence/{run_id}",
+    response_model=dict[str, Any],
+)
+def get_retained_evidence(
+    project_id: str,
+    run_id: str,
+    db: DbSession,
+):
+    """Retrieve original retained execution evidence, fixture snapshot, digest, and provenance."""
+    repo = C2ModelRepository(db)
+    evidence = repo.get_execution_evidence(project_id, run_id)
+    if evidence is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Retained evidence for run '{run_id}' not found in project '{project_id}'.",
+        )
+    return {
+        "id": evidence.id,
+        "project_id": evidence.project_id,
+        "suite_id": evidence.suite_id,
+        "test_id": evidence.test_id,
+        "run_id": evidence.run_id,
+        "evidence_digest": evidence.evidence_digest,
+        "model_id": evidence.model_id,
+        "model_version": evidence.model_version,
+        "model_content_hash": evidence.model_content_hash,
+        "execution_mode": evidence.execution_mode,
+        "runner_id": evidence.runner_id,
+        "runner_version": evidence.runner_version,
+        "execution_provenance": evidence.execution_provenance,
+        "evidence_payload": evidence.evidence_payload,
+        "created_at": evidence.created_at,
+    }
+
+
+# 26. Reproducible Re-Evaluation
+@router.post(
+    "/projects/{project_id}/evaluations/{evaluation_id}/re-evaluate",
+    response_model=EvaluationResultContract,
+)
+def re_evaluate_execution(
+    project_id: str,
+    evaluation_id: str,
+    request: ReEvaluateRequest,
+    db: DbSession,
+):
+    """Reproduce an evaluation from retained original evidence with optional new configuration/version."""
+    service = WorkflowEvaluationService(db)
+    try:
+        return service.re_evaluate_execution(
+            project_id=project_id,
+            evaluation_id=evaluation_id,
+            evaluator_version=request.evaluator_version,
+            evaluator_config=request.evaluator_config,
+        )
+    except TestCaseNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ModelNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 27. Retrieve Observed Coverage for a Single Run
+@router.get(
+    "/projects/{project_id}/evaluations/{evaluation_id}/coverage",
+    response_model=DetailedObservedCoverage,
+)
+def get_evaluation_coverage(
+    project_id: str,
+    evaluation_id: str,
+    db: DbSession,
+):
+    """Retrieve detailed observed coverage for a specific evaluation run."""
+    report_service = C2ReportExportService(db)
+    try:
+        run_rep = report_service.build_run_report(project_id, evaluation_id)
+        return run_rep.observed_coverage
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 28. Retrieve Aggregate Observed Coverage for a Suite
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/coverage",
+    response_model=DetailedObservedCoverage,
+)
+def get_suite_coverage(
+    project_id: str,
+    suite_id: str,
+    db: DbSession,
+):
+    """Retrieve aggregate observed workflow coverage across all evaluated runs in a suite."""
+    report_service = C2ReportExportService(db)
+    try:
+        suite_rep = report_service.build_suite_report(project_id, suite_id)
+        return suite_rep.aggregate_observed_coverage
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 29. Retrieve Per-Run C2 Report Contribution
+@router.get(
+    "/projects/{project_id}/evaluations/{evaluation_id}/report",
+    response_model=C2ReportContributionContract,
+)
+def get_run_report(
+    project_id: str,
+    evaluation_id: str,
+    db: DbSession,
+):
+    """Retrieve structured C2 report contribution for a single evaluation run."""
+    report_service = C2ReportExportService(db)
+    try:
+        return report_service.build_run_report(project_id, evaluation_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 30. Retrieve Suite C2 Report Summary
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/report",
+    response_model=C2SuiteReportContract,
+)
+def get_suite_report(
+    project_id: str,
+    suite_id: str,
+    db: DbSession,
+):
+    """Retrieve aggregated C2 report for a test suite."""
+    report_service = C2ReportExportService(db)
+    try:
+        return report_service.build_suite_report(project_id, suite_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 31. Export C2 Report Contribution
+@router.post(
+    "/projects/{project_id}/evaluations/{evaluation_id}/export-report",
+    response_model=dict[str, Any],
+)
+def export_c2_report_contribution(
+    project_id: str,
+    evaluation_id: str,
+    db: DbSession,
+):
+    """Export versioned C2 report contribution JSON and publish to reporting adapter."""
+    report_service = C2ReportExportService(db)
+    try:
+        report = report_service.build_run_report(project_id, evaluation_id)
+        publisher = C2ReportPublisher()
+        pub_status = publisher.publish_component_finding(report)
+        return {
+            "evaluation_id": evaluation_id,
+            "project_id": project_id,
+            "published_to_shared_aggregator": False,
+            "publishing_status": pub_status,
+            "report_contribution": report.model_dump(mode="json"),
+        }
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc

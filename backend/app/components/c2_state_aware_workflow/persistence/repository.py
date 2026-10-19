@@ -25,6 +25,7 @@ from app.components.c2_state_aware_workflow.persistence.hashing import (
 )
 from app.components.c2_state_aware_workflow.persistence.models import (
     C2EvaluationResult,
+    C2ExecutionEvidence,
     C2TestCase,
     C2TestSuite,
     C2ValidationReport,
@@ -58,6 +59,10 @@ class TestSuiteNotFoundError(C2PersistenceError):
 
 class TestCaseNotFoundError(C2PersistenceError):
     """Raised when a requested test case is not found."""
+
+
+class ConflictingEvidenceIntegrityError(C2PersistenceError):
+    """Raised when conflicting evidence is submitted under an already claimed execution identity."""
 
 
 class EvaluationResultNotFoundError(C2PersistenceError):
@@ -436,6 +441,90 @@ class C2ModelRepository:
         stmt = stmt.order_by(C2TestCase.created_at.asc())
         return list(self.db.execute(stmt).scalars().all())
 
+    def save_execution_evidence(
+        self,
+        project_id: str,
+        suite_id: str,
+        test_id: str,
+        run_id: str,
+        evidence_digest: str,
+        model_id: str,
+        model_version: str,
+        model_content_hash: str,
+        execution_mode: str,
+        runner_id: str,
+        evidence_payload: dict[str, Any],
+        execution_provenance: dict[str, Any] | None = None,
+        runner_version: str = "2026.1",
+    ) -> C2ExecutionEvidence:
+        """Persist or retrieve retained execution evidence.
+
+        Raises ConflictingEvidenceIntegrityError if conflicting evidence is submitted
+        under an already claimed execution identity.
+        """
+        stmt = select(C2ExecutionEvidence).where(
+            C2ExecutionEvidence.project_id == project_id,
+            C2ExecutionEvidence.suite_id == suite_id,
+            C2ExecutionEvidence.test_id == test_id,
+            C2ExecutionEvidence.run_id == run_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        if existing is not None:
+            if existing.evidence_digest != evidence_digest:
+                raise ConflictingEvidenceIntegrityError(
+                    f"Conflicting evidence detected under claimed run_id '{run_id}' for test '{test_id}'. "
+                    f"Existing digest '{existing.evidence_digest}', incoming digest '{evidence_digest}'."
+                )
+            return existing
+
+        record = C2ExecutionEvidence(
+            project_id=project_id,
+            suite_id=suite_id,
+            test_id=test_id,
+            run_id=run_id,
+            evidence_digest=evidence_digest,
+            model_id=model_id,
+            model_version=model_version,
+            model_content_hash=model_content_hash,
+            execution_mode=execution_mode,
+            runner_id=runner_id,
+            runner_version=runner_version,
+            execution_provenance=execution_provenance or {},
+            evidence_payload=evidence_payload,
+            created_at=utc_now(),
+        )
+        self.db.add(record)
+        self.db.commit()
+        self.db.refresh(record)
+        return record
+
+    def get_execution_evidence(
+        self, project_id: str, run_id: str
+    ) -> C2ExecutionEvidence | None:
+        """Retrieve retained execution evidence by run_id."""
+        stmt = select(C2ExecutionEvidence).where(
+            C2ExecutionEvidence.project_id == project_id,
+            C2ExecutionEvidence.run_id == run_id,
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+
+    def list_execution_evidence(
+        self,
+        project_id: str,
+        suite_id: str | None = None,
+        test_id: str | None = None,
+    ) -> list[C2ExecutionEvidence]:
+        """List retained execution evidence records."""
+        stmt = select(C2ExecutionEvidence).where(
+            C2ExecutionEvidence.project_id == project_id
+        )
+        if suite_id:
+            stmt = stmt.where(C2ExecutionEvidence.suite_id == suite_id)
+        if test_id:
+            stmt = stmt.where(C2ExecutionEvidence.test_id == test_id)
+        stmt = stmt.order_by(C2ExecutionEvidence.created_at.desc())
+        return list(self.db.execute(stmt).scalars().all())
+
     def save_evaluation_result(
         self,
         project_id: str,
@@ -443,44 +532,61 @@ class C2ModelRepository:
         test_id: str,
         run_id: str,
         result: EvaluationResultContract,
+        evaluator_config: dict[str, Any] | None = None,
+        evidence_digest: str | None = None,
+        execution_evidence_id: str | None = None,
+        reproduced_from_evaluation_id: str | None = None,
     ) -> C2EvaluationResult:
-        """Persist a conformance evaluation result pinned to exact model and suite/case."""
-        # Check if record already exists for this (project_id, suite_id, test_id, run_id)
-        stmt = select(C2EvaluationResult).where(
-            C2EvaluationResult.project_id == project_id,
-            C2EvaluationResult.suite_id == suite_id,
-            C2EvaluationResult.test_id == test_id,
-            C2EvaluationResult.run_id == run_id,
-        )
-        existing = self.db.execute(stmt).scalar_one_or_none()
-        if existing is not None:
-            # Update existing run result
-            existing.verdict = result.verdict.value
-            existing.reasons = result.reasons
-            existing.violations = [v.model_dump(mode="json") for v in result.violations]
-            existing.first_divergence = (
-                result.first_divergence.model_dump(mode="json")
-                if result.first_divergence
-                else None
+        """Persist a conformance evaluation result pinned to exact model and suite/case.
+
+        Keeps execution identity separate from evaluation identity. Supports multiple
+        additive evaluation attempts per execution run.
+        For identical evaluation requests (same evaluator_version, evaluator_config,
+        and evidence), returns the existing result consistently without duplicating.
+        """
+        config = evaluator_config or {}
+        eval_version = result.evaluator_version or "c2_evaluator_v1"
+
+        # Check existing evaluations for this run
+        stmt = (
+            select(C2EvaluationResult)
+            .where(
+                C2EvaluationResult.project_id == project_id,
+                C2EvaluationResult.suite_id == suite_id,
+                C2EvaluationResult.test_id == test_id,
+                C2EvaluationResult.run_id == run_id,
             )
-            existing.coverage = result.coverage.model_dump(mode="json")
-            existing.expected_states = result.expected_states
-            existing.observed_states = result.observed_states
-            existing.evidence_references = result.evidence_references
-            existing.evaluator_timing_ms = result.evaluator_timing_ms
-            self.db.commit()
-            self.db.refresh(existing)
-            return existing
+            .order_by(C2EvaluationResult.evaluation_attempt.asc())
+        )
+        existing_evals = list(self.db.execute(stmt).scalars().all())
+
+        # Check for identical evaluation request
+        for existing in existing_evals:
+            if (
+                existing.evaluator_version == eval_version
+                and (existing.evaluator_config or {}) == config
+            ):
+                return existing
+
+        # Additive evaluation: determine next attempt number
+        next_attempt = (
+            max([e.evaluation_attempt for e in existing_evals], default=0) + 1
+        )
 
         eval_record = C2EvaluationResult(
             project_id=project_id,
             suite_id=suite_id,
             test_id=test_id,
             run_id=run_id,
+            execution_evidence_id=execution_evidence_id,
             model_id=result.model_id,
             model_version=result.model_version,
             model_content_hash=result.model_content_hash,
-            evaluator_version=result.evaluator_version,
+            evaluator_version=eval_version,
+            evaluator_config=config,
+            evaluation_attempt=next_attempt,
+            evidence_digest=evidence_digest,
+            reproduced_from_evaluation_id=reproduced_from_evaluation_id,
             verdict=result.verdict.value,
             reasons=result.reasons,
             violations=[v.model_dump(mode="json") for v in result.violations],
@@ -489,7 +595,18 @@ class C2ModelRepository:
                 if result.first_divergence
                 else None
             ),
-            coverage=result.coverage.model_dump(mode="json"),
+            coverage=(
+                {
+                    **result.coverage.model_dump(mode="json"),
+                    "detailed_coverage": (
+                        result.detailed_coverage.model_dump(mode="json")
+                        if hasattr(result.detailed_coverage, "model_dump")
+                        else result.detailed_coverage
+                    ),
+                }
+                if result.detailed_coverage is not None
+                else result.coverage.model_dump(mode="json")
+            ),
             expected_states=result.expected_states,
             observed_states=result.observed_states,
             evidence_references=result.evidence_references,
@@ -510,6 +627,22 @@ class C2ModelRepository:
             C2EvaluationResult.id == evaluation_id,
         )
         return self.db.execute(stmt).scalar_one_or_none()
+
+    def get_latest_evaluation_for_run(
+        self, project_id: str, suite_id: str, test_id: str, run_id: str
+    ) -> C2EvaluationResult | None:
+        """Retrieve the latest evaluation attempt record for a given run."""
+        stmt = (
+            select(C2EvaluationResult)
+            .where(
+                C2EvaluationResult.project_id == project_id,
+                C2EvaluationResult.suite_id == suite_id,
+                C2EvaluationResult.test_id == test_id,
+                C2EvaluationResult.run_id == run_id,
+            )
+            .order_by(C2EvaluationResult.evaluation_attempt.desc())
+        )
+        return self.db.execute(stmt).scalars().first()
 
     def list_evaluation_results(
         self,

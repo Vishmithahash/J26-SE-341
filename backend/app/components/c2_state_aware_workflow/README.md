@@ -271,30 +271,124 @@ Write-Host "First Divergence Reason: $($DEMO.result.first_divergence.reason)"
 
 ---
 
-## 11. Verification Commands
+## 11. Day 3 Part A: Integration Orchestration, Coverage & Unified Reporting
+
+Day 3 Part A completes the end-to-end operational integration of Component 2:
+- Connects approved reference models → generated test suites → fixture resets → execution runners → collected evidence → conformance evaluation → retained results.
+- Retains original normalized evidence and fixture snapshots with SHA-256 digests for reproducible re-evaluation.
+- Distinguishes execution identity from evaluation identity using additive evaluation attempts with conflict detection (`uq_c2_evaluation_attempt`).
+- Implements comprehensive observed workflow coverage with explicit numerators and denominators.
+- Produces versioned per-case and suite-level report contributions via `C2ReportContributionContract` and `C2ReportPublisher`.
+
+### Integration Interfaces & Execution Provenance
+Defined in `app/components/c2_state_aware_workflow/integrations/`:
+- `C2IntegrationService`: Orchestrates the complete evaluation lifecycle.
+- `LocalSyntheticRunnerAdapter`: Working synthetic runner adapter executing demonstrations when live LLM runners are unavailable.
+- `LocalSyntheticFixtureManager`: Isolates and resets database/memory fixtures between runs.
+- `ExecutionProvenance`: Preserves full lineage without masking synthetic execution:
+  - Intended mode (e.g. `live_agent`) vs actual execution origin (e.g. `scripted_synthetic_demonstration`).
+  - Runner identity, observation capabilities, and unavailable live dependencies.
+  - Strict oracle isolation: private reference paths are withheld from agent execution payloads.
+
+### Observed Coverage Engine
+Defined in `app/components/c2_state_aware_workflow/evaluator/coverage.py`:
+1. **Transition Coverage**: Unique transition IDs observed divided by all defined transition targets.
+2. **Guard-Outcome Coverage**: Evaluates each declared guard's TRUE and FALSE targets separately (denominator = guards × 2). UNKNOWN observations are recorded in `unknown_or_ambiguous_observations` and do NOT count as covered. Repeated observations are deduplicated.
+3. **Selected-Path Coverage**: Evaluates completed normal, alternative, and rejection paths from an explicit catalogue. Partial paths do not count as covered.
+4. **State-Effect Coverage**: Distinct effect obligations checked with sufficient observations, distinguishing satisfied, violated, and unknown checks. Effect-check coverage ratio is kept strictly separate from fault-detection accuracy.
+5. **Suite Aggregation**: Aggregates runs using unique target unions for the pinned model hash. Repeated identical runs do NOT inflate coverage counts, and incompatible model versions are excluded.
+
+### C2 Report Contribution Contract
+Exported via `C2ReportContributionContract` and `C2SuiteReportContract`:
+- Component & contract version (`C2_STATE_AWARE_WORKFLOW`, `2026.1`).
+- Lineage identities: `project_id`, `suite_id`, `test_id`, `run_id`, `evaluation_id`, `model_id`, `model_version`, `model_content_hash`.
+- Provenance and runner metadata.
+- All six verdict categories represented with separated readiness rejections and scored outcomes.
+- First-divergence details and earliest divergence localization uncertainty.
+- Observed coverage metrics with denominators.
+- Published status honestly reported via `C2ReportPublisher` (`STUB_PENDING_SHARED_AGGREGATOR`).
+
+---
+
+## 12. Day 3 Part A REST APIs
+
+The following endpoints are exposed under `/api/v1/c2`:
+- `POST /projects/{project_id}/suites/{suite_id}/cases/{test_id}/run`: Executes an individual case via supported runner, retains evidence, evaluates, and persists results.
+- `POST /projects/{project_id}/suites/{suite_id}/run`: Bounded batch execution of a test suite with honest failure recording.
+- `GET /projects/{project_id}/evidence/{run_id}`: Retrieves retained execution evidence, fixture snapshots, provenance, and SHA-256 digest.
+- `POST /projects/{project_id}/evaluations/{evaluation_id}/re-evaluate`: Reproduces evaluation from retained evidence, supporting new evaluator configurations without overwriting past attempts.
+- `GET /projects/{project_id}/evaluations/{evaluation_id}/coverage`: Retrieves detailed observed coverage with denominators for a specific evaluation.
+- `GET /projects/{project_id}/suites/{suite_id}/coverage`: Retrieves aggregate observed coverage across all runs in a suite.
+- `GET /projects/{project_id}/evaluations/{evaluation_id}/report`: Retrieves the versioned C2 report contribution.
+- `GET /projects/{project_id}/suites/{suite_id}/report`: Retrieves the suite-level aggregated QA report.
+- `POST /projects/{project_id}/evaluations/{evaluation_id}/export-report`: Publishes or exports the typed report contribution payload.
+
+### PowerShell Orchestration & Coverage Example
+```powershell
+# 1. Run a test case through the integration pipeline
+$RUN = Invoke-RestMethod -Method Post `
+    -Uri "http://localhost:8000/api/v1/c2/projects/$PROJECT_ID/suites/$SUITE_ID/cases/$TEST_ID/run" `
+    -ContentType "application/json" `
+    -Body '{"intended_execution_mode": "live_agent"}'
+Write-Host "Evaluation ID: $($RUN.evaluation_id), Verdict: $($RUN.verdict)"
+
+# 2. Inspect retained execution evidence and digest
+$EV = Invoke-RestMethod -Method Get -Uri "http://localhost:8000/api/v1/c2/projects/$PROJECT_ID/evidence/$($RUN.run_id)"
+Write-Host "Evidence Digest: $($EV.evidence_digest)"
+Write-Host "Actual Origin: $($EV.execution_provenance.actual_execution_origin)"
+
+# 3. Retrieve detailed observed coverage
+$COV = Invoke-RestMethod -Method Get -Uri "http://localhost:8000/api/v1/c2/projects/$PROJECT_ID/evaluations/$($RUN.evaluation_id)/coverage"
+Write-Host "Transition Coverage: $($COV.transition_coverage.numerator)/$($COV.transition_coverage.denominator)"
+Write-Host "Guard Coverage: $($COV.guard_outcome_coverage.numerator)/$($COV.guard_outcome_coverage.denominator)"
+
+# 4. Export C2 report contribution
+$REP = Invoke-RestMethod -Method Get -Uri "http://localhost:8000/api/v1/c2/projects/$PROJECT_ID/evaluations/$($RUN.evaluation_id)/report"
+Write-Host "Report Component: $($REP.component), Status: $($REP.publishing_status)"
+```
+
+---
+
+## 13. Available Integrations & Missing Live Dependencies
+
+| Capability | Current State | Fallback / Behavior |
+| :--- | :--- | :--- |
+| **Workflow Intake** | Local synthetic contract | Structured workflow input adapter |
+| **Fixture Reset** | `LocalSyntheticFixtureManager` | In-process clean state reset between runs |
+| **Agent Execution Runner** | `LocalSyntheticRunnerAdapter` | Scripted synthetic agent execution; live LLM dependencies recorded as unavailable in provenance |
+| **Evidence Retention** | Persistent `c2_execution_evidence` | Scoped original evidence with SHA-256 digest |
+| **QA Report Aggregator** | `C2ReportPublisher` (typed adapter) | Returns `STUB_PENDING_SHARED_AGGREGATOR` honestly without claiming shared publish succeeded |
+
+---
+
+## 14. Verification Commands
 
 Run from `backend/`:
 
 ```powershell
-# 1. Run all unit and API tests (141 passing tests repository-wide, 75 C2 tests)
+# 1. Run all unit and integration tests (164 passing tests repository-wide, 98 C2 tests)
 .\.venv\Scripts\python.exe -m pytest
 
-# 2. Run linter and formatting checks (100% clean across all 91 files)
+# 2. Run linter and formatting checks (100% clean across all 101 files)
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m ruff format --check .
 
 # 3. Verify Alembic migrations (offline SQL generation)
 $env:DATABASE_URL="postgresql://test_user:test_pass@localhost:5432/test_db?sslmode=require"
-.\.venv\Scripts\python.exe -m alembic upgrade c2_002_generation:c2_003_evaluations --sql
-.\.venv\Scripts\python.exe -m alembic downgrade c2_003_evaluations:c2_002_generation --sql
+.\.venv\Scripts\python.exe -m alembic upgrade c2_003_evaluations:c2_004_integration_coverage --sql
+.\.venv\Scripts\python.exe -m alembic downgrade c2_004_integration_coverage:c2_003_evaluations --sql
 ```
 
 ---
 
-## 12. Remaining Work for Day 3
+## 15. Remaining Work for Day 3 Part B
 
-- **Day 3 Scope**:
-  - Integration with shared intake adapter and multi-component execution runner.
-  - Unified QA report aggregator combining C1 tool metrics, C2 workflow conformance, C3 fault resilience, and C4 safety metrics.
-  - Research baseline comparisons (B1 Final-state-only, B2 Trace-only, B3 Milestone-based vs B4 C2 State-Aware Alignment).
-  - Aggregate coverage reporting and empirical accuracy baselines across the multi-component research benchmark.
+- **Baselines B1–B4 Comparison**:
+  - Baseline B1: Final-state-only validation.
+  - Baseline B2: Trace-only string/action matching.
+  - Baseline B3: Unordered milestone-based scoring.
+  - Baseline B4: Full C2 state-aware multi-step alignment.
+- **Labeled Dataset & Empirical Metrics**:
+  - Execution on standardized benchmark runs.
+  - Empirical fault-detection accuracy, false positive rate, and localization precision calculations.
+  - Final requirement and boundary audit before freeze.

@@ -1,6 +1,15 @@
 """Contracts for C2: State-Aware Multi-Step Workflow Testing."""
 
+from app.components.c2_state_aware_workflow.contracts.coverage import (
+    DetailedObservedCoverage,
+    GuardOutcomeCoverageDetail,
+    MetricCoverageDetail,
+    SelectedPathCoverageDetail,
+    StateEffectCoverageDetail,
+    TransitionCoverageDetail,
+)
 from app.components.c2_state_aware_workflow.contracts.efsm_model import (
+    DeferredEffect,
     EFSMModelDefinition,
     EntityContinuityRule,
     EventMapping,
@@ -20,6 +29,11 @@ from app.components.c2_state_aware_workflow.contracts.evaluation_result import (
     ViolationDetail,
     ViolationType,
     WorkflowCoverageSummary,
+)
+from app.components.c2_state_aware_workflow.contracts.report import (
+    C2ReportContributionContract,
+    C2SuiteReportContract,
+    ExecutionProvenance,
 )
 from app.components.c2_state_aware_workflow.contracts.runtime_evidence import (
     EvidenceCompleteness,
@@ -54,18 +68,25 @@ from app.components.c2_state_aware_workflow.contracts.workflow_input import (
 __all__ = [
     "AgentTaskPayload",
     "BusinessRule",
+    "C2ReportContributionContract",
+    "C2SuiteReportContract",
+    "DeferredEffect",
+    "DetailedObservedCoverage",
     "EFSMModelDefinition",
     "EntityContinuityRule",
     "EvaluationResultContract",
     "EventMapping",
     "EvidenceCompleteness",
     "ExecutionMode",
+    "ExecutionProvenance",
     "ExpectedOutcomeType",
     "FinalOutcome",
     "FirstDivergenceDetail",
     "GenerateTestSuiteRequest",
     "GeneratedTestDefinition",
     "GeneratedTestSuite",
+    "GuardOutcomeCoverageDetail",
+    "MetricCoverageDetail",
     "MilestoneDefinition",
     "MutationProvenance",
     "MutationType",
@@ -76,7 +97,9 @@ __all__ = [
     "RuntimeEvent",
     "RuntimeEvidenceContract",
     "RuntimeVerdict",
+    "SelectedPathCoverageDetail",
     "StateDefinition",
+    "StateEffectCoverageDetail",
     "StateObservation",
     "StateType",
     "SyntheticFixtureReference",
@@ -85,6 +108,7 @@ __all__ = [
     "TestSuiteDiagnostics",
     "ToolParameterSpec",
     "ToolSpecification",
+    "TransitionCoverageDetail",
     "TransitionDefinition",
     "VariableDeclaration",
     "ViolationDetail",
