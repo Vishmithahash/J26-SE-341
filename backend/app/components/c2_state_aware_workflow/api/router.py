@@ -14,8 +14,19 @@ from app.components.c2_state_aware_workflow.builder.deterministic import (
 from app.components.c2_state_aware_workflow.contracts.efsm_model import (
     EFSMModelDefinition,
 )
+from app.components.c2_state_aware_workflow.contracts.evaluation_result import (
+    EvaluationResultContract,
+    FirstDivergenceDetail,
+    RuntimeVerdict,
+    ViolationDetail,
+    WorkflowCoverageSummary,
+)
+from app.components.c2_state_aware_workflow.contracts.runtime_evidence import (
+    RuntimeEvidenceContract,
+)
 from app.components.c2_state_aware_workflow.contracts.test_definition import (
     AgentTaskPayload,
+    ExecutionMode,
     GeneratedTestDefinition,
     GenerateTestSuiteRequest,
     QASuiteExport,
@@ -24,6 +35,25 @@ from app.components.c2_state_aware_workflow.contracts.test_definition import (
 from app.components.c2_state_aware_workflow.contracts.workflow_input import (
     WorkflowInputContract,
 )
+from app.components.c2_state_aware_workflow.evaluator.engine import (
+    ConformanceEvaluationEngine,
+)
+from app.components.c2_state_aware_workflow.evaluator.fixtures import (
+    ControlledTraceFixtures,
+    ScriptedDemonstrationAgent,
+)
+from app.components.c2_state_aware_workflow.evaluator.observer import (
+    IndependentStateObserver,
+)
+from app.components.c2_state_aware_workflow.evaluator.service import (
+    WorkflowEvaluationService,
+)
+from app.components.c2_state_aware_workflow.evaluator.sut import (
+    SyntheticRefundSUT,
+)
+from app.components.c2_state_aware_workflow.examples.refund_workflow import (
+    build_synthetic_refund_efsm,
+)
 from app.components.c2_state_aware_workflow.generator.readiness import (
     ModelNotReadyError,
 )
@@ -31,6 +61,7 @@ from app.components.c2_state_aware_workflow.generator.service import (
     TestGenerationService,
 )
 from app.components.c2_state_aware_workflow.persistence.models import (
+    C2EvaluationResult,
     C2TestCase,
     C2TestSuite,
 )
@@ -39,6 +70,7 @@ from app.components.c2_state_aware_workflow.persistence.repository import (
     C2ModelRepository,
     ModelAlreadyExistsError,
     ModelNotFoundError,
+    TestCaseNotFoundError,
 )
 from app.components.c2_state_aware_workflow.validator.service import (
     ModelValidationService,
@@ -781,6 +813,9 @@ def export_agent_task_payloads(
     cases = repo.list_test_cases(project_id, suite_id)
     payloads: list[AgentTaskPayload] = []
     for c in cases:
+        # Only supported agent-executable scenarios (LIVE_AGENT) may be exported
+        if c.execution_mode != ExecutionMode.LIVE_AGENT.value:
+            continue
         c_def = c.definition
         payloads.append(
             AgentTaskPayload(
@@ -812,10 +847,327 @@ def get_case_agent_payload(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Test case '{test_id}' not found in suite '{suite_id}'.",
         )
+    if case.execution_mode != ExecutionMode.LIVE_AGENT.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Test case '{test_id}' has execution mode '{case.execution_mode}' "
+                "and cannot be exported for agent execution. Controlled synthetic evaluator mutants "
+                "are excluded from agent-facing task payloads."
+            ),
+        )
     return AgentTaskPayload(
         test_id=case.test_id,
         project_id=case.project_id,
         task=case.task,
         fixture_ref=case.fixture_ref,
         permitted_context=case.definition.get("permitted_context", {}),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Part B: Conformance Evaluation and Synthetic Demonstration APIs
+# ---------------------------------------------------------------------------
+
+
+class DemonstrationRunRequest(BaseModel):
+    """Configuration for running an offline synthetic demonstration."""
+
+    scenario: str = Field(
+        default="happy_path",
+        description=(
+            "Demonstration scenario: 'happy_path', 'inspection_alternative', 'unpaid_order_rejection', "
+            "'skipped_step', 'reordered_step', 'repeated_step', 'wrong_entity', 'premature_termination', "
+            "'missing_effect', 'protected_state_change', 'missing_observations', 'truncated_trace'"
+        ),
+    )
+    model_id: str = "c2_refund_efsm_nexacart"
+    model_version: str = "1.0.0"
+    customer_id: int = 42
+    target_order_id: int = 503
+
+
+def _format_evaluation_response(record: C2EvaluationResult) -> EvaluationResultContract:
+    return EvaluationResultContract(
+        schema_version="2026.1",
+        evaluation_id=record.id,
+        project_id=record.project_id,
+        suite_id=record.suite_id,
+        test_id=record.test_id,
+        run_id=record.run_id,
+        evaluator_version=record.evaluator_version,
+        verdict=RuntimeVerdict(record.verdict),
+        reasons=record.reasons,
+        model_id=record.model_id,
+        model_version=record.model_version,
+        model_content_hash=record.model_content_hash,
+        expected_states=record.expected_states,
+        observed_states=record.observed_states,
+        violations=[ViolationDetail(**v) for v in record.violations],
+        first_divergence=(
+            FirstDivergenceDetail(**record.first_divergence)
+            if record.first_divergence
+            else None
+        ),
+        evidence_references=record.evidence_references,
+        coverage=WorkflowCoverageSummary(**record.coverage),
+        evaluator_timing_ms=record.evaluator_timing_ms,
+        evaluated_at=record.created_at,
+    )
+
+
+# 19. Evaluate a Test Run from Runtime Evidence
+@router.post(
+    "/projects/{project_id}/suites/{suite_id}/cases/{test_id}/evaluate",
+    response_model=EvaluationResultContract,
+)
+def evaluate_test_run(
+    project_id: str,
+    suite_id: str,
+    test_id: str,
+    evidence: RuntimeEvidenceContract,
+    db: DbSession,
+):
+    if evidence.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Route project_id '{project_id}' does not match evidence project_id '{evidence.project_id}'.",
+        )
+    if evidence.test_id != test_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Route test_id '{test_id}' does not match evidence test_id '{evidence.test_id}'.",
+        )
+
+    service = WorkflowEvaluationService(db)
+    try:
+        return service.evaluate_test_run(
+            project_id=project_id,
+            suite_id=suite_id,
+            test_id=test_id,
+            evidence=evidence,
+        )
+    except TestCaseNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ModelNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 20. Retrieve Stored Evaluation Result
+@router.get(
+    "/projects/{project_id}/evaluations/{evaluation_id}",
+    response_model=EvaluationResultContract,
+)
+def get_evaluation(
+    project_id: str,
+    evaluation_id: str,
+    db: DbSession,
+):
+    repo = C2ModelRepository(db)
+    record = repo.get_evaluation_result(project_id, evaluation_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evaluation result '{evaluation_id}' not found for project '{project_id}'.",
+        )
+    return _format_evaluation_response(record)
+
+
+# 21. List Evaluation Results
+@router.get(
+    "/projects/{project_id}/evaluations",
+    response_model=list[EvaluationResultContract],
+)
+def list_evaluations(
+    project_id: str,
+    db: DbSession,
+    suite_id: str | None = None,
+    test_id: str | None = None,
+    verdict: str | None = None,
+):
+    repo = C2ModelRepository(db)
+    records = repo.list_evaluation_results(
+        project_id=project_id,
+        suite_id=suite_id,
+        test_id=test_id,
+        verdict=verdict,
+    )
+    return [_format_evaluation_response(r) for r in records]
+
+
+# 22. Clearly Labelled Synthetic Demonstration Runner
+@router.post(
+    "/projects/{project_id}/demonstrations/run",
+    response_model=EvaluationResultContract,
+)
+def run_synthetic_demonstration(
+    project_id: str,
+    request: DemonstrationRunRequest,
+    db: DbSession,
+):
+    """Execute a clearly labelled offline synthetic demonstration of C2 workflow evaluation."""
+    repo = C2ModelRepository(db)
+    model_record = repo.get_model(project_id, request.model_id, request.model_version)
+
+    # Use built-in approved synthetic model if not found in DB
+    if model_record is None:
+        efsm_model = build_synthetic_refund_efsm()
+        is_approved = True
+        pinned_hash = "demonstration_hash"
+    else:
+        efsm_model = EFSMModelDefinition(**model_record.definition)
+        is_approved = model_record.lifecycle_status == "APPROVED"
+        pinned_hash = model_record.content_hash
+
+    # Execute demonstration scenario
+    sut = SyntheticRefundSUT()
+    observer = IndependentStateObserver(sut)
+    agent = ScriptedDemonstrationAgent(sut, observer)
+    run_id = f"demo_run_{int(datetime.now().timestamp())}"
+    test_id = f"demo_test_{request.scenario}"
+
+    # Create dummy test definition representing the task
+    is_neg = request.scenario == "unpaid_order_rejection"
+    from app.components.c2_state_aware_workflow.contracts.test_definition import (
+        ExpectedOutcomeType,
+        TestCategory,
+        TestReadinessStatus,
+    )
+
+    test_def = GeneratedTestDefinition(
+        test_id=test_id,
+        project_id=project_id,
+        pinned_model_id=request.model_id,
+        pinned_model_version=request.model_version,
+        model_content_hash=pinned_hash,
+        category=TestCategory.NEGATIVE if is_neg else TestCategory.VALID,
+        task="Refund unpaid order 502" if is_neg else "Refund latest paid order 503",
+        fixture_ref="fixture_demo",
+        expected_outcome=(
+            ExpectedOutcomeType.EXPECTED_REJECTION_PASS
+            if is_neg
+            else ExpectedOutcomeType.PASS
+        ),
+        readiness=TestReadinessStatus.TEST_READY,
+    )
+
+    # Branch according to scenario
+    if request.scenario == "happy_path":
+        evidence = agent.run_happy_path(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+    elif request.scenario == "inspection_alternative":
+        evidence = agent.run_inspection_alternative(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+    elif request.scenario == "unpaid_order_rejection":
+        evidence = agent.run_unpaid_order_rejection(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            unpaid_order_id=502,
+        )
+    elif request.scenario in (
+        "skipped_step",
+        "reordered_step",
+        "repeated_step",
+        "wrong_entity",
+        "premature_termination",
+    ):
+        evidence = agent.run_flawed_demonstration(
+            flaw_type=request.scenario,
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+    elif request.scenario == "missing_effect":
+        base_ev = agent.run_happy_path(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+        evidence = ControlledTraceFixtures.create_missing_effect_trace(base_ev)
+    elif request.scenario == "protected_state_change":
+        base_ev = agent.run_unpaid_order_rejection(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            unpaid_order_id=502,
+        )
+        evidence = ControlledTraceFixtures.create_protected_state_change_trace(base_ev)
+    elif request.scenario == "missing_observations":
+        base_ev = agent.run_happy_path(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+        evidence = ControlledTraceFixtures.create_missing_observations_trace(base_ev)
+    elif request.scenario == "truncated_trace":
+        base_ev = agent.run_happy_path(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+        evidence = ControlledTraceFixtures.create_truncated_trace(base_ev)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown demonstration scenario '{request.scenario}'.",
+        )
+
+    # Evaluate
+    engine = ConformanceEvaluationEngine()
+    result = engine.evaluate(
+        model=efsm_model,
+        test_def=test_def,
+        evidence=evidence,
+        model_is_approved=is_approved,
+        pinned_content_hash=pinned_hash,
+    )
+
+    return result.model_copy(
+        update={
+            "project_id": project_id,
+            "suite_id": "suite_demonstration",
+            "run_id": run_id,
+            "evaluation_id": f"eval_{run_id}",
+        }
     )

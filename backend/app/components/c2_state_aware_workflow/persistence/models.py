@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -254,4 +255,60 @@ class C2TestCase(Base):
             name="uq_c2_test_case_project_suite_test",
         ),
         Index("ix_c2_test_case_lookup", "project_id", "suite_id", "test_id"),
+    )
+
+
+class C2EvaluationResult(Base):
+    """Stores execution evaluation outcomes and first-divergence localisation records."""
+
+    __tablename__ = "c2_evaluation_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    suite_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    test_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    model_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    model_version: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    model_content_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True
+    )
+    evaluator_version: Mapped[str] = mapped_column(
+        String(32), default="c2_evaluator_v1", nullable=False
+    )
+
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    reasons: Mapped[list] = mapped_column(JSON_TYPE, default=list, nullable=False)
+    violations: Mapped[list] = mapped_column(JSON_TYPE, default=list, nullable=False)
+    first_divergence: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    coverage: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, nullable=False)
+
+    expected_states: Mapped[list] = mapped_column(
+        JSON_TYPE, default=list, nullable=False
+    )
+    observed_states: Mapped[list] = mapped_column(
+        JSON_TYPE, default=list, nullable=False
+    )
+    evidence_references: Mapped[list] = mapped_column(
+        JSON_TYPE, default=list, nullable=False
+    )
+    evaluator_timing_ms: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "suite_id",
+            "test_id",
+            "run_id",
+            name="uq_c2_evaluation_run",
+        ),
+        Index("ix_c2_evaluation_lookup", "project_id", "suite_id", "test_id"),
+        Index("ix_c2_evaluation_verdict", "project_id", "verdict"),
     )

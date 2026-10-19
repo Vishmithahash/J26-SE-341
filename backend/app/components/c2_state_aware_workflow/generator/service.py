@@ -111,6 +111,7 @@ class TestGenerationService:
             case_dict = case.model_dump()
             case_dict["model_content_hash"] = model_record.content_hash
             case_dict["suite_id"] = suite_id
+            case_dict["project_id"] = project_id
             validated_case = GeneratedTestDefinition(**case_dict)
 
             test_status, test_reasons = (

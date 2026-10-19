@@ -729,6 +729,13 @@ def build_synthetic_unpaid_order_rejection_efsm() -> EFSMModelDefinition:
                 strict_unchanged_on_rejection=True,
                 description="Status of order 502 must remain UNPAID.",
             ),
+            ProtectedField(
+                entity_type="customers",
+                field_path="customer_42_balance",
+                allowed_mutations=[],
+                strict_unchanged_on_rejection=True,
+                description="Customer 42 balance must remain unchanged on rejection.",
+            ),
         ],
         final_outcomes=[
             FinalOutcome(

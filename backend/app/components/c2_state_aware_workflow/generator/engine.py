@@ -69,7 +69,17 @@ class CoverageGuidedGenerator:
         }
         all_model_transition_ids = set(all_transitions_map.keys())
         covered_transitions: set[str] = set()
-        covered_guards: set[str] = set()
+
+        # Model guards defined and outcome tracking
+        model_guard_transitions = {t.id: t for t in model.transitions if t.guard}
+        total_guards_defined = len(model_guard_transitions)
+        # Explicit outcome targets: TRUE and FALSE outcomes for each defined guard
+        total_guard_outcome_targets = total_guards_defined * 2
+
+        guards_planned_true: set[str] = set()
+        guards_planned_false: set[str] = set()
+        guards_planned_unknown: set[str] = set()
+        guards_encountered: set[str] = set()
 
         cases: list[GeneratedTestDefinition] = []
         seen_case_signatures: set[tuple[Any, ...]] = set()
@@ -161,7 +171,7 @@ class CoverageGuidedGenerator:
                 ):
                     continue
 
-                # Signature for deduplication
+                # Signature for deduplication incorporates task and fixture_ref
                 def _make_hashable(v: Any) -> Any:
                     if isinstance(v, dict):
                         return tuple(
@@ -172,6 +182,8 @@ class CoverageGuidedGenerator:
                     return v
 
                 signature = (
+                    task,
+                    fixture_ref,
                     tuple(path_trans),
                     _make_hashable(curr_inputs),
                     category.value,
@@ -244,15 +256,26 @@ class CoverageGuidedGenerator:
                 if state_visits > self.config.max_loop_visits:
                     continue
 
+                if trans.guard:
+                    guards_encountered.add(trans.id)
+
                 # Feasible input domain construction for transition
-                feasible_inputs, guard_sat = self._resolve_transition_inputs(
+                feasible_inputs, guard_tristate = self._resolve_transition_inputs(
                     trans=trans,
                     current_vars=curr_vars,
                     fixture=fixture_context,
                     model=model,
                 )
 
-                if not guard_sat:
+                if trans.guard:
+                    if guard_tristate == TriState.TRUE:
+                        guards_planned_true.add(trans.id)
+                    elif guard_tristate == TriState.FALSE:
+                        guards_planned_false.add(trans.id)
+                    elif guard_tristate == TriState.UNKNOWN:
+                        guards_planned_unknown.add(trans.id)
+
+                if guard_tristate != TriState.TRUE:
                     # Guard could not be satisfied with available domains
                     infeasible_targets_count += 1
                     continue
@@ -277,9 +300,6 @@ class CoverageGuidedGenerator:
                 next_inputs = copy.deepcopy(curr_inputs)
                 next_inputs[trans.id] = feasible_inputs
 
-                if trans.guard:
-                    covered_guards.add(trans.id)
-
                 queue.append(
                     (
                         trans.target_state,
@@ -292,10 +312,20 @@ class CoverageGuidedGenerator:
                 )
 
         # Build diagnostics
+        # Transition coverage strictly calculated from unique transition IDs in pinned model
         total_transitions_count = len(all_model_transition_ids)
         planned_cov_pct = (
             (len(covered_transitions) / total_transitions_count * 100.0)
             if total_transitions_count > 0
+            else 100.0
+        )
+
+        # Guard outcome coverage calculated using explicitly defined outcome targets and denominators
+        guard_outcome_cov_pct = (
+            (len(guards_planned_true) + len(guards_planned_false))
+            / total_guard_outcome_targets
+            * 100.0
+            if total_guard_outcome_targets > 0
             else 100.0
         )
 
@@ -331,9 +361,17 @@ class CoverageGuidedGenerator:
                 "coverage_percentage": round(planned_cov_pct, 2),
             },
             planned_guard_coverage={
-                "total_guards": sum(1 for t in model.transitions if t.guard),
-                "covered_guards_count": len(covered_guards),
-                "covered_guard_transition_ids": sorted(covered_guards),
+                "total_guards_defined": total_guards_defined,
+                "total_outcome_targets": total_guard_outcome_targets,
+                "guards_encountered_count": len(guards_encountered),
+                "guards_planned_true_count": len(guards_planned_true),
+                "covered_guards_count": len(guards_planned_true),
+                "guards_planned_false_count": len(guards_planned_false),
+                "guards_planned_unknown_count": len(guards_planned_unknown),
+                "planned_guard_outcome_coverage_pct": round(guard_outcome_cov_pct, 2),
+                "planned_true_transition_ids": sorted(guards_planned_true),
+                "planned_false_transition_ids": sorted(guards_planned_false),
+                "planned_unknown_transition_ids": sorted(guards_planned_unknown),
             },
         )
 
@@ -345,10 +383,10 @@ class CoverageGuidedGenerator:
         current_vars: dict[str, Any],
         fixture: dict[str, Any],
         model: EFSMModelDefinition,
-    ) -> tuple[dict[str, Any], bool]:
+    ) -> tuple[dict[str, Any], TriState]:
         """Construct candidate tool arguments from finite domains and evaluate guard with TriState logic."""
         if not trans.guard:
-            return {}, True
+            return {}, TriState.TRUE
 
         # Candidate argument extraction:
         # If guard checks event.arguments.<key> == <val/ref>, extract key and target value
@@ -414,8 +452,10 @@ class CoverageGuidedGenerator:
             tristate_result = evaluate_predicate(trans.guard, test_ctx)
             # NEVER use direct boolean coercion bool(tristate_result)
             if tristate_result == TriState.TRUE:
-                return candidate_args, True
+                return candidate_args, TriState.TRUE
+            elif tristate_result == TriState.FALSE:
+                return candidate_args, TriState.FALSE
             else:
-                return candidate_args, False
+                return candidate_args, TriState.UNKNOWN
         except Exception:  # noqa: BLE001
-            return candidate_args, False
+            return candidate_args, TriState.UNKNOWN

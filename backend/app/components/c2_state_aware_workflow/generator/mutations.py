@@ -314,31 +314,53 @@ class WorkflowMutator:
             )
 
         elif operator == MutationType.WRONG_ENTITY:
-            # Substitute entity in input parameters (e.g. order_id: 503 -> 501 or 502)
+            # Substitute entity in input parameters with another existing valid entity
+            # e.g. selecting 503 but refunding 501 (both valid existing orders)
             mutated_inputs = copy.deepcopy(parent_inputs)
             original_val = None
-            substituted_val = 502  # Ineligible order ID
+            substituted_val = 501  # Another valid existing order in the domain
 
             for args in mutated_inputs.values():
                 if isinstance(args, dict):
                     for k in ("order_id", "selected_order_id"):
                         if k in args:
                             original_val = args[k]
+                            # If original is 501, substitute with 503; if 503, substitute with 501
+                            if original_val == 501:
+                                substituted_val = 503
+                            else:
+                                substituted_val = 501
                             args[k] = substituted_val
                             break
+
+            # Analyze discrimination: does the model declare a guard or entity invariant checking continuity?
+            target_trans_id = parent_transitions[-1] if parent_transitions else None
+            target_trans = trans_map.get(target_trans_id) if target_trans_id else None
+            is_discriminating = True
+            ambiguity_reason = None
+            if not target_trans or not target_trans.guard:
+                # If no guard checks entity continuity or argument binding, mark unresolved/ambiguous
+                has_entity_guard = any(
+                    "order_id" in str(t.guard) for t in trans_map.values() if t.guard
+                )
+                if not has_entity_guard:
+                    is_discriminating = False
+                    ambiguity_reason = "Model does not declare an explicit guard checking entity continuity for this transition"
 
             provenance = MutationProvenance(
                 mutation_type=MutationType.WRONG_ENTITY,
                 parent_case_id=parent.test_id,
-                target_step_index=1,
-                target_transition_id=parent_transitions[0],
-                description="Substituted entity identifier in tool arguments with ineligible entity ID.",
+                target_step_index=len(parent_transitions) - 1,
+                target_transition_id=target_trans_id,
+                description="Substituted entity identifier in tool arguments with a different valid entity ID (503 -> 501).",
                 targeted_rule="RULE_ENTITY_CONTINUITY",
                 changed_details={
                     "original_entity_id": original_val,
                     "substituted_entity_id": substituted_val,
                 },
-                intended_violation="Entity continuity failure: operated on different entity than bound target",
+                intended_violation="Entity continuity failure: operated on different entity (501) than selected target (503)",
+                is_ambiguous_or_non_discriminating=not is_discriminating,
+                ambiguity_reason=ambiguity_reason,
             )
 
             return GeneratedTestDefinition(
@@ -372,18 +394,28 @@ class WorkflowMutator:
             # Omit expected effect assertion from terminal check
             mutated_assertions = []
             if parent_assertions:
-                # Omit first assertion
                 mutated_assertions = list(parent_assertions[1:])
+
+            # Analyze discrimination: verify if transition has declared expected effects in model
+            target_trans_id = parent_transitions[-1] if parent_transitions else None
+            target_trans = trans_map.get(target_trans_id) if target_trans_id else None
+            is_discriminating = True
+            ambiguity_reason = None
+            if not target_trans or not target_trans.expected_effects:
+                is_discriminating = False
+                ambiguity_reason = "Parent transition has no declared expected effects in reference EFSM"
 
             provenance = MutationProvenance(
                 mutation_type=MutationType.MISSING_EFFECT,
                 parent_case_id=parent.test_id,
                 target_step_index=len(parent_transitions) - 1,
-                target_transition_id=parent_transitions[-1],
+                target_transition_id=target_trans_id,
                 description="Omitted post-condition state effect assertion from terminal validation.",
                 targeted_rule="RULE_EFFECT",
                 changed_details={"omitted_assertions_count": 1},
                 intended_violation="Post-condition expected effect missing in simulated evaluator state",
+                is_ambiguous_or_non_discriminating=not is_discriminating,
+                ambiguity_reason=ambiguity_reason,
             )
 
             return GeneratedTestDefinition(
@@ -425,6 +457,13 @@ class WorkflowMutator:
                 }
             )
 
+            # Analyze discrimination: does model declare protected fields?
+            is_discriminating = True
+            ambiguity_reason = None
+            if not getattr(model, "protected_fields", None):
+                is_discriminating = False
+                ambiguity_reason = "Reference model declares no protected fields"
+
             provenance = MutationProvenance(
                 mutation_type=MutationType.UNEXPECTED_PROTECTED_STATE_CHANGE,
                 parent_case_id=parent.test_id,
@@ -435,6 +474,8 @@ class WorkflowMutator:
                     "injected_value": "MUTATED_UNAUTHORIZED",
                 },
                 intended_violation="Violation of protected state invariance",
+                is_ambiguous_or_non_discriminating=not is_discriminating,
+                ambiguity_reason=ambiguity_reason,
             )
 
             return GeneratedTestDefinition(

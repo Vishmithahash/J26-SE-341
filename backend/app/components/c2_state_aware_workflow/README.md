@@ -45,6 +45,14 @@ app/components/c2_state_aware_workflow/
 │   ├── mutations.py         # 8 systematic workflow mutation operators with valid-alternative filtering
 │   ├── readiness.py         # Generation readiness validation (MODEL NOT READY vs TEST NOT READY)
 │   └── service.py           # TestGenerationService orchestrating generation, mutation, readiness, and persistence
+├── evaluator/               # Day 2 Part B: Observation, Normalization, Alignment & Localisation
+│   ├── sut.py               # Resettable in-process synthetic refund SUT with mutable application state
+│   ├── observer.py          # Independent state observer with secret redaction and pre/post diffing
+│   ├── fixtures.py          # ScriptedDemonstrationAgent ([SYNTHETIC_DEMONSTRATION]) & controlled trace fixtures
+│   ├── normalizer.py        # Trace normalizer with strictly monotonic indexing and audit anomaly detection
+│   ├── alignment.py         # Non-deterministic trace-to-EFSM alignment engine with Kleene logic & divergence localisation
+│   ├── engine.py            # ConformanceEvaluationEngine computing the six runtime verdicts
+│   └── service.py           # WorkflowEvaluationService coordinating validation, evaluation, and persistence
 ├── api/                     # Project-scoped REST API
 │   └── router.py            # FastAPI endpoints under prefix /api/v1/c2
 ├── integrations/            # Integration interfaces and synthetic stubs
@@ -245,34 +253,48 @@ Defined in `app/components/c2_state_aware_workflow/examples/refund_workflow.py`:
 
 ---
 
-## 10. Verification Commands
+## 10. Runtime Conformance Evaluation & Demonstration APIs (Day 2 Part B)
+
+The following endpoints handle runtime trace ingestion, evaluation, and synthetic demonstrations:
+- `POST /api/v1/c2/projects/{project_id}/suites/{suite_id}/cases/{test_id}/evaluate`: Ingests a runtime trace and evaluates against the pinned EFSM model.
+- `GET /api/v1/c2/projects/{project_id}/evaluations/{evaluation_id}`: Retrieves persisted evaluation details, verdict, first-divergence localization, and observed state diffs.
+- `GET /api/v1/c2/projects/{project_id}/evaluations`: Lists evaluations for a project with optional filters (`suite_id`, `test_id`, `verdict`).
+- `POST /api/v1/c2/projects/{project_id}/demonstrations/run`: Runs a clearly labelled synthetic offline demonstration scenario (`happy_path`, `inspection_alternative`, `unpaid_order_rejection`, `skipped_step`, `reordered_step`, `wrong_entity`, `repeated_step`, `missing_effect`, `protected_state_mutation`, `premature_termination`, `missing_observations`, `truncated_trace`).
+
+### PowerShell Demonstration Example
+```powershell
+$DEMO = Invoke-RestMethod -Method Post `
+    -Uri "http://localhost:8000/api/v1/c2/projects/$PROJECT_ID/demonstrations/run?scenario=wrong_entity"
+Write-Host "Verdict: $($DEMO.result.verdict)"
+Write-Host "First Divergence Reason: $($DEMO.result.first_divergence.reason)"
+```
+
+---
+
+## 11. Verification Commands
 
 Run from `backend/`:
 
 ```powershell
-# 1. Run all unit and API tests (62 passing tests)
+# 1. Run all unit and API tests (141 passing tests repository-wide, 75 C2 tests)
 .\.venv\Scripts\python.exe -m pytest
 
-# 2. Run linter and formatting checks (100% clean across 60 files)
+# 2. Run linter and formatting checks (100% clean across all 91 files)
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m ruff format --check .
 
 # 3. Verify Alembic migrations (offline SQL generation)
 $env:DATABASE_URL="postgresql://test_user:test_pass@localhost:5432/test_db?sslmode=require"
-.\.venv\Scripts\python.exe -m alembic upgrade head --sql
-.\.venv\Scripts\python.exe -m alembic downgrade c2_001_initial:base --sql
+.\.venv\Scripts\python.exe -m alembic upgrade c2_002_generation:c2_003_evaluations --sql
+.\.venv\Scripts\python.exe -m alembic downgrade c2_003_evaluations:c2_002_generation --sql
 ```
 
 ---
 
-## 11. Remaining Work for Day 2 Part B & Day 3
+## 12. Remaining Work for Day 3
 
-- **Day 2 Part B**:
-  - Runtime execution runner & live tool/state observer.
-  - Trace normalizer converting raw agent tool traces to canonical EFSM event sequences.
-  - Trace-to-EFSM alignment algorithm with earliest first-divergence localization.
-  - Runtime verdict calculation (`PASS`, `EXPECTED REJECTION PASS`, `FAIL`, `INCONCLUSIVE`, `MODEL NOT READY`, `TEST NOT READY`).
-- **Day 3**:
+- **Day 3 Scope**:
   - Integration with shared intake adapter and multi-component execution runner.
   - Unified QA report aggregator combining C1 tool metrics, C2 workflow conformance, C3 fault resilience, and C4 safety metrics.
   - Research baseline comparisons (B1 Final-state-only, B2 Trace-only, B3 Milestone-based vs B4 C2 State-Aware Alignment).
+  - Aggregate coverage reporting and empirical accuracy baselines across the multi-component research benchmark.
