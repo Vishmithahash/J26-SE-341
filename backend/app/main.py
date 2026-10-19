@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.components.c1_tool_call_correctness import router as c1_router
 from app.database import engine
 from app.health import router as health_router
 
@@ -21,3 +22,4 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(c1_router)
