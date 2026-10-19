@@ -5,6 +5,11 @@ from app.components.c4_policy_aware_safety.contracts.artifacts import (
     ArtifactSection,
     ArtifactVersionRecord,
 )
+from app.components.c4_policy_aware_safety.contracts.bindings import DomainBinding
+from app.components.c4_policy_aware_safety.contracts.cases import (
+    CaseLifecycleState,
+    PolicyTestCase,
+)
 from app.components.c4_policy_aware_safety.contracts.enums import (
     ArtifactKind,
     ContractLifecycleState,
@@ -12,6 +17,7 @@ from app.components.c4_policy_aware_safety.contracts.enums import (
 from app.components.c4_policy_aware_safety.contracts.evaluator import (
     RuleEvaluationFinding,
 )
+from app.components.c4_policy_aware_safety.contracts.generation import GenerationReport
 from app.components.c4_policy_aware_safety.contracts.rules import (
     CandidateRule,
     PolicyContractVersion,
@@ -21,7 +27,10 @@ from app.components.c4_policy_aware_safety.persistence.models import (
     C4ArtifactModel,
     C4CandidateRuleModel,
     C4ContractModel,
+    C4DomainBindingModel,
     C4FindingModel,
+    C4GenerationBatchModel,
+    C4TestCaseModel,
 )
 
 
@@ -263,3 +272,182 @@ class C4Repository:
 
         models = self.db.execute(stmt).scalars().all()
         return [RuleEvaluationFinding.model_validate(m.finding_data) for m in models]
+
+    # 5. Domain Bindings
+    def get_next_binding_version(self, project_id: str, binding_id: str) -> int:
+        stmt = (
+            select(C4DomainBindingModel.version)
+            .where(
+                C4DomainBindingModel.project_id == project_id,
+                C4DomainBindingModel.binding_id == binding_id,
+            )
+            .order_by(desc(C4DomainBindingModel.version))
+            .limit(1)
+        )
+        latest = self.db.execute(stmt).scalar_one_or_none()
+        return (latest or 0) + 1
+
+    def save_domain_binding(self, binding: DomainBinding) -> DomainBinding:
+        stmt = select(C4DomainBindingModel).where(
+            C4DomainBindingModel.project_id == binding.project_id,
+            C4DomainBindingModel.binding_id == binding.binding_id,
+            C4DomainBindingModel.version == binding.version,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        if existing:
+            raise ValueError(
+                f"Domain binding '{binding.binding_id}' v{binding.version} already exists and is immutable."
+            )
+
+        model = C4DomainBindingModel(
+            project_id=binding.project_id,
+            binding_id=binding.binding_id,
+            version=binding.version,
+            content_hash=binding.content_hash,
+            binding_data=binding.model_dump(mode="json"),
+            created_at=binding.created_at,
+        )
+        self.db.add(model)
+        self.db.commit()
+        return binding
+
+    def get_domain_binding(
+        self, project_id: str, binding_id: str, version: int
+    ) -> DomainBinding | None:
+        stmt = select(C4DomainBindingModel).where(
+            C4DomainBindingModel.project_id == project_id,
+            C4DomainBindingModel.binding_id == binding_id,
+            C4DomainBindingModel.version == version,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return DomainBinding.model_validate(model.binding_data)
+
+    def list_domain_bindings(self, project_id: str) -> list[DomainBinding]:
+        stmt = (
+            select(C4DomainBindingModel)
+            .where(C4DomainBindingModel.project_id == project_id)
+            .order_by(desc(C4DomainBindingModel.version))
+        )
+        models = self.db.execute(stmt).scalars().all()
+        return [DomainBinding.model_validate(m.binding_data) for m in models]
+
+    # 6. Generation Batches
+    def save_generation_batch(self, report: GenerationReport) -> GenerationReport:
+        model = C4GenerationBatchModel(
+            batch_id=report.batch_id,
+            project_id=report.project_id,
+            contract_id=report.contract_id,
+            contract_version=report.contract_version,
+            binding_id=report.binding_id,
+            binding_version=report.binding_version,
+            seed=report.seed,
+            config_digest=report.config_digest,
+            report_data=report.model_dump(mode="json"),
+            created_at=report.created_at,
+        )
+        self.db.add(model)
+        self.db.commit()
+        return report
+
+    def get_generation_batch(
+        self, project_id: str, batch_id: str
+    ) -> GenerationReport | None:
+        stmt = select(C4GenerationBatchModel).where(
+            C4GenerationBatchModel.project_id == project_id,
+            C4GenerationBatchModel.batch_id == batch_id,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return GenerationReport.model_validate(model.report_data)
+
+    # 7. Test Cases
+    def get_next_case_version(self, project_id: str, case_id: str) -> int:
+        stmt = (
+            select(C4TestCaseModel.case_version)
+            .where(
+                C4TestCaseModel.project_id == project_id,
+                C4TestCaseModel.case_id == case_id,
+            )
+            .order_by(desc(C4TestCaseModel.case_version))
+            .limit(1)
+        )
+        latest = self.db.execute(stmt).scalar_one_or_none()
+        return (latest or 0) + 1
+
+    def save_test_case(
+        self, case: PolicyTestCase, batch_id: str | None = None
+    ) -> PolicyTestCase:
+        stmt = select(C4TestCaseModel).where(
+            C4TestCaseModel.project_id == case.project_id,
+            C4TestCaseModel.case_id == case.case_id,
+            C4TestCaseModel.case_version == case.case_version,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        case_dict = case.model_dump(mode="json")
+
+        if existing:
+            if existing.lifecycle_state == CaseLifecycleState.FROZEN.value:
+                raise ValueError(
+                    f"Test case '{case.case_id}' v{case.case_version} is FROZEN and immutable. Create a new version."
+                )
+            existing.lifecycle_state = case.lifecycle_state.value
+            existing.content_hash = case.content_hash
+            existing.case_data = case_dict
+            if case.frozen_at:
+                existing.frozen_at = case.frozen_at
+        else:
+            model = C4TestCaseModel(
+                case_id=case.case_id,
+                case_version=case.case_version,
+                project_id=case.project_id,
+                batch_id=batch_id,
+                rule_id=case.target_rule_id,
+                test_kind=case.test_kind.value,
+                lifecycle_state=case.lifecycle_state.value,
+                content_hash=case.content_hash,
+                case_data=case_dict,
+                created_at=case.created_at,
+                frozen_at=case.frozen_at,
+            )
+            self.db.add(model)
+
+        self.db.commit()
+        return case
+
+    def get_test_case(
+        self, project_id: str, case_id: str, version: int = 1
+    ) -> PolicyTestCase | None:
+        stmt = select(C4TestCaseModel).where(
+            C4TestCaseModel.project_id == project_id,
+            C4TestCaseModel.case_id == case_id,
+            C4TestCaseModel.case_version == version,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return PolicyTestCase.model_validate(model.case_data)
+
+    def list_test_cases(
+        self,
+        project_id: str,
+        batch_id: str | None = None,
+        rule_id: str | None = None,
+        category: str | None = None,
+        lifecycle_state: str | None = None,
+    ) -> list[PolicyTestCase]:
+        stmt = select(C4TestCaseModel).where(C4TestCaseModel.project_id == project_id)
+        if batch_id:
+            stmt = stmt.where(C4TestCaseModel.batch_id == batch_id)
+        if rule_id:
+            stmt = stmt.where(C4TestCaseModel.rule_id == rule_id)
+        if category:
+            stmt = stmt.where(C4TestCaseModel.test_kind == category)
+        if lifecycle_state:
+            stmt = stmt.where(C4TestCaseModel.lifecycle_state == lifecycle_state)
+
+        models = self.db.execute(stmt).scalars().all()
+        return [PolicyTestCase.model_validate(m.case_data) for m in models]
+

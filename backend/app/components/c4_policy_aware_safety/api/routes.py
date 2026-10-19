@@ -8,6 +8,17 @@ from app.components.c4_policy_aware_safety.contracts.artifacts import (
     ArtifactCreate,
     ArtifactVersionRecord,
 )
+from app.components.c4_policy_aware_safety.contracts.bindings import (
+    DomainBinding,
+    compute_binding_hash,
+)
+from app.components.c4_policy_aware_safety.contracts.cases import (
+    AgentVisiblePayload,
+    CaseLifecycleState,
+    EvaluatorPayload,
+    HarnessPayload,
+    PolicyTestCase,
+)
 from app.components.c4_policy_aware_safety.contracts.enums import (
     ContractLifecycleState,
     RuleReviewStatus,
@@ -18,6 +29,11 @@ from app.components.c4_policy_aware_safety.contracts.evaluator import (
 )
 from app.components.c4_policy_aware_safety.contracts.evidence import (
     EvaluationEvidencePackage,
+)
+from app.components.c4_policy_aware_safety.contracts.future import TestCaseKind
+from app.components.c4_policy_aware_safety.contracts.generation import (
+    GenerationReport,
+    GenerationRequest,
 )
 from app.components.c4_policy_aware_safety.contracts.rules import (
     CandidateRule,
@@ -37,7 +53,14 @@ from app.components.c4_policy_aware_safety.derivation.intake import normalize_ar
 from app.components.c4_policy_aware_safety.evaluator.engine import (
     DeterministicPolicyEvaluator,
 )
+from app.components.c4_policy_aware_safety.freezing.service import CaseFreezingService
+from app.components.c4_policy_aware_safety.generation.generator import (
+    PolicyTestGenerator,
+)
 from app.components.c4_policy_aware_safety.persistence.repository import C4Repository
+from app.components.c4_policy_aware_safety.validation.case_validator import (
+    PolicyTestCaseValidator,
+)
 from app.components.c4_policy_aware_safety.validation.validator import (
     PolicyContractValidator,
 )
@@ -387,3 +410,345 @@ def get_findings(
     return repo.list_findings(
         project_id, case_id=case_id, run_id=run_id, contract_id=contract_id
     )
+
+
+# 6. Domain Bindings
+@router.post(
+    "/bindings",
+    response_model=DomainBinding,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a versioned domain binding",
+)
+def register_domain_binding(
+    project_id: str,
+    binding: DomainBinding,
+    db: Annotated[Session, Depends(get_db)],
+):
+    if binding.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Binding project_id '{binding.project_id}' does not match route project '{project_id}'.",
+        )
+    repo = C4Repository(db)
+    next_ver = repo.get_next_binding_version(project_id, binding.binding_id)
+    binding.version = next_ver
+    binding.content_hash = compute_binding_hash(binding)
+    return repo.save_domain_binding(binding)
+
+
+@router.get(
+    "/bindings/{binding_id}/versions/{version}",
+    response_model=DomainBinding,
+    summary="Retrieve a domain binding by ID and version",
+)
+def get_domain_binding(
+    project_id: str,
+    binding_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    binding = repo.get_domain_binding(project_id, binding_id, version)
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain binding '{binding_id}' v{version} not found in project '{project_id}'.",
+        )
+    return binding
+
+
+@router.get(
+    "/bindings",
+    response_model=list[DomainBinding],
+    summary="List domain bindings for a project",
+)
+def list_domain_bindings(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    binding_id: Annotated[str | None, Query()] = None,
+):
+    repo = C4Repository(db)
+    return repo.list_domain_bindings(project_id, binding_id=binding_id)
+
+
+# 7. Test Case Generation
+@router.post(
+    "/generate",
+    response_model=GenerationReport,
+    status_code=status.HTTP_200_OK,
+    summary="Automatically generate policy-specific test cases",
+)
+def generate_test_cases(
+    project_id: str,
+    request: GenerationRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    contract = repo.get_contract_version(
+        project_id, request.contract_id, request.contract_version
+    )
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Policy contract '{request.contract_id}' v{request.contract_version} not found in project '{project_id}'.",
+        )
+    if contract.lifecycle_state != ContractLifecycleState.ACCEPTED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Contract '{request.contract_id}' v{request.contract_version} is in state '{contract.lifecycle_state.value}'. Only ACCEPTED contracts can be used for test generation.",
+        )
+
+    binding = repo.get_domain_binding(
+        project_id, request.binding_id, request.binding_version
+    )
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain binding '{request.binding_id}' v{request.binding_version} not found in project '{project_id}'.",
+        )
+
+    generator = PolicyTestGenerator(config=request.config)
+    cases, report = generator.generate_cases(contract, binding)
+
+    if request.auto_validate:
+        validator = PolicyTestCaseValidator()
+        cases = validator.validate_batch(cases, contract, binding)
+        report.validated_count = sum(
+            1 for c in cases if c.lifecycle_state == CaseLifecycleState.VALIDATED
+        )
+        report.rejected_count = sum(
+            1 for c in cases if c.lifecycle_state == CaseLifecycleState.REJECTED
+        )
+        report.review_needed_count = sum(
+            1 for c in cases if c.lifecycle_state == CaseLifecycleState.NEEDS_REVIEW
+        )
+
+    if request.auto_freeze:
+        freezer = CaseFreezingService()
+        cases = freezer.freeze_batch(cases, contract)
+        report.frozen_count = sum(
+            1 for c in cases if c.lifecycle_state == CaseLifecycleState.FROZEN
+        )
+
+    repo.save_generation_batch(report)
+
+    for case in cases:
+        repo.save_test_case(case, batch_id=report.batch_id)
+
+    return report
+
+
+@router.get(
+    "/batches/{batch_id}",
+    response_model=GenerationReport,
+    summary="Retrieve a generation batch report",
+)
+def get_generation_batch(
+    project_id: str,
+    batch_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    report = repo.get_generation_batch(project_id, batch_id)
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Generation batch '{batch_id}' not found in project '{project_id}'.",
+        )
+    return report
+
+
+# 8. Test Cases Management
+@router.get(
+    "/cases",
+    response_model=list[PolicyTestCase],
+    summary="List generated policy test cases",
+)
+def list_test_cases(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    batch_id: Annotated[str | None, Query()] = None,
+    rule_id: Annotated[str | None, Query()] = None,
+    category: Annotated[TestCaseKind | None, Query()] = None,
+    lifecycle_state: Annotated[CaseLifecycleState | None, Query()] = None,
+):
+    repo = C4Repository(db)
+    return repo.list_test_cases(
+        project_id=project_id,
+        batch_id=batch_id,
+        rule_id=rule_id,
+        category=category.value if category else None,
+        lifecycle_state=lifecycle_state.value if lifecycle_state else None,
+    )
+
+
+@router.get(
+    "/cases/{case_id}/versions/{version}",
+    response_model=PolicyTestCase,
+    summary="Retrieve a policy test case by ID and version",
+)
+def get_test_case(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    return case
+
+
+@router.post(
+    "/cases/{case_id}/versions/{version}/validate",
+    response_model=PolicyTestCase,
+    summary="Independently validate a generated test case",
+)
+def validate_test_case(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    contract = repo.get_contract_version(
+        project_id, case.contract_id, case.contract_version
+    )
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Associated contract '{case.contract_id}' v{case.contract_version} not found.",
+        )
+    binding = repo.get_domain_binding(
+        project_id, case.domain_id, case.binding_version
+    )
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Associated domain binding '{case.domain_id}' v{case.binding_version} not found.",
+        )
+
+    validator = PolicyTestCaseValidator()
+    validated_case, _ = validator.validate_case(case, contract, binding)
+    return repo.save_test_case(validated_case)
+
+
+@router.post(
+    "/cases/{case_id}/versions/{version}/freeze",
+    response_model=PolicyTestCase,
+    summary="Freeze a validated test case to ensure snapshot immutability",
+)
+def freeze_test_case(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    contract = repo.get_contract_version(
+        project_id, case.contract_id, case.contract_version
+    )
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Associated contract '{case.contract_id}' v{case.contract_version} not found.",
+        )
+    binding = repo.get_domain_binding(
+        project_id, case.domain_id, case.binding_version
+    )
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Associated domain binding '{case.domain_id}' v{case.binding_version} not found.",
+        )
+
+    freezer = CaseFreezingService()
+    try:
+        frozen_case = freezer.freeze_case(case, contract)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot freeze case: {e!s}",
+        )
+    return repo.save_test_case(frozen_case)
+
+
+# 9. Payload Exports
+@router.get(
+    "/cases/{case_id}/versions/{version}/export/agent",
+    response_model=AgentVisiblePayload,
+    summary="Export strictly agent-visible payload (no hidden goals or assertions)",
+)
+def export_agent_payload(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    return case.build_agent_visible_payload()
+
+
+@router.get(
+    "/cases/{case_id}/versions/{version}/export/harness",
+    response_model=HarnessPayload,
+    summary="Export test harness orchestration payload",
+)
+def export_harness_payload(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    return case.build_harness_payload()
+
+
+@router.get(
+    "/cases/{case_id}/versions/{version}/export/evaluator",
+    response_model=EvaluatorPayload,
+    summary="Export evaluator assertions and hidden validation ground truth",
+)
+def export_evaluator_payload(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    return case.build_evaluator_payload()
+

@@ -195,7 +195,43 @@ def validate_source_reference(
         else:
             target_content = sec.content
 
-    # 4. Check excerpt agreement
+    # 4. Check character span bounds and excerpt match at span if provided
+    start_char = source_ref.start_char
+    end_char = source_ref.end_char
+    if start_char is not None or end_char is not None:
+        if (
+            start_char is None
+            or end_char is None
+            or start_char < 0
+            or end_char > len(artifact.normalized_content)
+            or start_char >= end_char
+        ):
+            issues.append(
+                ValidationIssue(
+                    code=ValidationIssueCode.INVALID_REFERENCE,
+                    message=(
+                        f"Character span [{start_char}:{end_char}] is invalid or out of bounds for "
+                        f"artifact '{source_ref.artifact_id}' v{source_ref.artifact_version} (length {len(artifact.normalized_content)})."
+                    ),
+                    field="source_references.spans",
+                    severity=Severity.CRITICAL,
+                    blocking=True,
+                )
+            )
+        else:
+            span_text = artifact.normalized_content[start_char:end_char].strip()
+            if span_text != source_ref.supporting_excerpt.strip():
+                issues.append(
+                    ValidationIssue(
+                        code=ValidationIssueCode.EXCERPT_MISMATCH,
+                        message=f"Supporting excerpt does not match content at character span [{start_char}:{end_char}].",
+                        field="source_references.supporting_excerpt",
+                        severity=Severity.CRITICAL,
+                        blocking=True,
+                    )
+                )
+
+    # 5. Check excerpt agreement
     excerpt = source_ref.supporting_excerpt.strip()
     if excerpt not in target_content and excerpt not in artifact.normalized_content:
         issues.append(
