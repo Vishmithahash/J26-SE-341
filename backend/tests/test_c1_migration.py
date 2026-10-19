@@ -13,6 +13,7 @@ def test_c1_models_metadata_registration():
     tables = C1ProjectConfigModel.metadata.tables
     assert "c1_project_configs" in tables
     assert "c1_suite_versions" in tables
+    assert "c1_generation_runs" in tables
 
     # Check columns in c1_project_configs
     config_table = tables["c1_project_configs"]
@@ -40,6 +41,21 @@ def test_c1_models_metadata_registration():
     fk_targets = [fk.target_fullname for fk in suite_table.foreign_keys]
     assert "c1_project_configs.id" in fk_targets
 
+    # Check c1_generation_runs columns
+    gen_table = tables["c1_generation_runs"]
+    gen_expected_cols = {
+        "id",
+        "project_id",
+        "config_id",
+        "status",
+        "request_payload",
+        "summary",
+        "candidates",
+        "content_hash",
+        "created_at",
+    }
+    assert gen_expected_cols.issubset({c.name for c in gen_table.columns})
+
 
 def test_alembic_offline_migration_compatibility(tmp_path):
     """Verify that Alembic generates clean, valid SQL for both upgrade and downgrade offline."""
@@ -60,6 +76,6 @@ def test_alembic_offline_migration_compatibility(tmp_path):
 
     # Test offline SQL downgrade generation
     try:
-        command.downgrade(alembic_cfg, "c1_0001:base", sql=True)
+        command.downgrade(alembic_cfg, "c1_0002:base", sql=True)
     except Exception as exc:
         raise AssertionError(f"Alembic offline downgrade failed: {exc}") from exc

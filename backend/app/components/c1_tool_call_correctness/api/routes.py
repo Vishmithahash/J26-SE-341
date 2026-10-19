@@ -1,7 +1,8 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import Field
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.components.c1_tool_call_correctness.api.dependencies import (
@@ -17,6 +18,13 @@ from app.components.c1_tool_call_correctness.contracts.configuration import (
     ToolDefinition,
     TraceCapability,
 )
+from app.components.c1_tool_call_correctness.contracts.generation import (
+    AgentFacingTask,
+    GeneratedCandidateCase,
+    GenerationJobResponse,
+    GenerationRequest,
+    GenerationSummary,
+)
 from app.components.c1_tool_call_correctness.contracts.lifecycle import (
     SuiteVersion,
 )
@@ -29,7 +37,9 @@ from app.components.c1_tool_call_correctness.examples.nexacart_refund import (
     get_nexacart_refund_example_config,
 )
 from app.components.c1_tool_call_correctness.models.persistence import (
+    C1GenerationRunModel,
     C1ProjectConfigModel,
+    C1SuiteVersionModel,
 )
 from app.components.c1_tool_call_correctness.services.config_service import (
     ConfigConflictError,
@@ -41,6 +51,14 @@ from app.components.c1_tool_call_correctness.services.config_service import (
     get_project_config,
     list_project_configs,
     update_project_config,
+)
+from app.components.c1_tool_call_correctness.services.generation_service import (
+    execute_generation_job,
+    get_generation_run,
+    list_generation_runs,
+)
+from app.components.c1_tool_call_correctness.services.suite_selector import (
+    extract_agent_facing_task,
 )
 from app.components.c1_tool_call_correctness.services.validator import (
     validate_project_config,
@@ -245,6 +263,285 @@ def create_suite_version_endpoint(
         )
     except ConfigNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+def _serialize_generation_run(model: C1GenerationRunModel) -> GenerationJobResponse:
+    req_dict = model.request_payload or {}
+    return GenerationJobResponse(
+        job_id=model.id,
+        project_id=model.project_id,
+        config_id=model.config_id,
+        config_version=req_dict.get("config_version", 1),
+        status=model.status,
+        content_hash=model.content_hash,
+        summary=GenerationSummary(**model.summary),
+        suite_version_id=model.suite_version_id,
+        created_at=model.created_at,
+    )
+
+
+@router.post(
+    "/generation/jobs",
+    response_model=GenerationJobResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Trigger automatic candidate generation and validation",
+)
+def create_generation_job_endpoint(
+    project_id: str,
+    payload: GenerationRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        run_record, _, _, _ = execute_generation_job(db, project_id, payload)
+        return _serialize_generation_run(run_record)
+    except ConfigNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+
+
+@router.get(
+    "/generation/jobs",
+    response_model=list[GenerationJobResponse],
+    summary="List generation runs for project",
+)
+def list_generation_jobs_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    runs = list_generation_runs(db, project_id)
+    return [_serialize_generation_run(r) for r in runs]
+
+
+@router.get(
+    "/generation/jobs/{job_id}",
+    response_model=GenerationJobResponse,
+    summary="Get generation run status and metrics",
+)
+def get_generation_job_endpoint(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    run = get_generation_run(db, project_id, job_id)
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Generation job '{job_id}' not found for project '{project_id}'.",
+        )
+    return _serialize_generation_run(run)
+
+
+@router.get(
+    "/generation/jobs/{job_id}/candidates",
+    response_model=list[GeneratedCandidateCase],
+    summary="Inspect generated candidate cases and validation issues",
+)
+def get_job_candidates_endpoint(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    valid_only: bool = False,
+):
+    run = get_generation_run(db, project_id, job_id)
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Generation job '{job_id}' not found for project '{project_id}'.",
+        )
+    cases = [GeneratedCandidateCase(**c) for c in (run.candidates or [])]
+    if valid_only:
+        cases = [c for c in cases if c.is_valid]
+    return cases
+
+
+@router.get(
+    "/generation/jobs/{job_id}/agent-tasks",
+    response_model=list[AgentFacingTask],
+    summary="Retrieve agent-facing task payloads isolated from QA expectations",
+)
+def get_job_agent_tasks_endpoint(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    run = get_generation_run(db, project_id, job_id)
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Generation job '{job_id}' not found for project '{project_id}'.",
+        )
+    cases = [
+        GeneratedCandidateCase(**c)
+        for c in (run.candidates or [])
+        if c.get("is_valid", True) and not c.get("rejection_reason")
+    ]
+    return [extract_agent_facing_task(c) for c in cases]
+
+
+class PromoteSuitePayload(BaseModel):
+    suite_id: str
+    name: str
+
+
+@router.post(
+    "/generation/jobs/{job_id}/promote-suite",
+    response_model=SuiteVersion,
+    status_code=status.HTTP_201_CREATED,
+    summary="Promote selected valid candidates of a generation run into an accepted immutable suite",
+)
+def promote_suite_from_job_endpoint(
+    project_id: str,
+    job_id: str,
+    payload: PromoteSuitePayload,
+    db: Annotated[Session, Depends(get_db)],
+):
+    run = get_generation_run(db, project_id, job_id)
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Generation job '{job_id}' not found for project '{project_id}'.",
+        )
+    selected_cases = [
+        c
+        for c in (run.candidates or [])
+        if c.get("is_valid", True) and not c.get("rejection_reason")
+    ]
+    if not selected_cases:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot promote suite: no valid accepted candidates found in generation run.",
+        )
+
+    suite_ver = create_suite_version(
+        db=db,
+        project_id=project_id,
+        suite_id=payload.suite_id,
+        name=payload.name,
+        config_id=run.config_id,
+        cases=selected_cases,
+    )
+    suite_ver.content_hash = run.content_hash
+    suite_ver.generation_run_id = run.id
+    run.suite_id = payload.suite_id
+    run.suite_version_id = suite_ver.id
+    db.commit()
+    db.refresh(suite_ver)
+
+    return SuiteVersion(
+        suite_id=suite_ver.suite_id,
+        project_id=suite_ver.project_id,
+        version=suite_ver.version,
+        name=suite_ver.name,
+        config_id=suite_ver.config_id,
+        case_versions=[],
+        is_immutable=suite_ver.is_immutable,
+        created_at=suite_ver.created_at,
+    )
+
+
+@router.get(
+    "/suites",
+    response_model=list[SuiteVersion],
+    summary="List accepted test suite versions for project",
+)
+def list_suites_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    stmt = (
+        select(C1SuiteVersionModel)
+        .where(C1SuiteVersionModel.project_id == project_id)
+        .order_by(C1SuiteVersionModel.created_at.desc())
+    )
+    suites = list(db.execute(stmt).scalars().all())
+    return [
+        SuiteVersion(
+            suite_id=s.suite_id,
+            project_id=s.project_id,
+            version=s.version,
+            name=s.name,
+            config_id=s.config_id,
+            case_versions=[],
+            is_immutable=s.is_immutable,
+            created_at=s.created_at,
+        )
+        for s in suites
+    ]
+
+
+@router.get(
+    "/suites/{suite_id}",
+    response_model=SuiteVersion,
+    summary="Retrieve accepted suite version",
+)
+def get_suite_endpoint(
+    project_id: str,
+    suite_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    stmt = (
+        select(C1SuiteVersionModel)
+        .where(
+            C1SuiteVersionModel.project_id == project_id,
+            C1SuiteVersionModel.suite_id == suite_id,
+        )
+        .order_by(C1SuiteVersionModel.version.desc())
+    )
+    suite = db.execute(stmt).scalars().first()
+    if not suite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Suite '{suite_id}' not found for project '{project_id}'.",
+        )
+    return SuiteVersion(
+        suite_id=suite.suite_id,
+        project_id=suite.project_id,
+        version=suite.version,
+        name=suite.name,
+        config_id=suite.config_id,
+        case_versions=[],
+        is_immutable=suite.is_immutable,
+        created_at=suite.created_at,
+    )
+
+
+@router.get(
+    "/suites/{suite_id}/cases/{case_id}/agent-view",
+    response_model=AgentFacingTask,
+    summary="Retrieve isolated agent-facing task view for a case in an accepted suite",
+)
+def get_suite_case_agent_view_endpoint(
+    project_id: str,
+    suite_id: str,
+    case_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    stmt = (
+        select(C1SuiteVersionModel)
+        .where(
+            C1SuiteVersionModel.project_id == project_id,
+            C1SuiteVersionModel.suite_id == suite_id,
+        )
+        .order_by(C1SuiteVersionModel.version.desc())
+    )
+    suite = db.execute(stmt).scalars().first()
+    if not suite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Suite '{suite_id}' not found for project '{project_id}'.",
+        )
+    for c_data in suite.cases or []:
+        if c_data.get("case_id") == case_id:
+            candidate = GeneratedCandidateCase(**c_data)
+            return extract_agent_facing_task(candidate)
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Case '{case_id}' not found in suite '{suite_id}'.",
+    )
 
 
 @router.get(

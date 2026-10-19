@@ -46,6 +46,13 @@ class C1ProjectConfigModel(Base):
         passive_deletes=True,
     )
 
+    generation_runs = relationship(
+        "C1GenerationRunModel",
+        back_populates="config",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
     __table_args__ = (
         UniqueConstraint("project_id", "version", name="uq_c1_project_config_version"),
     )
@@ -70,6 +77,8 @@ class C1SuiteVersionModel(Base):
     )
     is_immutable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     cases: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    generation_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -81,3 +90,32 @@ class C1SuiteVersionModel(Base):
             "project_id", "suite_id", "version", name="uq_c1_suite_version"
         ),
     )
+
+
+class C1GenerationRunModel(Base):
+    """Persisted generation run tracking candidate cases, validation results, and selection provenance."""
+
+    __tablename__ = "c1_generation_runs"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    project_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    config_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c1_project_configs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="COMPLETED")
+    request_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    candidates: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    suite_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    suite_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    config = relationship("C1ProjectConfigModel", back_populates="generation_runs")
