@@ -53,6 +53,14 @@ from app.components.c4_policy_aware_safety.contracts.onboarding import (
     DomainProfileDefinition,
     OnboardingJobCreate,
 )
+from app.components.c4_policy_aware_safety.contracts.regression import (
+    ExecutionModeType,
+    PolicyComparisonRecord,
+    PolicyComparisonRequest,
+    RegressionBatchRecord,
+    RegressionPlanRecord,
+    RegressionReport,
+)
 from app.components.c4_policy_aware_safety.contracts.rules import (
     CandidateRule,
     ContractAcceptanceRequest,
@@ -88,6 +96,7 @@ from app.components.c4_policy_aware_safety.onboarding.service import (
     C4OnboardingService,
 )
 from app.components.c4_policy_aware_safety.persistence.repository import C4Repository
+from app.components.c4_policy_aware_safety.regression.service import C4RegressionService
 from app.components.c4_policy_aware_safety.validation.case_validator import (
     PolicyTestCaseValidator,
 )
@@ -1191,6 +1200,221 @@ def execute_onboarding_cases(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except KeyError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+# 11. Policy Regression and Diffing Routes
+class RegressionPlanCreateRequest(BaseModel):
+    comparison_id: str
+    binding_id: str
+    binding_version: int
+
+
+class RegressionPlanExecuteRequest(BaseModel):
+    execution_mode: str = "FRESH_EXECUTION"
+    idempotency_key: str | None = None
+
+
+@router.post(
+    "/regression/compare",
+    response_model=PolicyComparisonRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Compare two accepted policy contracts and produce deterministic diff",
+)
+def compare_policy_contracts(
+    project_id: str,
+    request: PolicyComparisonRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    if request.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project ID mismatch: route '{project_id}' != payload '{request.project_id}'.",
+        )
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        return service.compare_contracts(request)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/regression/comparisons/{comparison_id}",
+    response_model=PolicyComparisonRecord,
+    summary="Retrieve an existing policy comparison",
+)
+def get_policy_comparison(
+    project_id: str,
+    comparison_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    comparison = repo.get_policy_comparison(project_id, comparison_id)
+    if not comparison:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Comparison '{comparison_id}' not found in project '{project_id}'.",
+        )
+    return comparison
+
+
+@router.post(
+    "/regression/plans",
+    response_model=RegressionPlanRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Build a typed regression plan with impact decisions",
+)
+def create_regression_plan(
+    project_id: str,
+    request: RegressionPlanCreateRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        return service.create_regression_plan(
+            project_id=project_id,
+            comparison_id=request.comparison_id,
+            binding_id=request.binding_id,
+            binding_version=request.binding_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/regression/plans/{plan_id}",
+    response_model=RegressionPlanRecord,
+    summary="Retrieve an existing regression plan",
+)
+def get_regression_plan(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    plan = repo.get_regression_plan(project_id, plan_id)
+    if not plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Regression plan '{plan_id}' not found in project '{project_id}'.",
+        )
+    return plan
+
+
+@router.post(
+    "/regression/plans/{plan_id}/regenerate",
+    response_model=RegressionPlanRecord,
+    summary="Selectively regenerate and revalidate affected cases for regression plan",
+)
+def regenerate_regression_plan(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        updated_plan, _ = service.regenerate_plan(project_id, plan_id)
+        return updated_plan
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/regression/plans/{plan_id}/freeze",
+    response_model=RegressionPlanRecord,
+    summary="Freeze a validated regression plan into immutable snapshot",
+)
+def freeze_regression_plan(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        return service.freeze_plan(project_id, plan_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/regression/plans/{plan_id}/execute",
+    response_model=RegressionBatchRecord,
+    summary="Selectively execute frozen regression plan against target adapter",
+)
+def execute_regression_plan(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    payload: RegressionPlanExecuteRequest | None = None,
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    req = payload or RegressionPlanExecuteRequest()
+    try:
+        mode = ExecutionModeType(req.execution_mode)
+    except ValueError:
+        mode = ExecutionModeType.FRESH_EXECUTION
+
+    try:
+        batch, _ = service.execute_plan(
+            project_id=project_id,
+            plan_id=plan_id,
+            execution_mode=mode,
+            idempotency_key=req.idempotency_key,
+        )
+        return batch
+    except IdempotencyConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/regression/plans/{plan_id}/report",
+    response_model=RegressionReport,
+    summary="Retrieve evidence-linked regression report for plan",
+)
+def get_regression_report(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    report = service.get_regression_report(project_id, plan_id)
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Regression report for plan '{plan_id}' not found.",
+        )
+    return report
+
+
+@router.post(
+    "/regression/plans/{plan_id}/re-evaluate-historical",
+    response_model=RegressionBatchRecord,
+    summary="Re-evaluate historical run evidence under candidate policy without fresh agent execution",
+)
+def re_evaluate_historical(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        batch, _ = service.execute_plan(
+            project_id=project_id,
+            plan_id=plan_id,
+            execution_mode=ExecutionModeType.HISTORICAL_RE_EVALUATION,
+        )
+        return batch
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
 
 
 

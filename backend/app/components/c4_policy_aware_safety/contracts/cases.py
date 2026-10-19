@@ -178,6 +178,12 @@ class PolicyTestCase(PolicyTestCaseStub):
         default=CaseLifecycleState.DRAFT,
         description="Current lifecycle state (DRAFT, VALIDATED, FROZEN, REJECTED, NEEDS_REVIEW)",
     )
+    predecessor_case_id: str | None = Field(
+        default=None, description="Predecessor test case ID for regression lineage"
+    )
+    predecessor_case_version: int | None = Field(
+        default=None, description="Predecessor test case version"
+    )
     content_hash: str = Field(default="", description="SHA-256 canonical case content hash")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

@@ -1,4 +1,5 @@
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.components.c4_policy_aware_safety.contracts.artifacts import (
@@ -19,6 +20,7 @@ from app.components.c4_policy_aware_safety.contracts.evaluator import (
 )
 from app.components.c4_policy_aware_safety.contracts.execution import (
     C4ExecutionRunRecord,
+    IdempotencyConflictError,
 )
 from app.components.c4_policy_aware_safety.contracts.extraction import (
     C4ExtractionJobRecord,
@@ -26,6 +28,11 @@ from app.components.c4_policy_aware_safety.contracts.extraction import (
 from app.components.c4_policy_aware_safety.contracts.generation import GenerationReport
 from app.components.c4_policy_aware_safety.contracts.onboarding import (
     C4OnboardingJobRecord,
+)
+from app.components.c4_policy_aware_safety.contracts.regression import (
+    PolicyComparisonRecord,
+    RegressionBatchRecord,
+    RegressionPlanRecord,
 )
 from app.components.c4_policy_aware_safety.contracts.rules import (
     CandidateRule,
@@ -42,6 +49,9 @@ from app.components.c4_policy_aware_safety.persistence.models import (
     C4FindingModel,
     C4GenerationBatchModel,
     C4OnboardingJobModel,
+    C4PolicyComparisonModel,
+    C4RegressionBatchModel,
+    C4RegressionPlanModel,
     C4TestCaseModel,
 )
 
@@ -438,13 +448,16 @@ class C4Repository:
         return case
 
     def get_test_case(
-        self, project_id: str, case_id: str, version: int = 1
+        self, project_id: str, case_id: str, version: int | None = None
     ) -> PolicyTestCase | None:
         stmt = select(C4TestCaseModel).where(
             C4TestCaseModel.project_id == project_id,
             C4TestCaseModel.case_id == case_id,
-            C4TestCaseModel.case_version == version,
         )
+        if version is not None:
+            stmt = stmt.where(C4TestCaseModel.case_version == version)
+        else:
+            stmt = stmt.order_by(desc(C4TestCaseModel.case_version)).limit(1)
         model = self.db.execute(stmt).scalar_one_or_none()
         if not model:
             return None
@@ -528,7 +541,25 @@ class C4Repository:
             )
             self.db.add(model)
 
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            if run.idempotency_key:
+                existing_run = self.get_execution_run_by_idempotency(
+                    run.project_id, run.idempotency_key
+                )
+                if existing_run:
+                    if (
+                        existing_run.request_digest
+                        and run.request_digest
+                        and existing_run.request_digest != run.request_digest
+                    ):
+                        raise IdempotencyConflictError(
+                            f"Idempotency key '{run.idempotency_key}' previously used with different request parameters."
+                        )
+                    return existing_run
+            raise
         return run
 
     def get_execution_run(
@@ -574,6 +605,11 @@ class C4Repository:
 
         models = self.db.execute(stmt).scalars().all()
         return [C4ExecutionRunRecord.model_validate(m.run_data) for m in models]
+
+    def get_execution_runs_by_case(
+        self, project_id: str, case_id: str
+    ) -> list[C4ExecutionRunRecord]:
+        return self.list_execution_runs(project_id, case_id=case_id)
 
     # 8. Extraction Jobs
     def save_extraction_job(
@@ -793,6 +829,181 @@ class C4Repository:
             )
             for m in models
         ]
+
+    # 11. Policy Comparisons
+    def save_policy_comparison(
+        self, comparison: PolicyComparisonRecord
+    ) -> PolicyComparisonRecord:
+        stmt = select(C4PolicyComparisonModel).where(
+            C4PolicyComparisonModel.project_id == comparison.project_id,
+            C4PolicyComparisonModel.comparison_id == comparison.comparison_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        comp_dict = comparison.model_dump(mode="json")
+
+        if existing:
+            existing.comparison_data = comp_dict
+        else:
+            model = C4PolicyComparisonModel(
+                comparison_id=comparison.comparison_id,
+                project_id=comparison.project_id,
+                baseline_contract_id=comparison.baseline_contract_id,
+                baseline_contract_version=comparison.baseline_contract_version,
+                candidate_contract_id=comparison.candidate_contract_id,
+                candidate_contract_version=comparison.candidate_contract_version,
+                algorithm_version=comparison.algorithm_version,
+                configuration_digest=comparison.configuration_digest,
+                comparison_data=comp_dict,
+                created_at=comparison.created_at,
+            )
+            self.db.add(model)
+
+        self.db.commit()
+        return comparison
+
+    def get_policy_comparison(
+        self, project_id: str, comparison_id: str
+    ) -> PolicyComparisonRecord | None:
+        stmt = select(C4PolicyComparisonModel).where(
+            C4PolicyComparisonModel.project_id == project_id,
+            C4PolicyComparisonModel.comparison_id == comparison_id,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return PolicyComparisonRecord.model_validate(model.comparison_data)
+
+    # 12. Regression Plans
+    def save_regression_plan(
+        self, plan: RegressionPlanRecord
+    ) -> RegressionPlanRecord:
+        stmt = select(C4RegressionPlanModel).where(
+            C4RegressionPlanModel.project_id == plan.project_id,
+            C4RegressionPlanModel.plan_id == plan.plan_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        plan_dict = plan.model_dump(mode="json")
+
+        if existing:
+            existing.status = plan.status.value
+            existing.plan_data = plan_dict
+            existing.frozen_at = plan.frozen_at
+        else:
+            model = C4RegressionPlanModel(
+                plan_id=plan.plan_id,
+                project_id=plan.project_id,
+                comparison_id=plan.comparison_id,
+                baseline_contract_id=plan.baseline_contract_id,
+                baseline_contract_version=plan.baseline_contract_version,
+                candidate_contract_id=plan.candidate_contract_id,
+                candidate_contract_version=plan.candidate_contract_version,
+                binding_id=plan.binding_id,
+                binding_version=plan.binding_version,
+                status=plan.status.value,
+                plan_digest=plan.plan_digest,
+                plan_data=plan_dict,
+                created_at=plan.created_at,
+                frozen_at=plan.frozen_at,
+            )
+            self.db.add(model)
+
+        self.db.commit()
+        return plan
+
+    def get_regression_plan(
+        self, project_id: str, plan_id: str
+    ) -> RegressionPlanRecord | None:
+        stmt = select(C4RegressionPlanModel).where(
+            C4RegressionPlanModel.project_id == project_id,
+            C4RegressionPlanModel.plan_id == plan_id,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return RegressionPlanRecord.model_validate(model.plan_data)
+
+    # 13. Regression Batches
+    def save_regression_batch(
+        self, batch: RegressionBatchRecord
+    ) -> RegressionBatchRecord:
+        stmt = select(C4RegressionBatchModel).where(
+            C4RegressionBatchModel.project_id == batch.project_id,
+            C4RegressionBatchModel.batch_id == batch.batch_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        batch_dict = batch.model_dump(mode="json")
+
+        if existing:
+            existing.status = batch.status
+            existing.batch_data = batch_dict
+            existing.completed_at = batch.completed_at
+        else:
+            model = C4RegressionBatchModel(
+                batch_id=batch.batch_id,
+                project_id=batch.project_id,
+                plan_id=batch.plan_id,
+                candidate_contract_id=batch.candidate_contract_id,
+                candidate_contract_version=batch.candidate_contract_version,
+                adapter_id=batch.adapter_id,
+                execution_mode=batch.execution_mode.value,
+                status=batch.status,
+                idempotency_key=batch.idempotency_key,
+                request_digest=batch.request_digest,
+                batch_data=batch_dict,
+                created_at=batch.created_at,
+                completed_at=batch.completed_at,
+            )
+            self.db.add(model)
+
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            if batch.idempotency_key:
+                existing_batch = self.get_regression_batch_by_idempotency(
+                    batch.project_id, batch.idempotency_key
+                )
+                if existing_batch:
+                    if (
+                        existing_batch.request_digest
+                        and batch.request_digest
+                        and existing_batch.request_digest != batch.request_digest
+                    ):
+                        raise IdempotencyConflictError(
+                            f"Idempotency key '{batch.idempotency_key}' previously used with different batch parameters."
+                        )
+                    return existing_batch
+            raise
+        return batch
+
+    def get_regression_batch_by_idempotency(
+        self, project_id: str, idempotency_key: str
+    ) -> RegressionBatchRecord | None:
+        stmt = select(C4RegressionBatchModel).where(
+            C4RegressionBatchModel.project_id == project_id,
+            C4RegressionBatchModel.idempotency_key == idempotency_key,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return RegressionBatchRecord.model_validate(model.batch_data)
+
+    def get_latest_regression_batch(
+        self, project_id: str, plan_id: str
+    ) -> RegressionBatchRecord | None:
+        stmt = (
+            select(C4RegressionBatchModel)
+            .where(
+                C4RegressionBatchModel.project_id == project_id,
+                C4RegressionBatchModel.plan_id == plan_id,
+            )
+            .order_by(desc(C4RegressionBatchModel.created_at))
+            .limit(1)
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return RegressionBatchRecord.model_validate(model.batch_data)
 
 
 

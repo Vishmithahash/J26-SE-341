@@ -111,7 +111,16 @@ from app.components.c4_policy_aware_safety.validation.case_validator import (
     PolicyTestCaseValidator,
 )
 from app.database import Base, get_db
-from app.main import app
+
+try:
+    from app.main import app
+except (ImportError, ModuleNotFoundError):
+    from fastapi import FastAPI
+
+    from app.components.c4_policy_aware_safety.api import router as c4_router
+
+    app = FastAPI(title="Agentic AI QA Framework API - C4 Standalone")
+    app.include_router(c4_router)
 
 # Isolated SQLite in-memory engine for Phase 4 tests
 test_engine = create_engine(

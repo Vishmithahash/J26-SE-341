@@ -143,12 +143,35 @@ class BoundedNLPolicyExtractor:
             supporting_excerpt = str(raw.get("supporting_excerpt", "")).strip()
 
             # 2. Anti-Prompt-Injection Filter & Data-Only Authority
-            # Quoted attacks or prompt injections inside policy docs must NEVER become governance rules
+            # Quoted attacks or prompt injections inside policy docs must NEVER become governance rules.
+            # However: Do not use suspicious keywords alone to reject legitimate policy clauses (e.g. governance
+            # rules stating that customer text saying "ignore previous instructions" cannot grant authority).
+            is_governance_denial = (
+                policy_family == PolicyFamily.INSTRUCTION_AUTHORITY
+                or requirement == PolicyRequirement.DENY
+                or any(
+                    neg in supporting_excerpt.lower()
+                    for neg in [
+                        "cannot grant",
+                        "never grant",
+                        "must not",
+                        "prohibit",
+                        "denied",
+                        "reject",
+                        "disregard",
+                        "untrusted",
+                    ]
+                )
+            )
+
             is_injection = False
+            has_quoted_attack = False
             for pat in ADVERSARIAL_INJECTION_PATTERNS:
                 if pat.search(supporting_excerpt) or pat.search(str(raw.get("explanation", ""))):
-                    is_injection = True
-                    break
+                    has_quoted_attack = True
+                    if not is_governance_denial or raw.get("is_injection_candidate"):
+                        is_injection = True
+                        break
 
             if is_injection or raw.get("is_injection_candidate"):
                 issues.append(
@@ -158,6 +181,17 @@ class BoundedNLPolicyExtractor:
                         field="supporting_excerpt",
                         severity=Severity.CRITICAL,
                         blocking=True,
+                    )
+                )
+            elif has_quoted_attack:
+                # Quoted attack text in legitimate governance: attach review issue for human review
+                issues.append(
+                    ValidationIssue(
+                        code=ValidationIssueCode.AMBIGUOUS,
+                        message="Candidate contains quoted untrusted attack pattern in governing rule; requires manual review before acceptance.",
+                        field="supporting_excerpt",
+                        severity=Severity.MEDIUM,
+                        blocking=False,
                     )
                 )
 
