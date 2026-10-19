@@ -138,6 +138,9 @@ class ConformanceEvaluationEngine:
                 evidence_references=[
                     evt.event_id for evt in normalized_trace.ordered_events
                 ],
+                coverage=alignment_res.coverage,
+                detailed_coverage=alignment_res.detailed_coverage,
+                divergence_localisation_uncertainty=alignment_res.divergence_localisation_uncertainty,
                 evaluator_timing_ms=elapsed_ms,
             )
 
@@ -156,10 +159,12 @@ class ConformanceEvaluationEngine:
                 observed_states=alignment_res.observed_states,
                 violations=alignment_res.violations,
                 first_divergence=alignment_res.first_divergence,
+                divergence_localisation_uncertainty=alignment_res.divergence_localisation_uncertainty,
                 evidence_references=[
                     evt.event_id for evt in normalized_trace.ordered_events
                 ],
                 coverage=alignment_res.coverage,
+                detailed_coverage=alignment_res.detailed_coverage,
                 evaluator_timing_ms=elapsed_ms,
             )
 
@@ -195,9 +200,11 @@ class ConformanceEvaluationEngine:
             observed_states=alignment_res.observed_states,
             violations=[],
             first_divergence=None,
+            divergence_localisation_uncertainty=None,
             evidence_references=[
                 evt.event_id for evt in normalized_trace.ordered_events
             ],
             coverage=alignment_res.coverage,
+            detailed_coverage=alignment_res.detailed_coverage,
             evaluator_timing_ms=elapsed_ms,
         )

@@ -3,13 +3,19 @@
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.components.c2_state_aware_workflow.baselines.contracts import (
+    BaselineType,
+)
 from app.components.c2_state_aware_workflow.builder.deterministic import (
     DeterministicCandidateBuilder,
     InsufficientInputError,
+)
+from app.components.c2_state_aware_workflow.contracts.coverage import (
+    DetailedObservedCoverage,
 )
 from app.components.c2_state_aware_workflow.contracts.efsm_model import (
     EFSMModelDefinition,
@@ -17,9 +23,18 @@ from app.components.c2_state_aware_workflow.contracts.efsm_model import (
 from app.components.c2_state_aware_workflow.contracts.evaluation_result import (
     EvaluationResultContract,
     FirstDivergenceDetail,
+    ReproductionVerificationResult,
     RuntimeVerdict,
     ViolationDetail,
     WorkflowCoverageSummary,
+)
+from app.components.c2_state_aware_workflow.contracts.experiment import (
+    DatasetPartition,
+    ExperimentDatasetManifest,
+)
+from app.components.c2_state_aware_workflow.contracts.report import (
+    C2ReportContributionContract,
+    C2SuiteReportContract,
 )
 from app.components.c2_state_aware_workflow.contracts.runtime_evidence import (
     RuntimeEvidenceContract,
@@ -54,20 +69,37 @@ from app.components.c2_state_aware_workflow.evaluator.sut import (
 from app.components.c2_state_aware_workflow.examples.refund_workflow import (
     build_synthetic_refund_efsm,
 )
+from app.components.c2_state_aware_workflow.experiments.benchmark import (
+    BenchmarkSuiteBuilder,
+)
+from app.components.c2_state_aware_workflow.experiments.runner import (
+    ExperimentRunner,
+)
 from app.components.c2_state_aware_workflow.generator.readiness import (
     ModelNotReadyError,
 )
 from app.components.c2_state_aware_workflow.generator.service import (
     TestGenerationService,
 )
+from app.components.c2_state_aware_workflow.integrations.reporting import (
+    C2ReportExportService,
+    C2ReportPublisher,
+)
+from app.components.c2_state_aware_workflow.integrations.service import (
+    C2IntegrationService,
+)
 from app.components.c2_state_aware_workflow.persistence.models import (
     C2EvaluationResult,
+    C2Experiment,
     C2TestCase,
     C2TestSuite,
 )
 from app.components.c2_state_aware_workflow.persistence.repository import (
     ApprovalBlockedError,
+    ApprovedModelImmutableError,
     C2ModelRepository,
+    ConflictingEvidenceIntegrityError,
+    DatasetNotFoundError,
     ModelAlreadyExistsError,
     ModelNotFoundError,
     TestCaseNotFoundError,
@@ -888,6 +920,19 @@ class DemonstrationRunRequest(BaseModel):
 
 
 def _format_evaluation_response(record: C2EvaluationResult) -> EvaluationResultContract:
+    cov_dict = record.coverage or {}
+    summary_data = {
+        k: v for k, v in cov_dict.items() if k in WorkflowCoverageSummary.model_fields
+    }
+    det_cov = None
+    if "detailed_coverage" in cov_dict and isinstance(
+        cov_dict["detailed_coverage"], dict
+    ):
+        try:
+            det_cov = DetailedObservedCoverage(**cov_dict["detailed_coverage"])
+        except (ValueError, TypeError, KeyError):
+            det_cov = None
+
     return EvaluationResultContract(
         schema_version="2026.1",
         evaluation_id=record.id,
@@ -910,7 +955,8 @@ def _format_evaluation_response(record: C2EvaluationResult) -> EvaluationResultC
             else None
         ),
         evidence_references=record.evidence_references,
-        coverage=WorkflowCoverageSummary(**record.coverage),
+        coverage=WorkflowCoverageSummary(**summary_data),
+        detailed_coverage=det_cov,
         evaluator_timing_ms=record.evaluator_timing_ms,
         evaluated_at=record.created_at,
     )
@@ -954,6 +1000,10 @@ def evaluate_test_run(
     except ModelNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ConflictingEvidenceIntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
 
 
@@ -1171,3 +1221,605 @@ def run_synthetic_demonstration(
             "evaluation_id": f"eval_{run_id}",
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Day 3 Part A: Integration Orchestration, Coverage, and Reporting Endpoints
+# ---------------------------------------------------------------------------
+
+
+class SuiteRunRequest(BaseModel):
+    max_cases: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Maximum cases to execute in bounded suite run",
+    )
+
+
+class ReEvaluateRequest(BaseModel):
+    evaluator_version: str | None = Field(
+        default=None, description="Optional new evaluator version"
+    )
+    evaluator_config: dict[str, Any] | None = Field(
+        default=None, description="Optional evaluator configuration override"
+    )
+
+
+# 23. Run a C2 Case with Orchestration Pipeline
+@router.post(
+    "/projects/{project_id}/suites/{suite_id}/cases/{test_id}/run",
+    response_model=EvaluationResultContract,
+)
+def run_case_orchestration(
+    project_id: str,
+    suite_id: str,
+    test_id: str,
+    db: DbSession,
+    run_id: str | None = None,
+):
+    """Run an isolated test case through fixture reset, runner, evidence collection, and evaluation."""
+    service = C2IntegrationService(db)
+    try:
+        return service.run_case(project_id, suite_id, test_id, run_id=run_id)
+    except TestCaseNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ModelNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ConflictingEvidenceIntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+
+
+# 24. Run Bounded Test Suite
+@router.post(
+    "/projects/{project_id}/suites/{suite_id}/run",
+    response_model=C2SuiteReportContract,
+)
+def run_suite_orchestration(
+    project_id: str,
+    suite_id: str,
+    request: SuiteRunRequest,
+    db: DbSession,
+):
+    """Execute a bounded batch of test cases for a suite and produce aggregate report."""
+    repo = C2ModelRepository(db)
+    suite = repo.get_test_suite(project_id, suite_id)
+    if suite is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test suite '{suite_id}' not found for project '{project_id}'.",
+        )
+    service = C2IntegrationService(db)
+    return service.run_suite(project_id, suite_id, max_cases=request.max_cases)
+
+
+# 25. Retrieve Retained Execution Evidence
+@router.get(
+    "/projects/{project_id}/evidence/{run_id}",
+    response_model=dict[str, Any],
+)
+def get_retained_evidence(
+    project_id: str,
+    run_id: str,
+    db: DbSession,
+):
+    """Retrieve original retained execution evidence, fixture snapshot, digest, and provenance."""
+    repo = C2ModelRepository(db)
+    evidence = repo.get_execution_evidence(project_id, run_id)
+    if evidence is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Retained evidence for run '{run_id}' not found in project '{project_id}'.",
+        )
+    return {
+        "id": evidence.id,
+        "project_id": evidence.project_id,
+        "suite_id": evidence.suite_id,
+        "test_id": evidence.test_id,
+        "run_id": evidence.run_id,
+        "evidence_digest": evidence.evidence_digest,
+        "model_id": evidence.model_id,
+        "model_version": evidence.model_version,
+        "model_content_hash": evidence.model_content_hash,
+        "execution_mode": evidence.execution_mode,
+        "runner_id": evidence.runner_id,
+        "runner_version": evidence.runner_version,
+        "execution_provenance": evidence.execution_provenance,
+        "evidence_payload": evidence.evidence_payload,
+        "created_at": evidence.created_at,
+    }
+
+
+# 26. Reproducible Re-Evaluation
+@router.post(
+    "/projects/{project_id}/evaluations/{evaluation_id}/re-evaluate",
+    response_model=EvaluationResultContract,
+)
+def re_evaluate_execution(
+    project_id: str,
+    evaluation_id: str,
+    request: ReEvaluateRequest,
+    db: DbSession,
+):
+    """Reproduce an evaluation from retained original evidence with optional new configuration/version."""
+    service = WorkflowEvaluationService(db)
+    try:
+        return service.re_evaluate_execution(
+            project_id=project_id,
+            evaluation_id=evaluation_id,
+            evaluator_version=request.evaluator_version,
+            evaluator_config=request.evaluator_config,
+        )
+    except TestCaseNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ModelNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 26b. Verify Independent Replay Reproduction
+@router.post(
+    "/projects/{project_id}/evaluations/{evaluation_id}/verify-reproduction",
+    response_model=ReproductionVerificationResult,
+)
+def verify_evaluation_reproduction(
+    project_id: str,
+    evaluation_id: str,
+    db: DbSession,
+):
+    """Independently replays evaluation from retained raw evidence and verifies semantic equality."""
+    service = WorkflowEvaluationService(db)
+    try:
+        return service.verify_execution_reproduction(
+            project_id=project_id,
+            evaluation_id=evaluation_id,
+        )
+    except TestCaseNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ModelNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 27. Retrieve Observed Coverage for a Single Run
+@router.get(
+    "/projects/{project_id}/evaluations/{evaluation_id}/coverage",
+    response_model=DetailedObservedCoverage,
+)
+def get_evaluation_coverage(
+    project_id: str,
+    evaluation_id: str,
+    db: DbSession,
+):
+    """Retrieve detailed observed coverage for a specific evaluation run."""
+    report_service = C2ReportExportService(db)
+    try:
+        run_rep = report_service.build_run_report(project_id, evaluation_id)
+        return run_rep.observed_coverage
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 28. Retrieve Aggregate Observed Coverage for a Suite
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/coverage",
+    response_model=DetailedObservedCoverage,
+)
+def get_suite_coverage(
+    project_id: str,
+    suite_id: str,
+    db: DbSession,
+):
+    """Retrieve aggregate observed workflow coverage across all evaluated runs in a suite."""
+    report_service = C2ReportExportService(db)
+    try:
+        suite_rep = report_service.build_suite_report(project_id, suite_id)
+        return suite_rep.aggregate_observed_coverage
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 29. Retrieve Per-Run C2 Report Contribution
+@router.get(
+    "/projects/{project_id}/evaluations/{evaluation_id}/report",
+    response_model=C2ReportContributionContract,
+)
+def get_run_report(
+    project_id: str,
+    evaluation_id: str,
+    db: DbSession,
+):
+    """Retrieve structured C2 report contribution for a single evaluation run."""
+    report_service = C2ReportExportService(db)
+    try:
+        return report_service.build_run_report(project_id, evaluation_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 30. Retrieve Suite C2 Report Summary
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/report",
+    response_model=C2SuiteReportContract,
+)
+def get_suite_report(
+    project_id: str,
+    suite_id: str,
+    db: DbSession,
+):
+    """Retrieve aggregated C2 report for a test suite."""
+    report_service = C2ReportExportService(db)
+    try:
+        return report_service.build_suite_report(project_id, suite_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 31. Export C2 Report Contribution
+@router.post(
+    "/projects/{project_id}/evaluations/{evaluation_id}/export-report",
+    response_model=dict[str, Any],
+)
+def export_c2_report_contribution(
+    project_id: str,
+    evaluation_id: str,
+    db: DbSession,
+):
+    """Export versioned C2 report contribution JSON and publish to reporting adapter."""
+    report_service = C2ReportExportService(db)
+    try:
+        report = report_service.build_run_report(project_id, evaluation_id)
+        publisher = C2ReportPublisher()
+        pub_status = publisher.publish_component_finding(report)
+        return {
+            "evaluation_id": evaluation_id,
+            "project_id": project_id,
+            "published_to_shared_aggregator": False,
+            "publishing_status": pub_status,
+            "report_contribution": report.model_dump(mode="json"),
+        }
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
+# C2 Part B: Experiments, Baselines, and Research Metrics APIs
+# ---------------------------------------------------------------------------
+
+
+class CreateExperimentRequest(BaseModel):
+    """Request payload to configure and execute a comparative baseline experiment."""
+
+    experiment_id: str
+    name: str
+    dataset_id: str
+    dataset_version: str
+    eval_methods: list[BaselineType] | None = None
+    target_partition: DatasetPartition | None = None
+
+
+# 32. Import and Validate Experiment Dataset Manifest
+@router.post(
+    "/projects/{project_id}/datasets",
+    response_model=dict[str, Any],
+    status_code=status.HTTP_201_CREATED,
+)
+def import_experiment_dataset(
+    project_id: str,
+    manifest: ExperimentDatasetManifest,
+    db: DbSession,
+):
+    """Import and persist a versioned, partition-isolated experiment dataset manifest."""
+    if manifest.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Manifest project_id '{manifest.project_id}' does not match route project_id '{project_id}'.",
+        )
+    repo = C2ModelRepository(db)
+    try:
+        record = repo.save_experiment_dataset(manifest)
+        return {
+            "dataset_id": record.dataset_id,
+            "version": record.version,
+            "name": record.name,
+            "case_count": record.case_count,
+            "development_count": record.development_count,
+            "held_out_count": record.held_out_count,
+            "is_frozen": record.is_frozen,
+            "manifest_digest": record.manifest_digest,
+            "created_at": record.created_at.isoformat(),
+        }
+    except ApprovedModelImmutableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+
+
+# 33. List Experiment Datasets
+@router.get(
+    "/projects/{project_id}/datasets",
+    response_model=list[dict[str, Any]],
+)
+def list_experiment_datasets(
+    project_id: str,
+    db: DbSession,
+):
+    """List all versioned experiment datasets for a project."""
+    repo = C2ModelRepository(db)
+    records = repo.list_experiment_datasets(project_id)
+    return [
+        {
+            "dataset_id": r.dataset_id,
+            "version": r.version,
+            "name": r.name,
+            "case_count": r.case_count,
+            "development_count": r.development_count,
+            "held_out_count": r.held_out_count,
+            "is_frozen": r.is_frozen,
+            "manifest_digest": r.manifest_digest,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in records
+    ]
+
+
+# 34. Retrieve Experiment Dataset Manifest
+@router.get(
+    "/projects/{project_id}/datasets/{dataset_id}/versions/{version}",
+    response_model=dict[str, Any],
+)
+def get_experiment_dataset(
+    project_id: str,
+    dataset_id: str,
+    version: str,
+    db: DbSession,
+):
+    """Retrieve full structured dataset manifest and case records."""
+    repo = C2ModelRepository(db)
+    record = repo.get_experiment_dataset(project_id, dataset_id, version)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dataset {dataset_id} v{version} not found in project {project_id}.",
+        )
+    return record.manifest_payload
+
+
+# 35. Freeze Experiment Dataset Manifest
+@router.post(
+    "/projects/{project_id}/datasets/{dataset_id}/versions/{version}/freeze",
+    response_model=dict[str, Any],
+)
+def freeze_experiment_dataset(
+    project_id: str,
+    dataset_id: str,
+    version: str,
+    db: DbSession,
+):
+    """Freeze an experiment dataset manifest to lock partitions and labels."""
+    repo = C2ModelRepository(db)
+    try:
+        record = repo.freeze_experiment_dataset(project_id, dataset_id, version)
+        return {
+            "dataset_id": record.dataset_id,
+            "version": record.version,
+            "is_frozen": record.is_frozen,
+            "frozen_at": record.frozen_at.isoformat() if record.frozen_at else None,
+            "manifest_digest": record.manifest_digest,
+        }
+    except DatasetNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 36. Create and Run Comparative Experiment
+@router.post(
+    "/projects/{project_id}/experiments",
+    response_model=dict[str, Any],
+    status_code=status.HTTP_201_CREATED,
+)
+def create_and_run_experiment(
+    project_id: str,
+    request: CreateExperimentRequest,
+    db: DbSession,
+):
+    """Execute baseline comparison (B1-B4) over retained frozen execution evidence."""
+    repo = C2ModelRepository(db)
+    dataset_rec = repo.get_experiment_dataset(
+        project_id, request.dataset_id, request.dataset_version
+    )
+    if dataset_rec is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dataset {request.dataset_id} v{request.dataset_version} not found.",
+        )
+
+    manifest = ExperimentDatasetManifest.model_validate(dataset_rec.manifest_payload)
+
+    builder = BenchmarkSuiteBuilder(project_id=project_id)
+    _, models_by_id, tests_by_id = builder.build_benchmark_manifest(
+        dataset_id=manifest.dataset_id,
+        name=manifest.name,
+        version=manifest.version,
+    )
+
+    runner = ExperimentRunner()
+    report, case_results = runner.run_experiment(
+        experiment_id=request.experiment_id,
+        experiment_name=request.name,
+        manifest=manifest,
+        models_by_id=models_by_id,
+        tests_by_id=tests_by_id,
+        eval_methods=request.eval_methods,
+        target_partition=request.target_partition,
+    )
+
+    exp_record = C2Experiment(
+        project_id=project_id,
+        experiment_id=request.experiment_id,
+        name=request.name,
+        dataset_record_id=dataset_rec.id,
+        dataset_id=request.dataset_id,
+        dataset_version=request.dataset_version,
+        status="COMPLETED",
+        configuration=request.model_dump(mode="json"),
+        results_summary=report.model_dump(mode="json"),
+        completed_at=datetime.now(),
+    )
+    saved_exp = repo.create_or_update_experiment(exp_record)
+
+    for cr in case_results:
+        cr.experiment_record_id = saved_exp.id
+    repo.save_experiment_case_results(case_results)
+
+    return {
+        "experiment_id": saved_exp.experiment_id,
+        "name": saved_exp.name,
+        "status": saved_exp.status,
+        "total_cases_evaluated": len(case_results),
+        "results_summary": report.model_dump(mode="json"),
+    }
+
+
+# 37. List Experiments
+@router.get(
+    "/projects/{project_id}/experiments",
+    response_model=list[dict[str, Any]],
+)
+def list_experiments(
+    project_id: str,
+    dataset_id: str | None = None,
+    db: DbSession = None,
+):
+    """List baseline comparison experiments for a project."""
+    repo = C2ModelRepository(db)
+    records = repo.list_experiments(project_id, dataset_id=dataset_id)
+    return [
+        {
+            "experiment_id": r.experiment_id,
+            "name": r.name,
+            "dataset_id": r.dataset_id,
+            "dataset_version": r.dataset_version,
+            "status": r.status,
+            "created_at": r.created_at.isoformat(),
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+        }
+        for r in records
+    ]
+
+
+# 38. Retrieve Experiment Report and Baseline Comparisons
+@router.get(
+    "/projects/{project_id}/experiments/{experiment_id}/baselines",
+    response_model=dict[str, Any],
+)
+def get_experiment_baseline_comparisons(
+    project_id: str,
+    experiment_id: str,
+    db: DbSession,
+):
+    """Retrieve full comparative research metrics report across B1, B2, B3, and B4."""
+    repo = C2ModelRepository(db)
+    record = repo.get_experiment(project_id, experiment_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found in project '{project_id}'.",
+        )
+    return record.results_summary or {}
+
+
+# 39. Retrieve Experiment Case Predictions
+@router.get(
+    "/projects/{project_id}/experiments/{experiment_id}/cases",
+    response_model=list[dict[str, Any]],
+)
+def get_experiment_case_results(
+    project_id: str,
+    experiment_id: str,
+    method_id: str | None = None,
+    db: DbSession = None,
+):
+    """Retrieve fine-grained case prediction contracts and diagnostic records."""
+    repo = C2ModelRepository(db)
+    results = repo.get_experiment_case_results(
+        project_id, experiment_id, method_id=method_id
+    )
+    return [
+        {
+            "case_id": r.case_id,
+            "method_id": r.method_id,
+            "partition": r.partition,
+            "verdict": r.verdict,
+            "is_violation": r.is_violation,
+            "can_localize": r.can_localize,
+            "first_divergence_predicted_step": r.first_divergence_predicted_step,
+            "evaluator_timing_ms": r.evaluator_timing_ms,
+            "evidence_digest_consumed": r.evidence_digest_consumed,
+            "result_payload": r.result_payload,
+        }
+        for r in results
+    ]
+
+
+# 40. Export Experiment Metrics (JSON or CSV)
+@router.get(
+    "/projects/{project_id}/experiments/{experiment_id}/export",
+    response_model=dict[str, Any],
+)
+def export_experiment_metrics(
+    project_id: str,
+    experiment_id: str,
+    format: str = Query("json", pattern="^(json|csv)$"),
+    db: DbSession = None,
+):
+    """Export benchmark comparison metrics in JSON or summary CSV format."""
+    repo = C2ModelRepository(db)
+    record = repo.get_experiment(project_id, experiment_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found.",
+        )
+    summary = record.results_summary or {}
+
+    if format == "csv":
+        lines = [
+            "method,partition,precision,recall,f1_score,localization_accuracy,mutation_detection,state_fault_detection,overhead_median_ms,overhead_p95_ms"
+        ]
+        methods_dict = summary.get("metrics_by_method", {})
+        for m_id, m_data in methods_dict.items():
+            det = m_data.get("detection_metrics", {})
+            loc = m_data.get("localization_metrics", {})
+            lines.append(
+                f"{m_id},{m_data.get('partition')},{det.get('precision')},{det.get('recall')},{det.get('f1_score')},"
+                f"{loc.get('accuracy')},{det.get('mutation_detection_score')},{det.get('state_effect_fault_detection_score')},"
+                f"{m_data.get('overhead_median_ms')},{m_data.get('overhead_p95_ms')}"
+            )
+        csv_content = "\n".join(lines)
+        return Response(content=csv_content, media_type="text/csv")
+
+    return summary
