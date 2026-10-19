@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.components.c1_tool_call_correctness.contracts.configuration import (
     EvidenceChannel,
@@ -130,6 +130,24 @@ class ArgumentConstraint(BaseModel):
         default_factory=list,
         description="IDs of task requirements justifying this argument constraint",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "argument_path" in data and "argument_name" not in data:
+                data["argument_name"] = data["argument_path"]
+            if "expected_presence" in data and "presence" not in data:
+                data["presence"] = data["expected_presence"]
+        return data
+
+    @property
+    def argument_path(self) -> str:
+        return self.argument_name
+
+    @property
+    def expected_presence(self) -> FieldPresence:
+        return self.presence
 
 
 class ToolSelectionExpectation(BaseModel):

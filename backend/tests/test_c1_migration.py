@@ -14,6 +14,8 @@ def test_c1_models_metadata_registration():
     assert "c1_project_configs" in tables
     assert "c1_suite_versions" in tables
     assert "c1_generation_runs" in tables
+    assert "c1_execution_runs" in tables
+    assert "c1_case_executions" in tables
 
     # Check columns in c1_project_configs
     config_table = tables["c1_project_configs"]
@@ -56,6 +58,41 @@ def test_c1_models_metadata_registration():
     }
     assert gen_expected_cols.issubset({c.name for c in gen_table.columns})
 
+    # Check c1_execution_runs columns
+    exec_table = tables["c1_execution_runs"]
+    exec_expected_cols = {
+        "id",
+        "project_id",
+        "suite_id",
+        "suite_version",
+        "suite_version_id",
+        "config_id",
+        "status",
+        "idempotency_key",
+        "effective_config",
+        "summary",
+        "created_at",
+    }
+    assert exec_expected_cols.issubset({c.name for c in exec_table.columns})
+
+    # Check c1_case_executions columns
+    case_table = tables["c1_case_executions"]
+    case_expected_cols = {
+        "id",
+        "run_id",
+        "case_id",
+        "attempt_number",
+        "session_id",
+        "readiness_status",
+        "execution_status",
+        "verdict",
+        "trace_completeness",
+        "resolved_expectations",
+        "captured_events",
+        "check_results",
+    }
+    assert case_expected_cols.issubset({c.name for c in case_table.columns})
+
 
 def test_alembic_offline_migration_compatibility(tmp_path):
     """Verify that Alembic generates clean, valid SQL for both upgrade and downgrade offline."""
@@ -67,8 +104,6 @@ def test_alembic_offline_migration_compatibility(tmp_path):
     alembic_cfg.set_main_option("script_location", str(backend_dir / "alembic"))
 
     # Test offline SQL upgrade generation
-    # Alembic in offline mode prints or outputs SQL buffer
-    # We verify that command.upgrade does not raise exceptions
     try:
         command.upgrade(alembic_cfg, "head", sql=True)
     except Exception as exc:
@@ -76,6 +111,6 @@ def test_alembic_offline_migration_compatibility(tmp_path):
 
     # Test offline SQL downgrade generation
     try:
-        command.downgrade(alembic_cfg, "c1_0002:base", sql=True)
+        command.downgrade(alembic_cfg, "c1_0003:base", sql=True)
     except Exception as exc:
         raise AssertionError(f"Alembic offline downgrade failed: {exc}") from exc

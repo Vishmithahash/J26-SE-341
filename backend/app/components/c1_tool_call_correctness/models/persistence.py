@@ -53,6 +53,13 @@ class C1ProjectConfigModel(Base):
         passive_deletes=True,
     )
 
+    execution_runs = relationship(
+        "C1ExecutionRunModel",
+        back_populates="config",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
     __table_args__ = (
         UniqueConstraint("project_id", "version", name="uq_c1_project_config_version"),
     )
@@ -84,6 +91,12 @@ class C1SuiteVersionModel(Base):
     )
 
     config = relationship("C1ProjectConfigModel", back_populates="suite_versions")
+    execution_runs = relationship(
+        "C1ExecutionRunModel",
+        back_populates="suite_version_rel",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -119,3 +132,104 @@ class C1GenerationRunModel(Base):
     )
 
     config = relationship("C1ProjectConfigModel", back_populates="generation_runs")
+
+
+class C1ExecutionRunModel(Base):
+    """Persisted test execution run for an accepted suite version."""
+
+    __tablename__ = "c1_execution_runs"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    project_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    suite_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    suite_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    suite_version_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c1_suite_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    config_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c1_project_configs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING")
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    effective_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    config = relationship("C1ProjectConfigModel", back_populates="execution_runs")
+    suite_version_rel = relationship(
+        "C1SuiteVersionModel", back_populates="execution_runs"
+    )
+    case_executions = relationship(
+        "C1CaseExecutionModel",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class C1CaseExecutionModel(Base):
+    """Execution record and evaluation result for a single test case within a run."""
+
+    __tablename__ = "c1_case_executions"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c1_execution_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    case_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    session_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    readiness_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    execution_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    verdict: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    trace_completeness: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="COMPLETE"
+    )
+    resolved_expectations: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    agent_task_sent: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    captured_events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    evidence_records: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    raw_trace: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    check_results: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    run = relationship("C1ExecutionRunModel", back_populates="case_executions")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "case_id",
+            "attempt_number",
+            name="uq_c1_case_execution_attempt",
+        ),
+    )

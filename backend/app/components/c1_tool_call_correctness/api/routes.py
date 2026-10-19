@@ -18,6 +18,12 @@ from app.components.c1_tool_call_correctness.contracts.configuration import (
     ToolDefinition,
     TraceCapability,
 )
+from app.components.c1_tool_call_correctness.contracts.execution import (
+    CaseExecutionDetail,
+    ExecutionRequest,
+    RunDetailResponse,
+    RunSummary,
+)
 from app.components.c1_tool_call_correctness.contracts.generation import (
     AgentFacingTask,
     GeneratedCandidateCase,
@@ -41,6 +47,9 @@ from app.components.c1_tool_call_correctness.models.persistence import (
     C1ProjectConfigModel,
     C1SuiteVersionModel,
 )
+from app.components.c1_tool_call_correctness.services.agent_adapter import (
+    LiveAgentAdapter,
+)
 from app.components.c1_tool_call_correctness.services.config_service import (
     ConfigConflictError,
     ConfigNotFoundError,
@@ -51,6 +60,9 @@ from app.components.c1_tool_call_correctness.services.config_service import (
     get_project_config,
     list_project_configs,
     update_project_config,
+)
+from app.components.c1_tool_call_correctness.services.execution_service import (
+    ExecutionService,
 )
 from app.components.c1_tool_call_correctness.services.generation_service import (
     execute_generation_job,
@@ -70,6 +82,8 @@ router = APIRouter(
     tags=["Component 1: Tool-Call Correctness"],
     dependencies=[Depends(verify_project_access)],
 )
+
+execution_service = ExecutionService()
 
 
 def _serialize_config_model(model: C1ProjectConfigModel) -> ProjectConfigResponse:
@@ -554,4 +568,183 @@ def get_nexacart_example_endpoint(project_id: str):
         "config": example_config.model_dump(),
         "fixture_context": NEXACART_FIXTURE_DATA,
         "note": "Example configuration for testing tool selection and argument relationships.",
+    }
+
+
+# ============================================================================
+# C1-03: Execution, Evidence Capture, and Correctness Evaluation Routes
+# ============================================================================
+
+
+@router.post(
+    "/runs",
+    response_model=RunDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start a test execution run on an accepted, frozen suite version",
+)
+def start_execution_run_endpoint(
+    project_id: str,
+    payload: ExecutionRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        run_model = execution_service.create_and_start_run(
+            db=db,
+            project_id=project_id,
+            request=payload,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    detail = execution_service.get_run_detail(db, project_id, run_model.id)
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve execution run record after start.",
+        )
+    return detail
+
+
+@router.get(
+    "/runs",
+    response_model=list[RunSummary],
+    summary="List execution runs for a project with optional verdict filtering",
+)
+def list_execution_runs_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    verdict: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    return execution_service.list_runs(
+        db=db,
+        project_id=project_id,
+        verdict=verdict,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/runs/{run_id}",
+    response_model=RunDetailResponse,
+    summary="Retrieve full execution run details and case evaluations",
+)
+def get_execution_run_endpoint(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    detail = execution_service.get_run_detail(db, project_id, run_id)
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution run '{run_id}' not found for project '{project_id}'.",
+        )
+    return detail
+
+
+@router.post(
+    "/runs/{run_id}/cancel",
+    response_model=RunDetailResponse,
+    summary="Cancel an active execution run",
+)
+def cancel_execution_run_endpoint(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        execution_service.cancel_run(db, project_id, run_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    detail = execution_service.get_run_detail(db, project_id, run_id)
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run '{run_id}' not found.",
+        )
+    return detail
+
+
+@router.post(
+    "/runs/{run_id}/rerun",
+    response_model=RunDetailResponse,
+    summary="Rerun a test suite run, recording a new execution attempt without overwriting history",
+)
+def rerun_execution_endpoint(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        execution_service.rerun_execution(db, project_id, run_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    detail = execution_service.get_run_detail(db, project_id, run_id)
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve run record after rerun.",
+        )
+    return detail
+
+
+@router.get(
+    "/runs/{run_id}/cases/{case_id}",
+    response_model=CaseExecutionDetail,
+    summary="Retrieve check-level evaluation results, evidence refs, and traces for a case execution",
+)
+def get_case_execution_endpoint(
+    project_id: str,
+    run_id: str,
+    case_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    case_detail = execution_service.get_case_execution_detail(
+        db, project_id, run_id, case_id
+    )
+    if not case_detail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Case execution for case '{case_id}' in run '{run_id}' not found.",
+        )
+    return case_detail
+
+
+@router.get(
+    "/adapter/readiness",
+    summary="Validate connection and readiness of the configured agent adapter",
+)
+def check_adapter_readiness_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    configs = list_project_configs(db, project_id)
+    if not configs:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No configurations found for project '{project_id}'.",
+        )
+    latest_config = configs[0]
+    conn_ref = latest_config.agent_connection_ref
+    live_adapter = LiveAgentAdapter(connection_ref=conn_ref)
+    is_ready, reason = live_adapter.check_readiness()
+
+    return {
+        "project_id": project_id,
+        "config_version": latest_config.version,
+        "agent_connection_ref": conn_ref,
+        "is_ready": is_ready,
+        "diagnostics": reason or "Adapter connection verified and ready.",
     }

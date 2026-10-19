@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -41,6 +42,17 @@ class CheckLevelResult(BaseModel):
     )
     verdict: CorrectnessVerdict = Field(
         ..., description="Check correctness verdict: PASS, FAIL, or INCONCLUSIVE"
+    )
+    reason_code: str = Field(
+        default="UNKNOWN",
+        description="Stable machine-readable reason code for the check outcome",
+    )
+    expected_value: Any = Field(
+        default=None,
+        description="Expected value or pattern defined by the specification",
+    )
+    actual_value: Any = Field(
+        default=None, description="Actual value or state observed in execution evidence"
     )
     explanation: str = Field(
         ...,
