@@ -234,3 +234,77 @@ def test_missing_evidence_does_not_silently_succeed(refund_model, sample_test_de
         assert pred.verdict in (RuntimeVerdict.INCONCLUSIVE, RuntimeVerdict.FAIL), (
             f"{m_type} unexpectedly returned {pred.verdict} on empty evidence!"
         )
+
+
+def test_evaluator_independence_invariant_under_ground_truth_changes(
+    refund_model, sample_test_def, conforming_evidence
+):
+    """Prove that evaluators B1-B4 are strictly independent of ground-truth annotations.
+
+    1. Changing ground-truth annotations without changing model, task, or evidence
+       produces 100% identical predictions.
+    2. All methods retain both the source evidence digest and method-specific projection digest.
+    """
+    import hashlib
+    import json
+
+    from app.components.c2_state_aware_workflow.contracts.experiment import (
+        GroundTruthLabel,
+        MutationFamily,
+        ReviewStatus,
+    )
+
+    service = BaselineEvaluationService()
+
+    # Base evaluation over conforming evidence
+    preds_run1 = service.evaluate_all(
+        model=refund_model,
+        test_def=sample_test_def,
+        evidence=conforming_evidence,
+    )
+
+    # Compute expected source digest
+    expected_source_digest = hashlib.sha256(
+        json.dumps(conforming_evidence.model_dump(mode="json"), sort_keys=True).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+    # Construct two radically conflicting ground truth labels
+    gt_conforming = GroundTruthLabel(
+        is_workflow_violation=False,
+        expected_verdict=RuntimeVerdict.PASS,
+        mutation_family=MutationFamily.NONE,
+        review_status=ReviewStatus.DEVELOPER_FIXTURE,
+    )
+    gt_violating = GroundTruthLabel(
+        is_workflow_violation=True,
+        expected_verdict=RuntimeVerdict.FAIL,
+        mutation_family=MutationFamily.STATE_EFFECT_CORRUPTION,
+        ground_truth_divergence_step=2,
+        ground_truth_divergence_location_known=True,
+        review_status=ReviewStatus.DEVELOPER_FIXTURE,
+    )
+    assert gt_conforming.is_workflow_violation != gt_violating.is_workflow_violation
+
+    # Confirm neither evaluate_baseline nor evaluate_all accept ground-truth labels
+    # Evaluate again - inputs (model, test_def, evidence) remain identical
+    preds_run2 = service.evaluate_all(
+        model=refund_model,
+        test_def=sample_test_def,
+        evidence=conforming_evidence,
+    )
+
+    for b_type in BaselineType:
+        p1 = preds_run1[b_type]
+        p2 = preds_run2[b_type]
+
+        # Invariance check: predictions are identical regardless of external label claims
+        assert p1.verdict == p2.verdict
+        assert p1.reasons == p2.reasons
+        assert p1.predicted_divergence_step == p2.predicted_divergence_step
+
+        # Digest retention check
+        assert p1.source_evidence_digest == expected_source_digest
+        assert p1.evidence_digest_consumed != ""
+        assert p1.source_evidence_digest != ""

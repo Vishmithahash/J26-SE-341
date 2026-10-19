@@ -267,4 +267,6 @@ class ResearchMetricsCalculator:
             guard_outcome_coverage=cov.get("guard_outcome_coverage"),
             selected_path_coverage=cov.get("selected_path_coverage"),
             state_effect_coverage=cov.get("state_effect_coverage"),
+            detailed_coverage=cov.get("detailed_coverage"),
+            detailed_coverage_by_model=cov.get("detailed_coverage_by_model"),
         )

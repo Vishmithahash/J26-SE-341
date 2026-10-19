@@ -299,12 +299,17 @@ class BenchmarkSuiteBuilder:
             evidence_id=f"ev_{case_id}",
             evidence_digest=evidence_digest,
             execution_provenance=ExecutionProvenance(
-                intended_execution_mode="synthetic_demonstration",
-                actual_execution_origin="scripted_synthetic_demonstration",
-                runner_id="c2_scripted_synthetic_runner",
+                intended_execution_mode="evaluator_validation",
+                actual_execution_origin="controlled_trace_evaluator_validation",
+                runner_id="c2_controlled_trace_runner",
                 runner_version="2026.1",
                 is_live_execution=False,
                 observation_capabilities=["tool_events", "state_diffs"],
+                live_capabilities_available=False,
+                unavailable_live_capabilities=[
+                    "live_agent_llm_harness",
+                    "external_production_db",
+                ],
             ),
             partition=partition,
             ground_truth=gt,
@@ -322,8 +327,16 @@ class BenchmarkSuiteBuilder:
         fixture = {
             "customer_id": 42,
             "orders": {
-                "501": {"payment_status": "PAID", "created_at": "2026-10-10T10:00:00Z"},
-                "503": {"payment_status": "PAID", "created_at": "2026-10-15T15:00:00Z"},
+                "501": {
+                    "order_id": 501,
+                    "payment_status": "PAID",
+                    "ordered_at": "2026-10-10T10:00:00Z",
+                },
+                "503": {
+                    "order_id": 503,
+                    "payment_status": "PAID",
+                    "ordered_at": "2026-10-15T15:00:00Z",
+                },
             },
         }
 
@@ -489,10 +502,21 @@ class BenchmarkSuiteBuilder:
                     tool_name="request_refund",
                     arguments={"order_id": 503},
                 ),
+                RuntimeEvent(
+                    event_index=2,
+                    event_id=f"{case_id}_e3",
+                    tool_name="verify_refund_status",
+                    arguments={"order_id": 503},
+                ),
             ]
             obs = [
                 StateObservation(event_index=0, before_state={}, after_state={}),
                 StateObservation(event_index=1, before_state={}, after_state={}),
+                StateObservation(
+                    event_index=2,
+                    before_state={"payment_status": "PAID"},
+                    after_state={"payment_status": "REFUNDED"},
+                ),
             ]
             gt = GroundTruthLabel(
                 is_workflow_violation=True,
@@ -659,7 +683,13 @@ class BenchmarkSuiteBuilder:
                     arguments={"order_id": order_num, "reason": "Skipped"},
                 )
             ]
-            obs = [StateObservation(event_index=0, before_state={}, after_state={})]
+            obs = [
+                StateObservation(
+                    event_index=0,
+                    before_state={"order_status": "PROCESSING"},
+                    after_state={"order_status": "CANCELLED"},
+                )
+            ]
             gt = GroundTruthLabel(
                 is_workflow_violation=True,
                 expected_verdict=RuntimeVerdict.FAIL,
@@ -836,7 +866,16 @@ class BenchmarkSuiteBuilder:
                     },
                 )
             ]
-            obs = [StateObservation(event_index=0, before_state={}, after_state={})]
+            obs = [
+                StateObservation(
+                    event_index=0,
+                    before_state={"shipping_address": "123 Main St"},
+                    after_state={
+                        "shipping_address": "456 Market St, Suite 200",
+                        "order_status": "PROCESSING",
+                    },
+                )
+            ]
             gt = GroundTruthLabel(
                 is_workflow_violation=True,
                 expected_verdict=RuntimeVerdict.FAIL,
@@ -1011,7 +1050,13 @@ class BenchmarkSuiteBuilder:
                     },
                 )
             ]
-            obs = [StateObservation(event_index=0, before_state={}, after_state={})]
+            obs = [
+                StateObservation(
+                    event_index=0,
+                    before_state={"booking_status": "CONFIRMED"},
+                    after_state={"booking_status": "CANCELLED"},
+                )
+            ]
             gt = GroundTruthLabel(
                 is_workflow_violation=True,
                 expected_verdict=RuntimeVerdict.FAIL,
@@ -1175,7 +1220,13 @@ class BenchmarkSuiteBuilder:
                     arguments={"student_id": student_id, "course_id": course_id},
                 )
             ]
-            obs = [StateObservation(event_index=0, before_state={}, after_state={})]
+            obs = [
+                StateObservation(
+                    event_index=0,
+                    before_state={"enrollment_status": "NOT_ENROLLED"},
+                    after_state={"enrollment_status": "ENROLLED"},
+                )
+            ]
             gt = GroundTruthLabel(
                 is_workflow_violation=True,
                 expected_verdict=RuntimeVerdict.FAIL,

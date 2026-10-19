@@ -26,6 +26,7 @@ class DatasetPartition(str, Enum):
 
     DEVELOPMENT = "DEVELOPMENT"
     HELD_OUT = "HELD_OUT"
+    ALL_CASES = "ALL_CASES"
 
 
 class ReviewStatus(str, Enum):
@@ -201,6 +202,8 @@ class MethodResearchMetrics(BaseModel):
     guard_outcome_coverage: float | None = None
     selected_path_coverage: float | None = None
     state_effect_coverage: float | None = None
+    detailed_coverage: Any = None
+    detailed_coverage_by_model: dict[str, Any] | None = None
 
 
 class ExperimentComparisonReport(BaseModel):
@@ -220,6 +223,9 @@ class ExperimentComparisonReport(BaseModel):
     valid_test_count: int = 0
     total_test_count: int = 0
 
+    metrics_by_partition: dict[str, dict[str, MethodResearchMetrics]] = Field(
+        default_factory=dict
+    )
     metrics_by_method: dict[str, MethodResearchMetrics] = Field(default_factory=dict)
     metrics_by_domain: dict[str, dict[str, BinaryClassificationMetrics]] = Field(
         default_factory=dict
@@ -232,4 +238,8 @@ class ExperimentComparisonReport(BaseModel):
     )
 
     acceptance_criteria_results: dict[str, bool] = Field(default_factory=dict)
+    acceptance_criteria_by_method: dict[str, dict[str, bool | None]] = Field(
+        default_factory=dict
+    )
+    acceptance_notes_by_method: dict[str, list[str]] = Field(default_factory=dict)
     acceptance_notes: list[str] = Field(default_factory=list)

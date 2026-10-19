@@ -156,6 +156,7 @@ def upgrade() -> None:
         sa.Column("first_divergence_predicted_step", sa.Integer(), nullable=True),
         sa.Column("first_divergence_event_id", sa.String(length=64), nullable=True),
         sa.Column("evaluator_timing_ms", sa.Float(), server_default="0.0", nullable=False),
+        sa.Column("source_evidence_digest", sa.String(length=64), nullable=True),
         sa.Column("evidence_digest_consumed", sa.String(length=64), nullable=False),
         sa.Column("is_excluded", sa.Boolean(), server_default="false", nullable=False),
         sa.Column("exclusion_reason", sa.String(length=256), nullable=True),

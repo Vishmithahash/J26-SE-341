@@ -74,5 +74,6 @@ class FullC2Evaluator:
             predicted_divergence_step=pred_step,
             evaluator_timing_ms=eval_result.evaluator_timing_ms,
             evidence_digest_consumed=evidence_digest,
+            detailed_coverage=eval_result.detailed_coverage,
             evaluated_at=eval_result.evaluated_at,
         )

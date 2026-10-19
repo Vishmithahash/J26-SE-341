@@ -498,6 +498,9 @@ class C2ExperimentCaseResult(Base):
     evaluator_timing_ms: Mapped[float] = mapped_column(
         Float, default=0.0, nullable=False
     )
+    source_evidence_digest: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     evidence_digest_consumed: Mapped[str] = mapped_column(String(64), nullable=False)
 
     is_excluded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

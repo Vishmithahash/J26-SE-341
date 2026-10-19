@@ -478,26 +478,72 @@ Proposal targets are configured as strict acceptance checks:
 
 ---
 
-## 19. Measured Research Results
+## 19. Measured Research Results (Reconciled)
 
-Evaluated over the frozen 125-case multi-domain benchmark (500 evaluations across B1–B4):
+Evaluated over the frozen 125-case multi-domain benchmark (500 evaluations across B1–B4). The dataset comprises 5 distinct EFSM workflows across 3 domains partitioned strictly into 75 `DEVELOPMENT` cases (60%) and 50 `HELD_OUT` cases (40%) with zero parent-child partition leakage.
 
-| Metric | B1 (Final-State) | B2 (Trace-Only) | B3 (Milestone) | B4 (Full C2) | Proposal Target |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Precision** | 1.0000 (50/50) | 1.0000 (48/48) | 1.0000 (50/50) | **1.0000 (60/60)** | $\ge 0.85$ |
-| **Recall** | 0.8333 (50/60) | 0.8000 (48/60) | 0.8333 (50/60) | **1.0000 (60/60)** | $\ge 0.85$ |
-| **F1-Score** | 0.9091 | 0.8889 | 0.9091 | **1.0000** | $\ge 0.85$ |
-| **Localization Accuracy** | *Unavailable* | 0.6667 (40/60) | *Unavailable* | **1.0000 (60/60)** | $\ge 0.80$ |
-| **Mutation Detection** | 0.8333 (50/60) | 0.8000 (48/60) | 0.8333 (50/60) | **1.0000 (60/60)** | $\ge 0.85$ |
-| **State Fault Detection** | 0.8000 (12/15) | 0.0000 (0/15) | 0.8000 (12/15) | **1.0000 (15/15)** | $\ge 0.85$ |
-| **Inconclusive Rate** | 0.0% (0/125) | 0.0% (0/125) | 0.0% (0/125) | **0.0% (0/125)** | $\le 10\%$ |
+### A. Development Partition (75 Cases: 45 Violations, 30 Conforming)
 
-*Key Empirical Finding:* B2 (Trace-Only) completely fails to detect state-effect mutations (0.0000), proving that sequence matching without database state diffing is blind to silent data corruption. B1 and B3 miss intermediate ordering and entity violations and cannot provide localization. Full C2 (B4) satisfies all research targets.
+| Metric | B1 (Final-State) | B2 (Trace-Only) | B3 (Milestone) | B4 (Full C2) | Proposal Target | B4 Pass/Fail |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Sample Count** | 75 | 75 | 75 | **75** | — | — |
+| **TP / FP / TN / FN** | 30 / 0 / 30 / 15 | 30 / 0 / 30 / 15 | 42 / 0 / 30 / 3 | **45 / 0 / 30 / 0** | — | — |
+| **Precision** | 1.0000 (30/30) | 1.0000 (30/30) | 1.0000 (42/42) | **1.0000 (45/45)** | $\ge 0.85$ | **PASS** |
+| **Recall** | 0.6667 (30/45) | 0.6667 (30/45) | 0.9333 (42/45) | **1.0000 (45/45)** | $\ge 0.85$ | **PASS** |
+| **F1-Score** | 0.8000 | 0.8000 | 0.9655 | **1.0000** | $\ge 0.85$ | **PASS** |
+| **Localization Accuracy** | *Unavailable* | 0.6667 (30/45) | *Unavailable* | **1.0000 (45/45)** | $\ge 0.80$ | **PASS** |
+| **Mutation Detection** | 0.6667 (30/45) | 0.6667 (30/45) | 0.9333 (42/45) | **1.0000 (45/45)** | $\ge 0.85$ | **PASS** |
+| **State Fault Detection** | 1.0000 (15/15) | 0.0000 (0/15) | 1.0000 (15/15) | **1.0000 (15/15)** | $\ge 0.85$ | **PASS** |
+| **Inconclusive Rate** | 0.0% (0/75) | 0.0% (0/75) | 0.0% (0/75) | **0.0% (0/75)** | $\le 10\%$ | **PASS** |
+| **Overhead (Median / p95)**| 0.188ms / 0.390ms | 0.198ms / 0.407ms | 0.173ms / 0.323ms | **0.827ms / 2.021ms**| $\le 2000$ms | **PASS** |
 
-### Overhead Profile (Cache Bypassed)
-- **Runner-Only Execution:** median = 0.05ms, p95 = 0.12ms
-- **Runner + State Observation:** median = 0.12ms, p95 = 0.28ms
-- **Evaluator-Only Processing (B4):** median = 1.84ms, p95 = 3.42ms
+### B. Held-Out Partition (50 Cases: 30 Violations, 20 Conforming)
+
+| Metric | B1 (Final-State) | B2 (Trace-Only) | B3 (Milestone) | B4 (Full C2) | Proposal Target | B4 Pass/Fail |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Sample Count** | 50 | 50 | 50 | **50** | — | — |
+| **TP / FP / TN / FN** | 20 / 0 / 20 / 10 | 20 / 0 / 20 / 10 | 28 / 0 / 20 / 2 | **30 / 0 / 20 / 0** | — | — |
+| **Precision** | 1.0000 (20/20) | 1.0000 (20/20) | 1.0000 (28/28) | **1.0000 (30/30)** | $\ge 0.85$ | **PASS** |
+| **Recall** | 0.6667 (20/30) | 0.6667 (20/30) | 0.9333 (28/30) | **1.0000 (30/30)** | $\ge 0.85$ | **PASS** |
+| **F1-Score** | 0.8000 | 0.8000 | 0.9655 | **1.0000** | $\ge 0.85$ | **PASS** |
+| **Localization Accuracy** | *Unavailable* | 0.6667 (20/30) | *Unavailable* | **1.0000 (30/30)** | $\ge 0.80$ | **PASS** |
+| **Mutation Detection** | 0.6667 (20/30) | 0.6667 (20/30) | 0.9333 (28/30) | **1.0000 (30/30)** | $\ge 0.85$ | **PASS** |
+| **State Fault Detection** | 1.0000 (10/10) | 0.0000 (0/10) | 1.0000 (10/10) | **1.0000 (10/10)** | $\ge 0.85$ | **PASS** |
+| **Inconclusive Rate** | 0.0% (0/50) | 0.0% (0/50) | 0.0% (0/50) | **0.0% (0/50)** | $\le 10\%$ | **PASS** |
+| **Overhead (Median / p95)**| 0.182ms / 0.290ms | 0.205ms / 0.303ms | 0.190ms / 0.350ms | **0.841ms / 1.792ms**| $\le 2000$ms | **PASS** |
+
+### C. Overall Demonstration Summary (125 Cases: 75 Violations, 50 Conforming)
+
+| Metric | B1 (Final-State) | B2 (Trace-Only) | B3 (Milestone) | B4 (Full C2) | Proposal Target | B4 Pass/Fail |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Sample Count** | 125 | 125 | 125 | **125** | — | — |
+| **TP / FP / TN / FN** | 50 / 0 / 50 / 25 | 50 / 0 / 50 / 25 | 70 / 0 / 50 / 5 | **75 / 0 / 50 / 0** | — | — |
+| **Precision** | 1.0000 (50/50) | 1.0000 (50/50) | 1.0000 (70/70) | **1.0000 (75/75)** | $\ge 0.85$ | **PASS** |
+| **Recall** | 0.6667 (50/75) | 0.6667 (50/75) | 0.9333 (70/75) | **1.0000 (75/75)** | $\ge 0.85$ | **PASS** |
+| **F1-Score** | 0.8000 | 0.8000 | 0.9655 | **1.0000** | $\ge 0.85$ | **PASS** |
+| **Localization Accuracy** | *Unavailable* | 0.6667 (50/75) | *Unavailable* | **1.0000 (75/75)** | $\ge 0.80$ | **PASS** |
+| **Mutation Detection** | 0.6667 (50/75) | 0.6667 (50/75) | 0.9333 (70/75) | **1.0000 (75/75)** | $\ge 0.85$ | **PASS** |
+| **State Fault Detection** | 1.0000 (25/25) | 0.0000 (0/25) | 1.0000 (25/25) | **1.0000 (25/25)** | $\ge 0.85$ | **PASS** |
+| **Inconclusive Rate** | 0.0% (0/125) | 0.0% (0/125) | 0.0% (0/125) | **0.0% (0/125)** | $\le 10\%$ | **PASS** |
+| **Overhead (Median / p95)**| 0.188ms / 0.316ms | 0.201ms / 0.359ms | 0.185ms / 0.323ms | **0.838ms / 1.792ms**| $\le 2000$ms | **PASS** |
+
+### D. Mathematical Reconciliation & Arithmetic Lower Bound
+- **The Defect in Previous Reports:** Previous documentation reported 15 state-effect faults in DEVELOPMENT, 0 detected by B2, yet mistakenly stated an overall FN count of 12 for B2.
+- **Arithmetic Invariant:** Missing all members of a labelled positive subset $S$ ($|S|=15$ in DEVELOPMENT, $|S|=25$ in ALL_CASES) mathematically guarantees that the total false negative count cannot be smaller than $|S|$:
+  $$FN \ge |S_{\text{missed}}|$$
+- **Reconciled Accounting:**
+  - B1 (Final-State-Only) is completely blind to intermediate skipped steps that still reach the final state $\rightarrow$ misses all 25 `SKIPPED_STEP` violations (DEV FN=15, HELD_OUT FN=10, ALL FN=25).
+  - B2 (Trace-Only) is completely blind to database state mutations when tool calls match syntactically $\rightarrow$ misses all 25 `STATE_EFFECT_MUTATION` violations (DEV FN=15, HELD_OUT FN=10, ALL FN=25).
+  - B3 (Milestone-Based) misses fine-grained intermediate state corruption if the terminal state matches $\rightarrow$ misses 5 state-effect cases in refund workflow (DEV FN=3, HELD_OUT FN=2, ALL FN=5).
+  - B4 (Full C2) achieves 100% detection ($FN=0$, Recall=1.0) and 100% first-divergence localization across all partitions.
+
+### E. Workflow Coverage Breakdown (B4 Only)
+Coverage metrics are dynamically calculated from pinned target sets and retained evidence (decoupled from binary fault detection):
+- **Transition Coverage:** 89.47% (17 covered / 19 total transitions across evaluated workflows)
+- **Guard Outcome Coverage:** 40.91% (9 covered / 22 evaluated guard branches)
+- **Selected Path Coverage:** 90.91% (10 covered / 11 selected model paths)
+- **State Effect Coverage:** 100.00% (5 covered / 5 expected state effect rules)
+- *Baselines B1–B3:* Do not evaluate model transitions or guards, so coverage metrics are explicitly reported as `null` / `Unavailable` with documented rationale.
 
 ---
 
@@ -511,9 +557,11 @@ python -m app.components.c2_state_aware_workflow.experiments.cli --output-dir ba
 ```
 
 Outputs:
-- `c2_benchmark_manifest.json`: 125 partitioned benchmark test cases.
+- `c2_benchmark_manifest.json`: 125 partitioned benchmark test cases with hashes.
 - `c2_benchmark_report.json`: Full comparative research report across B1-B4 with acceptance evaluations.
-- `c2_benchmark_metrics.csv`: Comparative summary CSV ready for paper/report tables.
+- `c2_benchmark_metrics.csv`: Comparative summary CSV across DEVELOPMENT, HELD_OUT, and ALL_CASES.
+- `c2_case_predictions.csv`: Detailed case-level predictions, labels, and evidence hashes.
+- `c2_coverage_targets.json`: Pinned transition, guard, path, and state-effect coverage target sets.
 
 ### Day 3 Part B REST API Endpoints
 Exposed under prefix `/api/v1/c2`:
@@ -532,7 +580,7 @@ Exposed under prefix `/api/v1/c2`:
 ## 21. Verification Commands & Final Traceability
 
 ```powershell
-# 1. Run full backend test suite (184 passed repository-wide, 118 C2 tests)
+# 1. Run full backend test suite (186 passed repository-wide, 120 C2 tests)
 .\.venv\Scripts\python.exe -m pytest
 
 # 2. Run linter and formatting checks (100% clean across all 94 files)
@@ -545,6 +593,7 @@ $env:DATABASE_URL="postgresql://test_user:test_pass@localhost:5432/test_db?sslmo
 .\.venv\Scripts\python.exe -m alembic downgrade c2_005_experiments_and_baselines:c2_004_integration_coverage --sql
 ```
 
-For complete proposal requirement traceability (FR1–FR12, NFR1–NFR5) and implementation audit details, refer to:
+For complete proposal requirement traceability (FR1–FR12, NFR1–NFR14) and implementation audit details, refer to:
 `app/components/c2_state_aware_workflow/docs/c2_traceability_audit.md`.
+
 

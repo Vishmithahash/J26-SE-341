@@ -131,43 +131,55 @@ def run_benchmark_pipeline(output_dir: str | None = None) -> int:
         f"  ✓ Observation overhead delta: {overhead_report.observation_overhead_ms}ms ({overhead_report.observation_overhead_ratio * 100:.2f}%)"
     )
 
-    # 4. Print Metrics Comparison Table
+    # 4. Print Metrics Comparison Table across partitions
     print(
-        "\n[Step 4/4] Research Metrics Comparison Table (Workflow Violations = Positive Class):"
+        "\n[Step 4/4] Research Metrics Comparison Table (Positive Class = Workflow Violations):"
     )
-    print("-" * 100)
-    print(
-        f"{'Method':<25} | {'Prec':<6} | {'Recall':<6} | {'F1':<6} | {'Loc Acc':<8} | {'Mutation':<8} | {'State Flts':<10} | {'Med (ms)':<8}"
-    )
-    print("-" * 100)
-    for m_id, m_metrics in report.metrics_by_method.items():
-        det = m_metrics.detection_metrics
-        loc = m_metrics.localization_metrics
-        p_str = f"{det.precision:.4f}" if det.precision is not None else "N/A"
-        r_str = f"{det.recall:.4f}" if det.recall is not None else "N/A"
-        f1_str = f"{det.f1_score:.4f}" if det.f1_score is not None else "N/A"
-        loc_str = f"{loc.accuracy:.4f}" if loc.accuracy is not None else "N/A"
-        mut_str = (
-            f"{det.mutation_detection_score:.4f}"
-            if det.mutation_detection_score is not None
-            else "N/A"
+    for part_name, part_metrics in report.metrics_by_partition.items():
+        sample_cnt = (
+            next(iter(part_metrics.values())).sample_count if part_metrics else 0
         )
-        eff_str = (
-            f"{det.state_effect_fault_detection_score:.4f}"
-            if det.state_effect_fault_detection_score is not None
-            else "N/A"
-        )
-        med_str = f"{m_metrics.overhead_median_ms:.2f}"
+        print(f"\n--- PARTITION: {part_name} (n={sample_cnt}) ---")
+        print("-" * 115)
         print(
-            f"{m_id:<25} | {p_str:<6} | {r_str:<6} | {f1_str:<6} | {loc_str:<8} | {mut_str:<8} | {eff_str:<10} | {med_str:<8}"
+            f"{'Method':<25} | {'TP':<4} | {'FP':<4} | {'TN':<4} | {'FN':<4} | {'Prec':<6} | {'Recall':<6} | {'F1':<6} | {'Loc Acc':<8} | {'Mutation':<8} | {'State Flts':<10} | {'Med (ms)':<8}"
         )
-    print("-" * 100)
+        print("-" * 115)
+        for m_id, m_metrics in part_metrics.items():
+            det = m_metrics.detection_metrics
+            loc = m_metrics.localization_metrics
+            p_str = f"{det.precision:.4f}" if det.precision is not None else "N/A"
+            r_str = f"{det.recall:.4f}" if det.recall is not None else "N/A"
+            f1_str = f"{det.f1_score:.4f}" if det.f1_score is not None else "N/A"
+            loc_str = f"{loc.accuracy:.4f}" if loc.accuracy is not None else "N/A"
+            mut_str = (
+                f"{det.mutation_detection_score:.4f}"
+                if det.mutation_detection_score is not None
+                else "N/A"
+            )
+            eff_str = (
+                f"{det.state_effect_fault_detection_score:.4f}"
+                if det.state_effect_fault_detection_score is not None
+                else "N/A"
+            )
+            med_str = f"{m_metrics.overhead_median_ms:.2f}"
+            print(
+                f"{m_id:<25} | {det.true_positives:<4} | {det.false_positives:<4} | {det.true_negatives:<4} | {det.false_negatives:<4} | {p_str:<6} | {r_str:<6} | {f1_str:<6} | {loc_str:<8} | {mut_str:<8} | {eff_str:<10} | {med_str:<8}"
+            )
+        print("-" * 115)
 
-    # Acceptance Targets Evaluation
-    print("\nAcceptance Targets Verification:")
-    for target_key, passed in report.acceptance_criteria_results.items():
-        mark = "✓ PASS" if passed else "✗ FAIL"
-        print(f"  [{mark}] {target_key}")
+    # Acceptance Targets Verification by Method
+    print("\nAcceptance Targets Verification by Method (Proposal Thresholds):")
+    for m_id, targets in report.acceptance_criteria_by_method.items():
+        print(f"  Method: {m_id}")
+        for target_key, passed in targets.items():
+            if passed is True:
+                mark = "✓ PASS"
+            elif passed is False:
+                mark = "✗ FAIL"
+            else:
+                mark = "- N/A (Unavailable)"
+            print(f"    [{mark}] {target_key}")
 
     # Export Files
     out_path = Path(output_dir or "backend_c2_benchmark_results")
@@ -176,28 +188,71 @@ def run_benchmark_pipeline(output_dir: str | None = None) -> int:
     manifest_file = out_path / "c2_benchmark_manifest.json"
     report_file = out_path / "c2_benchmark_report.json"
     csv_file = out_path / "c2_benchmark_metrics.csv"
+    case_predictions_file = out_path / "c2_benchmark_case_predictions.csv"
+    coverage_targets_file = out_path / "c2_benchmark_coverage_targets.json"
 
     manifest_file.write_text(json.dumps(manifest.model_dump(mode="json"), indent=2))
     report_file.write_text(json.dumps(report.model_dump(mode="json"), indent=2))
 
-    # CSV summary
+    # CSV metrics summary partitioned by partition and method
     lines = [
-        "method_id,precision,recall,f1_score,localization_accuracy,mutation_detection,state_fault_detection,overhead_median_ms,overhead_p95_ms"
+        "partition,method_id,sample_count,tp,fp,tn,fn,precision,recall,f1_score,localization_accuracy,mutation_detection,state_fault_detection,overhead_median_ms,overhead_p95_ms"
     ]
-    for m_id, m_metrics in report.metrics_by_method.items():
-        det = m_metrics.detection_metrics
-        loc = m_metrics.localization_metrics
-        lines.append(
-            f"{m_id},{det.precision},{det.recall},{det.f1_score},{loc.accuracy},"
-            f"{det.mutation_detection_score},{det.state_effect_fault_detection_score},"
-            f"{m_metrics.overhead_median_ms},{m_metrics.overhead_p95_ms}"
-        )
+    for part_name, part_metrics in report.metrics_by_partition.items():
+        for m_id, m_metrics in part_metrics.items():
+            det = m_metrics.detection_metrics
+            loc = m_metrics.localization_metrics
+            lines.append(
+                f"{part_name},{m_id},{m_metrics.sample_count},{det.true_positives},{det.false_positives},"
+                f"{det.true_negatives},{det.false_negatives},{det.precision},{det.recall},{det.f1_score},"
+                f"{loc.accuracy},{det.mutation_detection_score},{det.state_effect_fault_detection_score},"
+                f"{m_metrics.overhead_median_ms},{m_metrics.overhead_p95_ms}"
+            )
     csv_file.write_text("\n".join(lines))
 
+    # Per-case predictions export
+    case_lines = [
+        "case_id,domain,workflow,partition,mutation_family,has_state_effect_fault,ground_truth_violation,expected_verdict,method_id,predicted_verdict,predicted_violation,can_localize,predicted_step,source_evidence_digest,evidence_digest_consumed"
+    ]
+    cases_by_id = {c.case_id: c for c in manifest.cases}
+    for res in case_results:
+        c_record = cases_by_id.get(res.case_id)
+        if not c_record:
+            continue
+        gt = c_record.ground_truth
+        case_lines.append(
+            f"{res.case_id},{c_record.domain},{c_record.workflow_name},{res.partition},"
+            f"{gt.mutation_family.value},{gt.has_state_effect_fault},{gt.is_workflow_violation},"
+            f"{gt.expected_verdict.value},{res.method_id},{res.verdict},{res.is_violation},"
+            f"{res.can_localize},{res.first_divergence_predicted_step},"
+            f"{res.source_evidence_digest or ''},{res.evidence_digest_consumed}"
+        )
+    case_predictions_file.write_text("\n".join(case_lines))
+
+    # Coverage targets export (B4)
+    b4_metrics = report.metrics_by_method.get(BaselineType.B4_FULL_C2.value)
+    coverage_export = {}
+    if b4_metrics and b4_metrics.detailed_coverage_by_model:
+        for mid, det_cov in b4_metrics.detailed_coverage_by_model.items():
+            coverage_export[mid] = (
+                det_cov.model_dump(mode="json")
+                if hasattr(det_cov, "model_dump")
+                else det_cov
+            )
+    elif b4_metrics and b4_metrics.detailed_coverage:
+        coverage_export["primary"] = (
+            b4_metrics.detailed_coverage.model_dump(mode="json")
+            if hasattr(b4_metrics.detailed_coverage, "model_dump")
+            else b4_metrics.detailed_coverage
+        )
+    coverage_targets_file.write_text(json.dumps(coverage_export, indent=2))
+
     print("\nSaved benchmark artifacts:")
-    print(f"  - Manifest: {manifest_file.resolve()}")
-    print(f"  - Report:   {report_file.resolve()}")
-    print(f"  - CSV:      {csv_file.resolve()}")
+    print(f"  - Manifest:         {manifest_file.resolve()}")
+    print(f"  - Report:           {report_file.resolve()}")
+    print(f"  - Metrics CSV:      {csv_file.resolve()}")
+    print(f"  - Predictions CSV:  {case_predictions_file.resolve()}")
+    print(f"  - Coverage Targets: {coverage_targets_file.resolve()}")
     print("\nPipeline execution completed successfully.")
     return 0
 

@@ -204,3 +204,62 @@ def test_overhead_profiler_computes_percentiles():
     assert stats.median_ms > 0.0
     assert stats.p95_ms >= stats.median_ms
     assert len(stats.raw_measurements_ms) == 10
+
+
+def test_missing_all_members_of_positive_subset_cannot_yield_fewer_fn_than_subset_size():
+    """Prove that missing all members of a positive subset cannot yield fewer false negatives than that subset contains.
+
+    If there are N positive cases in subset S (e.g. 15 state-effect faults or 25 skipped inspection steps),
+    and an evaluator misses all N members (predicts conforming PASS or INCONCLUSIVE), then total FN >= N.
+    An accounting claim where 15 positive subset members are missed yet total FN is 12 is mathematically impossible.
+    """
+    # 15 positive subset cases (state-effect faults) all missed as PASS
+    state_fault_cases = [
+        (
+            _make_case(
+                f"sf_{i}",
+                is_violation=True,
+                has_state_effect_fault=True,
+                mutation_family=MutationFamily.STATE_EFFECT_CORRUPTION,
+            ),
+            _make_prediction(RuntimeVerdict.PASS),
+        )
+        for i in range(15)
+    ]
+    # Plus 30 true positives on other mutation types
+    detected_cases = [
+        (
+            _make_case(
+                f"det_{i}",
+                is_violation=True,
+                mutation_family=MutationFamily.OUT_OF_ORDER_ACTION,
+            ),
+            _make_prediction(RuntimeVerdict.FAIL),
+        )
+        for i in range(30)
+    ]
+    # Plus 30 conforming negatives correctly predicted
+    conforming_cases = [
+        (
+            _make_case(f"conf_{i}", is_violation=False),
+            _make_prediction(RuntimeVerdict.PASS),
+        )
+        for i in range(30)
+    ]
+
+    all_pairs = state_fault_cases + detected_cases + conforming_cases
+    metrics = ResearchMetricsCalculator.calculate_binary_metrics(all_pairs)
+
+    # Evaluator detected 0 of the 15 state effect faults
+    assert metrics.state_effect_fault_detection_score == 0.0
+
+    # Total false negatives MUST be at least the size of the missed positive subset
+    subset_size = len(state_fault_cases)  # 15
+    assert metrics.false_negatives >= subset_size, (
+        f"Contradiction: Missed all {subset_size} positive subset members, "
+        f"but false_negatives is only {metrics.false_negatives}!"
+    )
+    assert metrics.false_negatives == 15
+    assert metrics.true_positives == 30
+    assert metrics.true_negatives == 30
+    assert metrics.false_positives == 0

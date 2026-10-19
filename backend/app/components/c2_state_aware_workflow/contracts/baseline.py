@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,5 +53,7 @@ class BaselinePredictionContract(BaseModel):
     divergence_localization_unavailable_reason: str | None = None
 
     evaluator_timing_ms: float = 0.0
+    source_evidence_digest: str = ""
     evidence_digest_consumed: str = ""
+    detailed_coverage: Any = None
     evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

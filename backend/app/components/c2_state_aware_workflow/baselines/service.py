@@ -3,6 +3,8 @@
 Evaluates frozen execution evidence across B1, B2, B3, and B4 using explicit evidence projections.
 """
 
+import hashlib
+import json
 from typing import Any
 
 from app.components.c2_state_aware_workflow.baselines.b1_final_state import (
@@ -56,10 +58,15 @@ class BaselineEvaluationService:
         pinned_content_hash: str | None = None,
     ) -> BaselinePredictionContract:
         """Evaluate a single baseline over its permitted projection."""
+        source_digest = hashlib.sha256(
+            json.dumps(evidence.model_dump(mode="json"), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+        pred: BaselinePredictionContract
         match baseline_type:
             case BaselineType.B1_FINAL_STATE_ONLY:
                 proj, digest = project_evidence_for_b1(evidence)
-                return self.b1.evaluate(
+                pred = self.b1.evaluate(
                     model=model,
                     test_def=test_def,
                     projected_evidence=proj,
@@ -68,7 +75,7 @@ class BaselineEvaluationService:
                 )
             case BaselineType.B2_TRACE_ONLY:
                 proj, digest = project_evidence_for_b2(evidence)
-                return self.b2.evaluate(
+                pred = self.b2.evaluate(
                     model=model,
                     test_def=test_def,
                     projected_evidence=proj,
@@ -77,7 +84,7 @@ class BaselineEvaluationService:
                 )
             case BaselineType.B3_MILESTONE_BASED:
                 proj, digest = project_evidence_for_b3(evidence, model=model)
-                return self.b3.evaluate(
+                pred = self.b3.evaluate(
                     model=model,
                     test_def=test_def,
                     projected_evidence=proj,
@@ -86,7 +93,7 @@ class BaselineEvaluationService:
                 )
             case BaselineType.B4_FULL_C2:
                 proj, digest = project_evidence_for_b4(evidence)
-                return self.b4.evaluate(
+                pred = self.b4.evaluate(
                     model=model,
                     test_def=test_def,
                     projected_evidence=proj,
@@ -95,6 +102,8 @@ class BaselineEvaluationService:
                     model_is_approved=model_is_approved,
                     pinned_content_hash=pinned_content_hash,
                 )
+
+        return pred.model_copy(update={"source_evidence_digest": source_digest})
 
     def evaluate_all(
         self,

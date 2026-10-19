@@ -128,23 +128,36 @@ class TraceToEFSMAlignmentEngine:
 
         if "orders" in fixture_ctx and isinstance(fixture_ctx["orders"], (list, dict)):
             raw_orders = fixture_ctx["orders"]
-            orders_list = (
-                list(raw_orders.values())
-                if isinstance(raw_orders, dict)
-                else list(raw_orders)
-            )
+            if isinstance(raw_orders, dict):
+                orders_list = []
+                for k, v in raw_orders.items():
+                    if isinstance(v, dict):
+                        item = copy.deepcopy(v)
+                        if "order_id" not in item and "id" not in item:
+                            try:
+                                item["order_id"] = int(k)
+                            except ValueError:
+                                item["order_id"] = k
+                        orders_list.append(item)
+                    else:
+                        orders_list.append(v)
+            else:
+                orders_list = list(raw_orders)
+
             paid_orders = [
                 o
                 for o in orders_list
-                if o.get("payment_status") == "PAID" or o.get("status") == "PAID"
+                if isinstance(o, dict)
+                and (o.get("payment_status") == "PAID" or o.get("status") == "PAID")
             ]
             if paid_orders:
                 paid_orders.sort(
-                    key=lambda x: str(x.get("ordered_at", "")), reverse=True
+                    key=lambda x: str(x.get("ordered_at") or x.get("created_at") or ""),
+                    reverse=True,
                 )
-                initial_vars["target_latest_order_id"] = paid_orders[0].get(
-                    "order_id"
-                ) or paid_orders[0].get("id")
+                detected_id = paid_orders[0].get("order_id") or paid_orders[0].get("id")
+                if detected_id is not None:
+                    initial_vars["target_latest_order_id"] = detected_id
 
         # Initialize configurations with initial state
         active_configs: list[FeasibleConfiguration] = [
