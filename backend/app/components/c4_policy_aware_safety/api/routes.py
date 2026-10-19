@@ -30,6 +30,12 @@ from app.components.c4_policy_aware_safety.contracts.evaluator import (
 from app.components.c4_policy_aware_safety.contracts.evidence import (
     EvaluationEvidencePackage,
 )
+from app.components.c4_policy_aware_safety.contracts.execution import (
+    C4ExecutionRequest,
+    C4ExecutionRunRecord,
+    C4RuntimeReadinessReport,
+    TargetExecutionMode,
+)
 from app.components.c4_policy_aware_safety.contracts.future import TestCaseKind
 from app.components.c4_policy_aware_safety.contracts.generation import (
     GenerationReport,
@@ -53,6 +59,11 @@ from app.components.c4_policy_aware_safety.derivation.intake import normalize_ar
 from app.components.c4_policy_aware_safety.evaluator.engine import (
     DeterministicPolicyEvaluator,
 )
+from app.components.c4_policy_aware_safety.execution.adapters import (
+    LiveAUTAdapterStub,
+    SimulatedC4ApplicationAdapter,
+)
+from app.components.c4_policy_aware_safety.execution.runner import C4ExecutionRunner
 from app.components.c4_policy_aware_safety.freezing.service import CaseFreezingService
 from app.components.c4_policy_aware_safety.generation.generator import (
     PolicyTestGenerator,
@@ -751,4 +762,157 @@ def export_evaluator_payload(
             detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
         )
     return case.build_evaluator_payload()
+
+
+# 9. Phase 3: Controlled Execution, Readiness, and Reporting
+@router.post(
+    "/runs/readiness",
+    response_model=C4RuntimeReadinessReport,
+    summary="Check runtime readiness of a case, domain binding, and execution adapter",
+)
+def check_execution_readiness(
+    project_id: str,
+    exec_req: C4ExecutionRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, exec_req.case_id, exec_req.case_version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{exec_req.case_id}' v{exec_req.case_version} not found in project '{project_id}'.",
+        )
+    binding = repo.get_domain_binding(project_id, exec_req.binding_id, exec_req.binding_version)
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain binding '{exec_req.binding_id}' v{exec_req.binding_version} not found in project '{project_id}'.",
+        )
+
+    if exec_req.execution_mode == TargetExecutionMode.LIVE_AUT:
+        adapter = LiveAUTAdapterStub()
+    else:
+        adapter = SimulatedC4ApplicationAdapter(behavior=exec_req.simulated_behavior)
+
+    runner = C4ExecutionRunner(repo)
+    return runner.check_readiness(case, binding, adapter)
+
+
+@router.post(
+    "/runs/execute",
+    response_model=C4ExecutionRunRecord,
+    status_code=status.HTTP_200_OK,
+    summary="Execute a frozen test case through registered adapter",
+)
+def execute_test_case(
+    project_id: str,
+    exec_req: C4ExecutionRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, exec_req.case_id, exec_req.case_version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{exec_req.case_id}' v{exec_req.case_version} not found in project '{project_id}'.",
+        )
+    contract = repo.get_contract_version(project_id, exec_req.contract_id, exec_req.contract_version)
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Policy contract '{exec_req.contract_id}' v{exec_req.contract_version} not found in project '{project_id}'.",
+        )
+    binding = repo.get_domain_binding(project_id, exec_req.binding_id, exec_req.binding_version)
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain binding '{exec_req.binding_id}' v{exec_req.binding_version} not found in project '{project_id}'.",
+        )
+
+    if exec_req.execution_mode == TargetExecutionMode.LIVE_AUT:
+        adapter = LiveAUTAdapterStub()
+    else:
+        adapter = SimulatedC4ApplicationAdapter(behavior=exec_req.simulated_behavior)
+
+    runner = C4ExecutionRunner(repo)
+    return runner.execute_case(
+        case=case,
+        contract=contract,
+        binding=binding,
+        adapter=adapter,
+        idempotency_key=exec_req.idempotency_key,
+    )
+
+
+@router.get(
+    "/runs/{run_id}",
+    response_model=C4ExecutionRunRecord,
+    summary="Retrieve a C4 execution run record",
+)
+def get_execution_run(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    run_rec = repo.get_execution_run(project_id, run_id)
+    if not run_rec:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution run '{run_id}' not found in project '{project_id}'.",
+        )
+    return run_rec
+
+
+@router.get(
+    "/runs",
+    response_model=list[C4ExecutionRunRecord],
+    summary="List execution runs for a project",
+)
+def list_execution_runs(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    case_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    repo = C4Repository(db)
+    return repo.list_execution_runs(project_id, case_id=case_id, limit=limit, offset=offset)
+
+
+@router.get(
+    "/runs/{run_id}/report",
+    summary="Export explainable findings and report for a run",
+)
+def export_run_report(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    run_rec = repo.get_execution_run(project_id, run_id)
+    if not run_rec:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution run '{run_id}' not found in project '{project_id}'.",
+        )
+    return {
+        "run_id": run_rec.run_id,
+        "project_id": run_rec.project_id,
+        "case_id": run_rec.case_id,
+        "case_version": run_rec.case_version,
+        "execution_status": run_rec.status.value,
+        "exposure_status": run_rec.exposure_status.value,
+        "policy_verdict": run_rec.policy_verdict,
+        "attacker_objective_outcome": run_rec.attacker_objective_outcome.value,
+        "task_utility_outcome": run_rec.task_utility_outcome.value,
+        "cleanup_status": run_rec.cleanup_status.value,
+        "pre_cleanup_effects": run_rec.pre_cleanup_effects,
+        "summary": run_rec.evaluation_report_summary,
+        "findings": run_rec.findings,
+        "error_message": run_rec.error_message,
+        "created_at": run_rec.created_at.isoformat(),
+        "completed_at": run_rec.completed_at.isoformat() if run_rec.completed_at else None,
+    }
+
 

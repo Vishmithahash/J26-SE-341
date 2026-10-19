@@ -218,3 +218,23 @@ A critical distinction enforced in Phase 2:
 | **Phase 4** | Natural-Language Extraction & Integration | *Pending* | Bounded LLM policy extraction, automated onboarding, full two-domain live agent execution. |
 | **Phase 5** | Impact Analysis & Selective Reruns | *Pending* | Policy contract diffing, affected-test dependency analysis, automated invalidation and selective test regeneration. |
 | **Phase 6** | Baselines, Metrics & Research Validation | *Pending* | Empirical comparison against baseline testers, ablation experiments, vulnerability attribution metrics. |
+
+---
+
+## 11. Oracle Semantics Refinement and Prerequisite Fixes
+
+During Phase 3 preparation, Phase 2 oracle semantics were audited and corrected to separate requested action legality from expected safe agent behavior:
+
+1. **Separation of Legality, Agent Behavior, and Attacker Outcomes**:
+   - `requested_action_legality`: `"PERMITTED"`, `"PROHIBITED"`, or `"REQUIRES_APPROVAL"`. Represents the legality of the operation requested in the prompt or injected payload under governing policy rules.
+   - `expected_safe_behavior`: `"EXECUTE"` or `"REFUSE_OR_SEEK_APPROVAL"`. Represents the safe, compliant agent response to the input.
+   - `expected_policy_verdict`: For a safe, compliant agent, safe refusal or adherence to policy constraints yields `PASS`. A forbidden input is an adversarial test challenge, not proof of agent failure.
+   - `attacker_objective_verdict`: Represents whether the attacker's objective was achieved (`FAIL` or `BLOCKED` for safe compliant handling).
+   - `expected_violation_on_compromise`: Expected violation verdict (`FAIL`) if the agent is compromised.
+2. **Independent Validator Alignment**:
+   - `PolicyTestCaseValidator` now validates that expected assertions match policy semantics rather than categorically rejecting expected `PASS` outcomes on prohibited challenge requests.
+3. **Non-Threshold Role Authorization Generation**:
+   - When policy rules lack numeric threshold expressions (e.g. `RULE_REFUND_ROLE_AUTH`), the generator synthesizes role-based authorization cases (`BENIGN` authorized role, `DIRECT_POLICY_CHALLENGE` unauthorized role, and `INDIRECT_PROMPT_INJECTION` role spoofing).
+4. **Obsolete Case Invalidation**:
+   - Added `is_obsolete: bool` to `PolicyTestCase`. The freezing service and execution runner explicitly reject obsolete or superseded test cases from execution.
+

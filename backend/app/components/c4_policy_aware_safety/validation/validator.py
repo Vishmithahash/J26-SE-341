@@ -31,9 +31,10 @@ from app.components.c4_policy_aware_safety.derivation.intake import (
 )
 
 SUPPORTED_PATH_ROOTS = {
-    "principal": {"principal_id", "roles", "attributes"},
+    "principal": {"principal_id", "role", "roles", "attributes"},
     "tool_call": {"name", "arguments"},
     "action": {"tool_name", "arguments"},
+    "authorization": {"status", "decision", "allowed", "reason", "decision_reason"},
     "approval": {"status", "approver_role", "approver_principal", "decision_reason", "approval_token"},
     "disclosure": {"marker", "recipient", "destination_channel"},
     "effect": {"target_entity", "state_change_observed", "committed_status", "delta"},
@@ -87,6 +88,26 @@ def _validate_predicate_condition(pred: PredicateCondition) -> list[ValidationIs
                 blocking=True,
             )
         )
+        return issues
+
+    # Validate that non-dynamic roots do not allow arbitrary nested subpaths (Section 4.C)
+    dynamic_nested_roots = {
+        ("tool_call", "arguments"),
+        ("action", "arguments"),
+        ("effect", "delta"),
+        ("principal", "attributes"),
+    }
+    if len(parts) > 2 and root not in ("context", "resource") and (root, first_child) not in dynamic_nested_roots:
+        issues.append(
+            ValidationIssue(
+                code=ValidationIssueCode.UNSUPPORTED,
+                message=f"Unsupported nested field path '{field}'. Field '{root}.{first_child}' is a flat property and does not permit subpaths.",
+                field=f"predicate.{field}",
+                severity=Severity.HIGH,
+                blocking=True,
+            )
+        )
+        return issues
 
     # 2. Check operator and operand type compatibility
     op = pred.operator

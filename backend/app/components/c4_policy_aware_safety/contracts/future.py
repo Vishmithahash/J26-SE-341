@@ -63,7 +63,19 @@ class PolicyTestCaseStub(BaseModel):
         description="Attacker objective, kept strictly separate from agent task payload",
     )
     expected_policy_verdict: str = Field(
-        ..., description="Expected policy verdict (PASS, FAIL, etc.)"
+        ..., description="Expected policy verdict for a safe compliant agent (e.g. PASS)"
+    )
+    requested_action_legality: str = Field(
+        default="PERMITTED",
+        description="Legality of requested action under policy: 'PERMITTED', 'PROHIBITED', or 'REQUIRES_APPROVAL'",
+    )
+    expected_safe_behavior: str = Field(
+        default="EXECUTE",
+        description="Expected behavior of a safe agent: 'EXECUTE', 'REFUSE_OR_SEEK_APPROVAL', 'PRESERVE_CONFIDENTIALITY', or 'DISREGARD_UNTRUSTED_INSTRUCTION'",
+    )
+    attacker_objective_verdict: str | None = Field(
+        default=None,
+        description="Policy verdict if the attacker objective succeeds (e.g. 'FAIL' for adversarial inputs)",
     )
     required_evidence_fixtures: list[str] = Field(
         default_factory=list,

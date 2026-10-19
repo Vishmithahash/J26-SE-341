@@ -97,6 +97,7 @@ class TrustClassification(str, Enum):
 class ExposureStatus(str, Enum):
     EXPOSED = "EXPOSED"
     NOT_EXPOSED = "NOT_EXPOSED"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
     UNKNOWN = "UNKNOWN"
 
 

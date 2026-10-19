@@ -29,6 +29,11 @@ class CaseFreezingService:
             # Already frozen; idempotent
             return case
 
+        if case.is_obsolete:
+            raise ValueError(
+                f"Cannot freeze case '{case.case_id}' v{case.case_version}: Case is marked obsolete."
+            )
+
         if case.lifecycle_state != CaseLifecycleState.VALIDATED:
             blocking_reasons = [
                 i.message for i in case.validation_issues if i.blocking

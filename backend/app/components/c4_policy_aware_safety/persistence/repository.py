@@ -17,6 +17,9 @@ from app.components.c4_policy_aware_safety.contracts.enums import (
 from app.components.c4_policy_aware_safety.contracts.evaluator import (
     RuleEvaluationFinding,
 )
+from app.components.c4_policy_aware_safety.contracts.execution import (
+    C4ExecutionRunRecord,
+)
 from app.components.c4_policy_aware_safety.contracts.generation import GenerationReport
 from app.components.c4_policy_aware_safety.contracts.rules import (
     CandidateRule,
@@ -28,6 +31,7 @@ from app.components.c4_policy_aware_safety.persistence.models import (
     C4CandidateRuleModel,
     C4ContractModel,
     C4DomainBindingModel,
+    C4ExecutionRunModel,
     C4FindingModel,
     C4GenerationBatchModel,
     C4TestCaseModel,
@@ -450,4 +454,100 @@ class C4Repository:
 
         models = self.db.execute(stmt).scalars().all()
         return [PolicyTestCase.model_validate(m.case_data) for m in models]
+
+    # 8. Execution Runs
+    def save_execution_run(self, run: C4ExecutionRunRecord) -> C4ExecutionRunRecord:
+        stmt = select(C4ExecutionRunModel).where(
+            C4ExecutionRunModel.project_id == run.project_id,
+            C4ExecutionRunModel.run_id == run.run_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        run_dict = run.model_dump(mode="json")
+
+        if existing:
+            existing.status = run.status.value
+            existing.exposure_status = run.exposure_status.value
+            existing.policy_verdict = run.policy_verdict
+            existing.attacker_objective_outcome = run.attacker_objective_outcome.value
+            existing.task_utility_outcome = run.task_utility_outcome.value
+            existing.cleanup_status = run.cleanup_status.value
+            existing.run_data = run_dict
+            existing.error_message = run.error_message
+            existing.completed_at = run.completed_at
+        else:
+            model = C4ExecutionRunModel(
+                run_id=run.run_id,
+                project_id=run.project_id,
+                case_id=run.case_id,
+                case_version=run.case_version,
+                contract_id=run.contract_id,
+                contract_version=run.contract_version,
+                binding_id=run.binding_id,
+                binding_version=run.binding_version,
+                adapter_id=run.adapter_id,
+                adapter_version=run.adapter_version,
+                adapter_config_digest=run.adapter_config_digest,
+                execution_mode=run.execution_mode.value,
+                simulated_behavior=run.simulated_behavior,
+                status=run.status.value,
+                exposure_status=run.exposure_status.value,
+                policy_verdict=run.policy_verdict,
+                attacker_objective_outcome=run.attacker_objective_outcome.value,
+                task_utility_outcome=run.task_utility_outcome.value,
+                cleanup_status=run.cleanup_status.value,
+                idempotency_key=run.idempotency_key,
+                run_data=run_dict,
+                error_message=run.error_message,
+                created_at=run.created_at,
+                completed_at=run.completed_at,
+            )
+            self.db.add(model)
+
+        self.db.commit()
+        return run
+
+    def get_execution_run(
+        self, project_id: str, run_id: str
+    ) -> C4ExecutionRunRecord | None:
+        stmt = select(C4ExecutionRunModel).where(
+            C4ExecutionRunModel.project_id == project_id,
+            C4ExecutionRunModel.run_id == run_id,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return C4ExecutionRunRecord.model_validate(model.run_data)
+
+    def get_execution_run_by_idempotency(
+        self, project_id: str, idempotency_key: str
+    ) -> C4ExecutionRunRecord | None:
+        stmt = select(C4ExecutionRunModel).where(
+            C4ExecutionRunModel.project_id == project_id,
+            C4ExecutionRunModel.idempotency_key == idempotency_key,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return C4ExecutionRunRecord.model_validate(model.run_data)
+
+    def list_execution_runs(
+        self,
+        project_id: str,
+        case_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[C4ExecutionRunRecord]:
+        stmt = (
+            select(C4ExecutionRunModel)
+            .where(C4ExecutionRunModel.project_id == project_id)
+            .order_by(desc(C4ExecutionRunModel.created_at))
+            .offset(offset)
+            .limit(limit)
+        )
+        if case_id:
+            stmt = stmt.where(C4ExecutionRunModel.case_id == case_id)
+
+        models = self.db.execute(stmt).scalars().all()
+        return [C4ExecutionRunRecord.model_validate(m.run_data) for m in models]
+
 

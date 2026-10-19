@@ -236,3 +236,44 @@ class C4TestCaseModel(Base):
             name="uq_c4_test_cases_proj_id_ver",
         ),
     )
+
+
+class C4ExecutionRunModel(Base):
+    """SQLAlchemy model for C4 test case execution runs."""
+
+    __tablename__ = "c4_execution_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    case_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    binding_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    binding_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    adapter_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    adapter_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    adapter_config_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    simulated_behavior: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    exposure_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    attacker_objective_outcome: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_utility_outcome: Mapped[str] = mapped_column(String(64), nullable=False)
+    cleanup_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    run_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+

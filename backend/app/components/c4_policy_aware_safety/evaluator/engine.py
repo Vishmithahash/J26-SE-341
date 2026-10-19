@@ -406,18 +406,23 @@ class DeterministicPolicyEvaluator:
                 else None
             )
             if approval:
-                eval_data["approval"] = approval.model_dump()
+                appr_dict = approval.model_dump()
+                eval_data["approval"] = appr_dict
+                eval_data["authorization"] = appr_dict
             elif (
                 tool_exec
                 and tool_exec.status == "REJECTED_BY_BACKEND"
                 and "approval" in (tool_exec.rejection_message or "").lower()
             ):
                 # Backend execution observed and recorded explicit absence of approval
-                eval_data["approval"] = {
+                denied_dict = {
                     "status": "DENIED",
+                    "decision": "DENIED",
                     "approver_role": "NONE",
                     "decision_reason": tool_exec.rejection_message,
                 }
+                eval_data["approval"] = denied_dict
+                eval_data["authorization"] = denied_dict
 
             # Check applicability conditions
             app_result = TriStateBool.TRUE

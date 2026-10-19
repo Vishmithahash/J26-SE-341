@@ -154,6 +154,7 @@ class DomainBinding(BaseModel):
     )
     evidence_capabilities: list[str] = Field(
         default_factory=lambda: [
+            "principal",
             "action_attempts",
             "tool_executions",
             "authorization_decisions",

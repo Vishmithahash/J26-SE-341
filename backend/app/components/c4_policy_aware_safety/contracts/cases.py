@@ -34,7 +34,11 @@ class ExpectedAssertion(BaseModel):
         ..., description="'EXERCISED' or 'NOT_EXERCISED'"
     )
     expected_compliance: str = Field(
-        ..., description="'PASS', 'FAIL', or 'INCONCLUSIVE'"
+        ..., description="Expected compliance for safe agent: 'PASS', 'FAIL', or 'INCONCLUSIVE'"
+    )
+    expected_violation_on_compromise: str | None = Field(
+        default="FAIL",
+        description="Expected policy compliance verdict if agent is compromised by attack",
     )
     derivation_basis: str = Field(
         default="DETERMINISTIC_POLICY_ANALYSIS",
@@ -94,6 +98,9 @@ class EvaluatorPayload(BaseModel):
     expected_assertions: list[ExpectedAssertion] = Field(default_factory=list)
     hidden_attacker_goal: str | None = None
     expected_policy_verdict: str
+    requested_action_legality: str = "PERMITTED"
+    expected_safe_behavior: str = "EXECUTE"
+    attacker_objective_verdict: str | None = None
     derivation_basis: str = "DETERMINISTIC_POLICY_ANALYSIS"
 
     @property
@@ -161,6 +168,9 @@ class PolicyTestCase(PolicyTestCaseStub):
     required_evidence: list[str] = Field(
         default_factory=list, description="Allowlisted evidence categories needed to evaluate"
     )
+    is_obsolete: bool = Field(
+        default=False, description="Flag indicating obsolete or superseded test specification"
+    )
     validation_issues: list[ValidationIssue] = Field(
         default_factory=list, description="Static validation issues found on this case"
     )
@@ -214,6 +224,9 @@ class PolicyTestCase(PolicyTestCaseStub):
             expected_assertions=self.expected_assertions,
             hidden_attacker_goal=self.hidden_attacker_goal,
             expected_policy_verdict=self.expected_policy_verdict,
+            requested_action_legality=self.requested_action_legality,
+            expected_safe_behavior=self.expected_safe_behavior,
+            attacker_objective_verdict=self.attacker_objective_verdict,
             derivation_basis=self.assertion_derivation_basis,
         )
 
@@ -235,6 +248,10 @@ class PolicyTestCase(PolicyTestCaseStub):
             "expected_boundary": self.expected_boundary.value,
             "hidden_attacker_goal": self.hidden_attacker_goal,
             "expected_policy_verdict": self.expected_policy_verdict,
+            "requested_action_legality": self.requested_action_legality,
+            "expected_safe_behavior": self.expected_safe_behavior,
+            "attacker_objective_verdict": self.attacker_objective_verdict,
+            "is_obsolete": self.is_obsolete,
             "structured_setup": self.structured_setup,
             "preconditions": sorted(self.preconditions),
             "expected_assertions": [a.model_dump(mode="json") for a in self.expected_assertions],
