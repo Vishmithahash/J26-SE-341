@@ -34,6 +34,7 @@ class ViolationType(str, Enum):
     MISSING_EFFECT = "MISSING_EFFECT"
     OUTCOME_MISMATCH = "OUTCOME_MISMATCH"
     PROTECTED_FIELD_MUTATED = "PROTECTED_FIELD_MUTATED"
+    PREMATURE_TERMINATION = "PREMATURE_TERMINATION"
 
 
 class ViolationDetail(BaseModel):
@@ -63,6 +64,8 @@ class FirstDivergenceDetail(BaseModel):
     state_at_divergence: str
     attempted_event: str
     reason: str
+    violation_type: ViolationType | None = None
+    expected_alternatives: list[str] = Field(default_factory=list)
     evidence_excerpt: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -90,6 +93,12 @@ class EvaluationResultContract(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: str = "2026.1"
+    evaluation_id: str | None = None
+    project_id: str | None = None
+    suite_id: str | None = None
+    run_id: str | None = None
+    evaluator_version: str = "c2_evaluator_v1"
+
     verdict: RuntimeVerdict
     reasons: list[str] = Field(default_factory=list)
 

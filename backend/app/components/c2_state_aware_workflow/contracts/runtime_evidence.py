@@ -60,6 +60,10 @@ class EvidenceCompleteness(BaseModel):
     has_db_diffs: bool = True
     missing_fields: list[str] = Field(default_factory=list)
     is_complete: bool = True
+    is_truncated: bool = False
+    confirmed_agent_termination: bool = True
+    termination_reason: str | None = None
+    anomalies: list[str] = Field(default_factory=list)
 
 
 class RuntimeEvidenceContract(BaseModel):
@@ -69,11 +73,15 @@ class RuntimeEvidenceContract(BaseModel):
 
     schema_version: str = "2026.1"
     project_id: str
+    suite_id: str | None = None
     run_id: str
     test_id: str
     model_id: str
     model_version: str
+    model_content_hash: str | None = None
 
     ordered_events: list[RuntimeEvent] = Field(default_factory=list)
     state_observations: list[StateObservation] = Field(default_factory=list)
     completeness: EvidenceCompleteness = Field(default_factory=EvidenceCompleteness)
+    execution_mode: str = "synthetic_demonstration"
+    collector_provenance: dict[str, Any] = Field(default_factory=dict)

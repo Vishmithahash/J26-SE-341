@@ -14,14 +14,63 @@ from app.components.c2_state_aware_workflow.builder.deterministic import (
 from app.components.c2_state_aware_workflow.contracts.efsm_model import (
     EFSMModelDefinition,
 )
+from app.components.c2_state_aware_workflow.contracts.evaluation_result import (
+    EvaluationResultContract,
+    FirstDivergenceDetail,
+    RuntimeVerdict,
+    ViolationDetail,
+    WorkflowCoverageSummary,
+)
+from app.components.c2_state_aware_workflow.contracts.runtime_evidence import (
+    RuntimeEvidenceContract,
+)
+from app.components.c2_state_aware_workflow.contracts.test_definition import (
+    AgentTaskPayload,
+    ExecutionMode,
+    GeneratedTestDefinition,
+    GenerateTestSuiteRequest,
+    QASuiteExport,
+    TestSuiteDiagnostics,
+)
 from app.components.c2_state_aware_workflow.contracts.workflow_input import (
     WorkflowInputContract,
+)
+from app.components.c2_state_aware_workflow.evaluator.engine import (
+    ConformanceEvaluationEngine,
+)
+from app.components.c2_state_aware_workflow.evaluator.fixtures import (
+    ControlledTraceFixtures,
+    ScriptedDemonstrationAgent,
+)
+from app.components.c2_state_aware_workflow.evaluator.observer import (
+    IndependentStateObserver,
+)
+from app.components.c2_state_aware_workflow.evaluator.service import (
+    WorkflowEvaluationService,
+)
+from app.components.c2_state_aware_workflow.evaluator.sut import (
+    SyntheticRefundSUT,
+)
+from app.components.c2_state_aware_workflow.examples.refund_workflow import (
+    build_synthetic_refund_efsm,
+)
+from app.components.c2_state_aware_workflow.generator.readiness import (
+    ModelNotReadyError,
+)
+from app.components.c2_state_aware_workflow.generator.service import (
+    TestGenerationService,
+)
+from app.components.c2_state_aware_workflow.persistence.models import (
+    C2EvaluationResult,
+    C2TestCase,
+    C2TestSuite,
 )
 from app.components.c2_state_aware_workflow.persistence.repository import (
     ApprovalBlockedError,
     C2ModelRepository,
     ModelAlreadyExistsError,
     ModelNotFoundError,
+    TestCaseNotFoundError,
 )
 from app.components.c2_state_aware_workflow.validator.service import (
     ModelValidationService,
@@ -105,6 +154,58 @@ class ModelReadinessResponse(BaseModel):
     reasons: list[str]
 
 
+class C2TestSuiteSummaryResponse(BaseModel):
+    id: str
+    project_id: str
+    suite_id: str
+    model_id: str
+    model_version: str
+    model_content_hash: str
+    generator_version: str
+    seed: int
+    total_cases: int
+    ready_cases_count: int
+    not_ready_cases_count: int
+    category_counts: dict[str, int]
+    created_at: datetime
+
+
+class C2TestSuiteResponse(C2TestSuiteSummaryResponse):
+    config: dict[str, Any]
+    diagnostics: dict[str, Any]
+
+
+class C2TestCaseSummaryResponse(BaseModel):
+    id: str
+    project_id: str
+    suite_id: str
+    test_id: str
+    category: str
+    execution_mode: str
+    task: str
+    fixture_ref: str
+    seed: int | None
+    readiness: str
+    is_ready: bool
+    created_at: datetime
+
+
+class C2TestCaseDetailResponse(C2TestCaseSummaryResponse):
+    definition: dict[str, Any]
+    readiness_reasons: list[str]
+
+
+class SuiteReadinessResponse(BaseModel):
+    project_id: str
+    suite_id: str
+    total_cases: int
+    ready_cases_count: int
+    not_ready_cases_count: int
+    readiness: str
+    readiness_breakdown: dict[str, int]
+    is_ready: bool
+
+
 def _format_model_response(model) -> C2WorkflowModelResponse:
     return C2WorkflowModelResponse(
         id=model.id,
@@ -141,6 +242,45 @@ def _format_report_response(report) -> C2ValidationReportResponse:
         warnings=report.warnings,
         diagnostics=report.diagnostics,
         created_at=report.created_at,
+    )
+
+
+def _format_suite_response(suite: C2TestSuite) -> C2TestSuiteResponse:
+    return C2TestSuiteResponse(
+        id=suite.id,
+        project_id=suite.project_id,
+        suite_id=suite.suite_id,
+        model_id=suite.model_id,
+        model_version=suite.model_version,
+        model_content_hash=suite.model_content_hash,
+        generator_version=suite.generator_version,
+        seed=suite.seed,
+        total_cases=suite.total_cases,
+        ready_cases_count=suite.ready_cases_count,
+        not_ready_cases_count=suite.not_ready_cases_count,
+        category_counts=suite.category_counts,
+        created_at=suite.created_at,
+        config=suite.config,
+        diagnostics=suite.diagnostics,
+    )
+
+
+def _format_case_response(case: C2TestCase) -> C2TestCaseDetailResponse:
+    return C2TestCaseDetailResponse(
+        id=case.id,
+        project_id=case.project_id,
+        suite_id=case.suite_id,
+        test_id=case.test_id,
+        category=case.category,
+        execution_mode=case.execution_mode,
+        task=case.task,
+        fixture_ref=case.fixture_ref,
+        seed=case.seed,
+        readiness=case.readiness,
+        is_ready=case.is_ready,
+        created_at=case.created_at,
+        definition=case.definition,
+        readiness_reasons=case.readiness_reasons,
     )
 
 
@@ -428,4 +568,606 @@ def check_readiness(
         content_hash=model.content_hash,
         validation_passed=validation_passed,
         reasons=reasons,
+    )
+
+
+# 10. Generate Test Suite
+@router.post(
+    "/projects/{project_id}/suites/generate",
+    status_code=status.HTTP_201_CREATED,
+    response_model=C2TestSuiteResponse,
+)
+def generate_test_suite(
+    project_id: str,
+    request: GenerateTestSuiteRequest,
+    db: DbSession,
+):
+    service = TestGenerationService(db)
+    try:
+        suite = service.generate_suite_for_model(
+            project_id=project_id,
+            model_id=request.model_id,
+            version=request.version,
+            request=request,
+        )
+    except ModelNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ModelNotReadyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Model is not ready for test suite generation.",
+                "readiness": "MODEL NOT READY",
+                "reasons": exc.reasons,
+            },
+        ) from exc
+
+    return _format_suite_response(suite)
+
+
+# 11. List Test Suites
+@router.get(
+    "/projects/{project_id}/suites",
+    response_model=list[C2TestSuiteSummaryResponse],
+)
+def list_test_suites(
+    project_id: str,
+    db: DbSession,
+):
+    repo = C2ModelRepository(db)
+    suites = repo.list_test_suites(project_id)
+    return [
+        C2TestSuiteSummaryResponse(
+            id=s.id,
+            project_id=s.project_id,
+            suite_id=s.suite_id,
+            model_id=s.model_id,
+            model_version=s.model_version,
+            model_content_hash=s.model_content_hash,
+            generator_version=s.generator_version,
+            seed=s.seed,
+            total_cases=s.total_cases,
+            ready_cases_count=s.ready_cases_count,
+            not_ready_cases_count=s.not_ready_cases_count,
+            category_counts=s.category_counts,
+            created_at=s.created_at,
+        )
+        for s in suites
+    ]
+
+
+# 12. Get Specific Test Suite
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}",
+    response_model=C2TestSuiteResponse,
+)
+def get_test_suite(
+    project_id: str,
+    suite_id: str,
+    db: DbSession,
+):
+    repo = C2ModelRepository(db)
+    suite = repo.get_test_suite(project_id, suite_id)
+    if suite is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test suite '{suite_id}' not found for project '{project_id}'.",
+        )
+    return _format_suite_response(suite)
+
+
+# 13. List Cases in Suite
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/cases",
+    response_model=list[C2TestCaseSummaryResponse],
+)
+def list_test_cases(
+    project_id: str,
+    suite_id: str,
+    db: DbSession,
+    category: Annotated[str | None, Query(description="Filter by category")] = None,
+    readiness: Annotated[
+        str | None, Query(description="Filter by readiness status")
+    ] = None,
+):
+    repo = C2ModelRepository(db)
+    suite = repo.get_test_suite(project_id, suite_id)
+    if suite is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test suite '{suite_id}' not found for project '{project_id}'.",
+        )
+    cases = repo.list_test_cases(
+        project_id=project_id,
+        suite_id=suite_id,
+        category=category,
+        readiness=readiness,
+    )
+    return [
+        C2TestCaseSummaryResponse(
+            id=c.id,
+            project_id=c.project_id,
+            suite_id=c.suite_id,
+            test_id=c.test_id,
+            category=c.category,
+            execution_mode=c.execution_mode,
+            task=c.task,
+            fixture_ref=c.fixture_ref,
+            seed=c.seed,
+            readiness=c.readiness,
+            is_ready=c.is_ready,
+            created_at=c.created_at,
+        )
+        for c in cases
+    ]
+
+
+# 14. Get Specific Test Case Detail
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/cases/{test_id}",
+    response_model=C2TestCaseDetailResponse,
+)
+def get_test_case_detail(
+    project_id: str,
+    suite_id: str,
+    test_id: str,
+    db: DbSession,
+):
+    repo = C2ModelRepository(db)
+    case = repo.get_test_case(project_id, suite_id, test_id)
+    if case is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{test_id}' not found in suite '{suite_id}'.",
+        )
+    return _format_case_response(case)
+
+
+# 15. Check Suite Readiness
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/readiness",
+    response_model=SuiteReadinessResponse,
+)
+def get_suite_readiness(
+    project_id: str,
+    suite_id: str,
+    db: DbSession,
+):
+    repo = C2ModelRepository(db)
+    suite = repo.get_test_suite(project_id, suite_id)
+    if suite is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test suite '{suite_id}' not found for project '{project_id}'.",
+        )
+
+    diag = suite.diagnostics or {}
+    readiness_breakdown = diag.get("readiness_breakdown", {})
+    is_ready = suite.ready_cases_count > 0 and suite.not_ready_cases_count == 0
+    readiness_status = "SUITE_READY" if is_ready else "SUITE_PARTIAL_OR_UNREADY"
+
+    return SuiteReadinessResponse(
+        project_id=project_id,
+        suite_id=suite_id,
+        total_cases=suite.total_cases,
+        ready_cases_count=suite.ready_cases_count,
+        not_ready_cases_count=suite.not_ready_cases_count,
+        readiness=readiness_status,
+        readiness_breakdown=readiness_breakdown,
+        is_ready=is_ready,
+    )
+
+
+# 16. Export Full QA Suite (with reference paths, assertions, and mutations)
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/export/qa",
+    response_model=QASuiteExport,
+)
+def export_qa_suite(
+    project_id: str,
+    suite_id: str,
+    db: DbSession,
+):
+    repo = C2ModelRepository(db)
+    suite = repo.get_test_suite(project_id, suite_id)
+    if suite is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test suite '{suite_id}' not found for project '{project_id}'.",
+        )
+    cases = repo.list_test_cases(project_id, suite_id)
+    return QASuiteExport(
+        schema_version="2026.1",
+        suite_id=suite.suite_id,
+        project_id=suite.project_id,
+        model_id=suite.model_id,
+        model_version=suite.model_version,
+        model_content_hash=suite.model_content_hash,
+        generator_version=suite.generator_version,
+        seed=suite.seed,
+        created_at=suite.created_at,
+        diagnostics=TestSuiteDiagnostics(**suite.diagnostics),
+        cases=[GeneratedTestDefinition(**c.definition) for c in cases],
+    )
+
+
+# 17. Export Agent Task Payloads (Strict allowlist - NO reference paths or expected outcomes)
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/export/agent",
+    response_model=list[AgentTaskPayload],
+)
+def export_agent_task_payloads(
+    project_id: str,
+    suite_id: str,
+    db: DbSession,
+):
+    repo = C2ModelRepository(db)
+    suite = repo.get_test_suite(project_id, suite_id)
+    if suite is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test suite '{suite_id}' not found for project '{project_id}'.",
+        )
+    cases = repo.list_test_cases(project_id, suite_id)
+    payloads: list[AgentTaskPayload] = []
+    for c in cases:
+        # Only supported agent-executable scenarios (LIVE_AGENT) may be exported
+        if c.execution_mode != ExecutionMode.LIVE_AGENT.value:
+            continue
+        c_def = c.definition
+        payloads.append(
+            AgentTaskPayload(
+                test_id=c.test_id,
+                project_id=c.project_id,
+                task=c.task,
+                fixture_ref=c.fixture_ref,
+                permitted_context=c_def.get("permitted_context", {}),
+            )
+        )
+    return payloads
+
+
+# 18. Individual Test Case Agent Payload (Strict allowlist)
+@router.get(
+    "/projects/{project_id}/suites/{suite_id}/cases/{test_id}/agent-payload",
+    response_model=AgentTaskPayload,
+)
+def get_case_agent_payload(
+    project_id: str,
+    suite_id: str,
+    test_id: str,
+    db: DbSession,
+):
+    repo = C2ModelRepository(db)
+    case = repo.get_test_case(project_id, suite_id, test_id)
+    if case is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{test_id}' not found in suite '{suite_id}'.",
+        )
+    if case.execution_mode != ExecutionMode.LIVE_AGENT.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Test case '{test_id}' has execution mode '{case.execution_mode}' "
+                "and cannot be exported for agent execution. Controlled synthetic evaluator mutants "
+                "are excluded from agent-facing task payloads."
+            ),
+        )
+    return AgentTaskPayload(
+        test_id=case.test_id,
+        project_id=case.project_id,
+        task=case.task,
+        fixture_ref=case.fixture_ref,
+        permitted_context=case.definition.get("permitted_context", {}),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Part B: Conformance Evaluation and Synthetic Demonstration APIs
+# ---------------------------------------------------------------------------
+
+
+class DemonstrationRunRequest(BaseModel):
+    """Configuration for running an offline synthetic demonstration."""
+
+    scenario: str = Field(
+        default="happy_path",
+        description=(
+            "Demonstration scenario: 'happy_path', 'inspection_alternative', 'unpaid_order_rejection', "
+            "'skipped_step', 'reordered_step', 'repeated_step', 'wrong_entity', 'premature_termination', "
+            "'missing_effect', 'protected_state_change', 'missing_observations', 'truncated_trace'"
+        ),
+    )
+    model_id: str = "c2_refund_efsm_nexacart"
+    model_version: str = "1.0.0"
+    customer_id: int = 42
+    target_order_id: int = 503
+
+
+def _format_evaluation_response(record: C2EvaluationResult) -> EvaluationResultContract:
+    return EvaluationResultContract(
+        schema_version="2026.1",
+        evaluation_id=record.id,
+        project_id=record.project_id,
+        suite_id=record.suite_id,
+        test_id=record.test_id,
+        run_id=record.run_id,
+        evaluator_version=record.evaluator_version,
+        verdict=RuntimeVerdict(record.verdict),
+        reasons=record.reasons,
+        model_id=record.model_id,
+        model_version=record.model_version,
+        model_content_hash=record.model_content_hash,
+        expected_states=record.expected_states,
+        observed_states=record.observed_states,
+        violations=[ViolationDetail(**v) for v in record.violations],
+        first_divergence=(
+            FirstDivergenceDetail(**record.first_divergence)
+            if record.first_divergence
+            else None
+        ),
+        evidence_references=record.evidence_references,
+        coverage=WorkflowCoverageSummary(**record.coverage),
+        evaluator_timing_ms=record.evaluator_timing_ms,
+        evaluated_at=record.created_at,
+    )
+
+
+# 19. Evaluate a Test Run from Runtime Evidence
+@router.post(
+    "/projects/{project_id}/suites/{suite_id}/cases/{test_id}/evaluate",
+    response_model=EvaluationResultContract,
+)
+def evaluate_test_run(
+    project_id: str,
+    suite_id: str,
+    test_id: str,
+    evidence: RuntimeEvidenceContract,
+    db: DbSession,
+):
+    if evidence.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Route project_id '{project_id}' does not match evidence project_id '{evidence.project_id}'.",
+        )
+    if evidence.test_id != test_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Route test_id '{test_id}' does not match evidence test_id '{evidence.test_id}'.",
+        )
+
+    service = WorkflowEvaluationService(db)
+    try:
+        return service.evaluate_test_run(
+            project_id=project_id,
+            suite_id=suite_id,
+            test_id=test_id,
+            evidence=evidence,
+        )
+    except TestCaseNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ModelNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+
+# 20. Retrieve Stored Evaluation Result
+@router.get(
+    "/projects/{project_id}/evaluations/{evaluation_id}",
+    response_model=EvaluationResultContract,
+)
+def get_evaluation(
+    project_id: str,
+    evaluation_id: str,
+    db: DbSession,
+):
+    repo = C2ModelRepository(db)
+    record = repo.get_evaluation_result(project_id, evaluation_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evaluation result '{evaluation_id}' not found for project '{project_id}'.",
+        )
+    return _format_evaluation_response(record)
+
+
+# 21. List Evaluation Results
+@router.get(
+    "/projects/{project_id}/evaluations",
+    response_model=list[EvaluationResultContract],
+)
+def list_evaluations(
+    project_id: str,
+    db: DbSession,
+    suite_id: str | None = None,
+    test_id: str | None = None,
+    verdict: str | None = None,
+):
+    repo = C2ModelRepository(db)
+    records = repo.list_evaluation_results(
+        project_id=project_id,
+        suite_id=suite_id,
+        test_id=test_id,
+        verdict=verdict,
+    )
+    return [_format_evaluation_response(r) for r in records]
+
+
+# 22. Clearly Labelled Synthetic Demonstration Runner
+@router.post(
+    "/projects/{project_id}/demonstrations/run",
+    response_model=EvaluationResultContract,
+)
+def run_synthetic_demonstration(
+    project_id: str,
+    request: DemonstrationRunRequest,
+    db: DbSession,
+):
+    """Execute a clearly labelled offline synthetic demonstration of C2 workflow evaluation."""
+    repo = C2ModelRepository(db)
+    model_record = repo.get_model(project_id, request.model_id, request.model_version)
+
+    # Use built-in approved synthetic model if not found in DB
+    if model_record is None:
+        efsm_model = build_synthetic_refund_efsm()
+        is_approved = True
+        pinned_hash = "demonstration_hash"
+    else:
+        efsm_model = EFSMModelDefinition(**model_record.definition)
+        is_approved = model_record.lifecycle_status == "APPROVED"
+        pinned_hash = model_record.content_hash
+
+    # Execute demonstration scenario
+    sut = SyntheticRefundSUT()
+    observer = IndependentStateObserver(sut)
+    agent = ScriptedDemonstrationAgent(sut, observer)
+    run_id = f"demo_run_{int(datetime.now().timestamp())}"
+    test_id = f"demo_test_{request.scenario}"
+
+    # Create dummy test definition representing the task
+    is_neg = request.scenario == "unpaid_order_rejection"
+    from app.components.c2_state_aware_workflow.contracts.test_definition import (
+        ExpectedOutcomeType,
+        TestCategory,
+        TestReadinessStatus,
+    )
+
+    test_def = GeneratedTestDefinition(
+        test_id=test_id,
+        project_id=project_id,
+        pinned_model_id=request.model_id,
+        pinned_model_version=request.model_version,
+        model_content_hash=pinned_hash,
+        category=TestCategory.NEGATIVE if is_neg else TestCategory.VALID,
+        task="Refund unpaid order 502" if is_neg else "Refund latest paid order 503",
+        fixture_ref="fixture_demo",
+        expected_outcome=(
+            ExpectedOutcomeType.EXPECTED_REJECTION_PASS
+            if is_neg
+            else ExpectedOutcomeType.PASS
+        ),
+        readiness=TestReadinessStatus.TEST_READY,
+    )
+
+    # Branch according to scenario
+    if request.scenario == "happy_path":
+        evidence = agent.run_happy_path(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+    elif request.scenario == "inspection_alternative":
+        evidence = agent.run_inspection_alternative(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+    elif request.scenario == "unpaid_order_rejection":
+        evidence = agent.run_unpaid_order_rejection(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            unpaid_order_id=502,
+        )
+    elif request.scenario in (
+        "skipped_step",
+        "reordered_step",
+        "repeated_step",
+        "wrong_entity",
+        "premature_termination",
+    ):
+        evidence = agent.run_flawed_demonstration(
+            flaw_type=request.scenario,
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+    elif request.scenario == "missing_effect":
+        base_ev = agent.run_happy_path(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+        evidence = ControlledTraceFixtures.create_missing_effect_trace(base_ev)
+    elif request.scenario == "protected_state_change":
+        base_ev = agent.run_unpaid_order_rejection(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            unpaid_order_id=502,
+        )
+        evidence = ControlledTraceFixtures.create_protected_state_change_trace(base_ev)
+    elif request.scenario == "missing_observations":
+        base_ev = agent.run_happy_path(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+        evidence = ControlledTraceFixtures.create_missing_observations_trace(base_ev)
+    elif request.scenario == "truncated_trace":
+        base_ev = agent.run_happy_path(
+            project_id=project_id,
+            test_id=test_id,
+            run_id=run_id,
+            model_id=request.model_id,
+            model_version=request.model_version,
+            customer_id=request.customer_id,
+            target_order_id=request.target_order_id,
+        )
+        evidence = ControlledTraceFixtures.create_truncated_trace(base_ev)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown demonstration scenario '{request.scenario}'.",
+        )
+
+    # Evaluate
+    engine = ConformanceEvaluationEngine()
+    result = engine.evaluate(
+        model=efsm_model,
+        test_def=test_def,
+        evidence=evidence,
+        model_is_approved=is_approved,
+        pinned_content_hash=pinned_hash,
+    )
+
+    return result.model_copy(
+        update={
+            "project_id": project_id,
+            "suite_id": "suite_demonstration",
+            "run_id": run_id,
+            "evaluation_id": f"eval_{run_id}",
+        }
     )
