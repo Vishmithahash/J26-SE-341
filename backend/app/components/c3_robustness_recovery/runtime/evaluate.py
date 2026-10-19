@@ -55,6 +55,16 @@ def run_evaluation_cli(args: list[str] | None = None) -> int:
         action="store_true",
         help="Inject default demonstration fixture C2 facts for testing.",
     )
+    parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Persist evaluation result into QA database.",
+    )
+    parser.add_argument(
+        "--project-id",
+        default=None,
+        help="Override project scope identifier when running in persisted mode.",
+    )
 
     parsed = parser.parse_args(args)
     evidence_path = Path(parsed.evidence_file)
@@ -155,6 +165,34 @@ def run_evaluation_cli(args: list[str] | None = None) -> int:
         json.dump(eval_result.model_dump(mode="json"), f, indent=2)
 
     print(f"\nExported evaluation result to: {out_path}")
+
+    if parsed.persist:
+        from app.components.c3_robustness_recovery.contracts.persistence import (
+            EvaluationComputeRequest,
+        )
+        from app.components.c3_robustness_recovery.services.storage import (
+            compute_and_store_evaluation,
+        )
+        from app.database import SessionLocal
+
+        project_id = parsed.project_id or evidence.project_id
+        db = SessionLocal()
+        try:
+            req = EvaluationComputeRequest(
+                project_id=project_id,
+                pair_id=evidence.pair_id,
+                c2_facts=c2_facts,
+            )
+            stored_eval = compute_and_store_evaluation(db, req)
+            print(
+                f"Persisted evaluation to database with ID: {stored_eval.evaluation_id}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error persisting evaluation to database: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            db.close()
+
     return 0
 
 

@@ -134,10 +134,10 @@ class RecoveryEvaluationRequest(BaseModel):
     project_id: str = Field(..., min_length=1, description="Project scope identifier.")
     case_id: str = Field(..., min_length=1, description="Test case identifier.")
     evaluator_version: str = Field(
-        "1.0.0", min_length=1, description="Evaluator engine version."
+        "1.1.0", min_length=1, description="Evaluator engine version."
     )
     rule_set_version: str = Field(
-        "1.0.0", min_length=1, description="Recovery rule-set version."
+        "1.1.0", min_length=1, description="Recovery rule-set version."
     )
     candidate_case: CandidateFaultCase = Field(
         ..., description="Frozen candidate fault case definition."
@@ -171,8 +171,8 @@ class RecoveryEvaluationResult(BaseModel):
     project_id: str = Field(..., description="Project scope identifier.")
     case_id: str = Field(..., description="Test case identifier.")
     pair_id: str = Field(..., description="Matched trial pair identifier.")
-    evaluator_version: str = Field("1.0.0", description="Evaluator engine version.")
-    rule_set_version: str = Field("1.0.0", description="Recovery rule-set version.")
+    evaluator_version: str = Field("1.1.0", description="Evaluator engine version.")
+    rule_set_version: str = Field("1.1.0", description="Recovery rule-set version.")
     evaluation_status: EvaluationStatus = Field(
         ..., description="Evaluation lifecycle status."
     )

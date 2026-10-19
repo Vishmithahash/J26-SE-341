@@ -5,6 +5,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
+from app.components.c3_robustness_recovery.api.persistence_router import (
+    router as persistence_router,
+)
 from app.components.c3_robustness_recovery.contracts.evaluation import (
     RecoveryEvaluationRequest,
     RecoveryEvaluationResult,
@@ -71,6 +74,8 @@ router = APIRouter(
     tags=["Component 3: Robustness and Failure Recovery"],
     route_class=C3SafeRoute,
 )
+
+router.include_router(persistence_router)
 
 
 @router.get(

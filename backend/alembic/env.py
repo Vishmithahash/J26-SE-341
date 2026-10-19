@@ -2,6 +2,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import create_engine, pool
 
+import app.components.c3_robustness_recovery.models  # noqa: F401
 from alembic import context
 from app.config import get_settings
 from app.database import Base, normalize_database_url

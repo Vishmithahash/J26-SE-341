@@ -128,7 +128,7 @@ The backend is structured as a **FastAPI modular monolith**:
 |---|---|---|
 | `app/components/c1_tool_call_correctness` | **C1: Explainable Tool-Call Correctness Testing** | Reserved (Not implemented) |
 | `app/components/c2_state_aware_workflow` | **C2: State-Aware Multi-Step Workflow Testing** | Reserved (Not implemented) |
-| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phase 1, Phase 2, Phase 3 & Phase 4 Implemented** (Phases 5–6 Unimplemented) |
+| `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phase 1, Phase 2, Phase 3, Phase 4 & Phase 5 Implemented** (Phase 6 Unimplemented) |
 | `app/components/c4_policy_prompt_injection` | **C4: Policy-Aware Safety and Prompt-Injection Testing** | Reserved (Not implemented) |
 
 ---
@@ -140,7 +140,7 @@ The backend is structured as a **FastAPI modular monolith**:
 2. **Phase 2: One-Tool Integration, Matched Trials, Verified Timeout Exposure and Safeguards** &mdash; **IMPLEMENTED (Demonstrated Vertical Slice)**
 3. **Phase 3: Automatic Generation, Frozen Suites, Remaining Fault Families and Supported Post-Commit Experiments** &mdash; **IMPLEMENTED (Pure Generation & Bounded Suites)**
 4. **Phase 4: Recovery Evaluation Using Evidence and C2 Facts** &mdash; **IMPLEMENTED (Deterministic Recovery Evaluator)**
-5. **Phase 5: Shared Persistence, Execution Tracking, Results and Reporting** &mdash; *UNIMPLEMENTED*
+5. **Phase 5: Shared Persistence, Execution Tracking, Results and Reporting** &mdash; **IMPLEMENTED (C3 Persistence & Reporting)**
 6. **Phase 6: Second Domain, Research Experiments, Baselines, Metrics and Final Validation** &mdash; *UNIMPLEMENTED*
 
 ### Phase 1 Canonical Structure
@@ -702,21 +702,145 @@ Options:
 python -m app.components.c3_robustness_recovery.runtime.runner --synthetic
 ```
 
-#### 3. Frozen Suite Runner (Phase 3)
+#### 3. Frozen Suite Runner (Phase 3 & Phase 5)
 ```powershell
+# Offline demonstration execution (stateless)
 python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic
 python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --after-commit
 python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --suite-file <path>
+
+# Persisted execution with database lifecycle tracking (Phase 5)
+python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --persist --project-id proj-demo-qa
+python -m app.components.c3_robustness_recovery.runtime.evaluate --evidence-file evidence_output/evidence_pair_*.json --synthetic-facts --persist --project-id proj-demo-qa
 ```
+
+---
+
+## Component 3 Phase 5: Shared Persistence, Execution Tracking, Results and Reporting
+
+Phase 5 introduces scoped database persistence for versioned C3 experiment artifacts, execution tracking, append-only recovery evaluation history, and backend reporting in the modular monolith.
+
+### Canonical Phase 5 Structure
+```text
+backend/app/components/c3_robustness_recovery/
+    contracts/
+        persistence.py         # Typed Pydantic v2 storage, import, query, and reporting contracts
+    models/
+        __init__.py            # Model export package
+        persistence.py         # C3-owned SQLAlchemy models (C3SuiteModel, C3CaseModel, etc.)
+    repositories/
+        persistence.py         # Scoped repository enforcing project isolation, digests, and transactions
+    services/
+        storage.py             # Transactional validation, idempotent persistence, and evaluator invocation
+        run_tracking.py        # Execution manifest and lifecycle progress tracking
+        reporting.py           # Structured JSON aggregation and downloadable CSV summaries
+    api/
+        persistence_router.py  # REST endpoints for suites, cases, executions, pairs, evals, and reports
+        router.py              # Canonical C3 router mounting stateless and persisted routers
+    runtime/
+        suite_runner.py        # Integrated --persist execution flag and lifecycle updates
+        evaluate.py            # Integrated --persist flag for re-evaluating stored evidence
+backend/alembic/
+    env.py                     # Registered C3 models on shared Base.metadata
+    versions/
+        e75342624f8c_create_c3_persistence_tables.py # Additive migration for C3 persistence tables
+backend/tests/
+    test_c3_phase5.py          # Hermetic tests covering all Phase 5 requirements
+```
+
+### Data Ownership & Shared-Record References
+C3 defines and owns 5 focused database tables in the QA framework database:
+- **`c3_suites`**: Immutable snapshots of frozen suites, content digests, schemas, and generator versions.
+- **`c3_cases`**: Selected candidate fault cases with case fingerprints and ordering.
+- **`c3_executions`**: Execution manifests, lifecycle status (`PLANNED`, `RUNNING`, `COMPLETED`, `CANCELLED`, `ERROR`), target mode, and configuration snapshots.
+- **`c3_matched_pairs`**: Differential trial pairs linking clean baseline and fault trials, exposure outcomes, clean qualification, and evidence digests.
+- **`c3_evaluations`**: Append-only evaluation history linking input digests, rule evaluation outcomes, actor attributions, and recovery verdicts.
+
+**Shared-Record References**:
+- Shared identifiers (`project_id`, `run_id`, `event_id`) are preserved as documented opaque references.
+- Suite executions maintain a dedicated `execution_id` without corrupting existing single-trial `run_id` semantics.
+- Competing global `Project`, `Run`, or `Event` tables are strictly avoided. Shared platform integrations remain documented as pending until the shared platform contracts are delivered.
+
+### Alembic Migration & Setup Commands
+The additive migration `e75342624f8c` registers all C3 persistence tables on the shared `Base.metadata`.
+
+```powershell
+# Inspect current heads and status
+alembic heads
+alembic current
+
+# Apply additive migration to QA framework database
+alembic upgrade head
+```
+> **Database Scope & Safeguards:**
+> - Migrations must ONLY be applied to the QA framework PostgreSQL database.
+> - Application-Under-Test (AUT) databases are **NEVER** migrated or reset.
+> - Default unit and integration tests run against isolated in-memory SQLite (`sqlite:///:memory:`).
+> - Opt-in PostgreSQL migration and round-trip verification can be enabled by setting `TEST_DATABASE_URL` against an isolated PostgreSQL test instance.
+
+### Phase 5 REST API Reference (`/api/v1/c3`)
+All persistence routes require explicit logical `project_id` scoping, support deterministic sorting, and apply bounded pagination (`limit <= 200`, `offset >= 0`).
+
+| Method | Endpoint | Description | Key Query / Body Parameters |
+|---|---|---|---|
+| `POST` | `/api/v1/c3/suites/import` | Idempotently import a verified frozen suite and case snapshots. | Body: `SuiteImportRequest` |
+| `GET` | `/api/v1/c3/suites` | List stored suites with bounded pagination. | `project_id`, `domain`, `limit`, `offset` |
+| `GET` | `/api/v1/c3/suites/{suite_id_or_digest}` | Retrieve stored frozen suite. | `project_id` |
+| `GET` | `/api/v1/c3/cases` | List stored candidate cases. | `project_id`, `suite_digest`, `fault_family`, `effect_phase`, `limit`, `offset` |
+| `GET` | `/api/v1/c3/cases/{case_id}` | Retrieve individual stored case. | `project_id`, `suite_digest` |
+| `POST` | `/api/v1/c3/executions/import` | Import completed/partial execution artifact without executing. | Body: `ExecutionImportRequest` |
+| `GET` | `/api/v1/c3/executions` | List tracked executions. | `project_id`, `status`, `target_mode`, `suite_digest`, `limit`, `offset` |
+| `GET` | `/api/v1/c3/executions/{execution_id}` | Retrieve tracked execution manifest. | `project_id` |
+| `GET` | `/api/v1/c3/matched-pairs` | List matched trial pairs and trial evidence. | `project_id`, `execution_id`, `case_id`, `exposure_status`, `clean_qualification` |
+| `GET` | `/api/v1/c3/matched-pairs/{pair_id}` | Retrieve individual matched pair. | `project_id` |
+| `POST` | `/api/v1/c3/evaluations/compute` | Authoritatively evaluate stored inputs and append versioned result. | Body: `EvaluationComputeRequest` |
+| `GET` | `/api/v1/c3/evaluations` | List recovery evaluation results. | `project_id`, `pair_id`, `case_id`, `recovery_verdict`, `evaluator_version` |
+| `GET` | `/api/v1/c3/evaluations/{evaluation_id}` | Retrieve recovery evaluation record. | `project_id` |
+| `GET` | `/api/v1/c3/reports/executions/{execution_id}` | Retrieve structured execution report with explicit denominators. | `project_id` |
+| `GET` | `/api/v1/c3/reports/executions/{execution_id}/csv` | Download execution summary as CSV file. | `project_id` |
+
+*Existing stateless validation and evaluation endpoints (`/cases/validate`, `/generate`, `/recovery/evaluate`) remain 100% side-effect free.*
+
+### Evaluation History & Idempotency Rules
+1. **Append-Only History**: Evaluator executions never overwrite existing records. Re-evaluating stored evidence produces a distinct `evaluation_id` linked to the input digest and current `evaluator_version` (`"1.1.0"`).
+2. **Idempotent Imports**:
+   - Submitting an identical frozen suite or execution artifact returns the existing persisted record (`200 OK`).
+   - Submitting a payload with the same identifier but differing content digest returns a clean conflict (`409 Conflict`).
+3. **No Client-Supplied Verdicts**: Clients cannot inject arbitrary verdicts. `/evaluations/compute` loads the authoritative persisted evidence and candidate contracts and executes the canonical evaluator service.
+4. **Data Redaction**: Sensitive attributes (credentials, passwords, authorization headers, database connection strings) are strictly excluded and redacted before persistence or export.
+
+### Run Interruption & Failure Handling
+- **Harness Failure vs Recovery Verdict**: A harness crash or run cancellation does NOT map to a `FAIL` verdict. Harness errors are recorded with execution status `ERROR` or `CANCELLED`; recovery verdicts remain `null`.
+- **Database Write Failure**: If a database write fails following a tool operation, the runner **never** re-executes the tool to reproduce evidence. Instead, it serializes a sanitized local fallback artifact to `--export-dir` for subsequent idempotent import via `/api/v1/c3/executions/import`.
+- **Partial Executions**: Executions stopped mid-run preserve planned, executed, blocked, unsupported, and cancelled counts without marking incomplete runs successful.
+
+### Backend Reporting & Denominators
+Reports generated via `/api/v1/c3/reports/executions/{execution_id}` provide explicit, non-overlapping counts and clear denominators:
+- **Planned Cases Denominator**: Total cases scheduled in the frozen suite manifest.
+- **Executed Pairs Denominator**: Total matched baseline-fault pairs initiated by the runner.
+- **Evaluated Trials Denominator**: Total confirmed-exposure fault trials evaluated by the recovery evaluation engine.
+- **Verdict Counts**: `PASS_COMPLETED`, `PASS_GRACEFUL`, `FAIL`, `INCONCLUSIVE`, `NOT_EVALUATED`.
+- **Demonstration Attribution**: Reports generated from in-memory test doubles are explicitly flagged with `demonstration_mode=true` and carry diagnostic limitations preventing misuse as live agent benchmarks.
+
+### Phase 4 Audit Corrections (Evaluator Version 1.1.0)
+Before persisting verdicts in Phase 5, confirmed Phase 4 evaluation defects were audited and corrected:
+- **Alternative Outcomes**: Fixed boolean branch bug in `RULE_GRACEFUL_STOPPING`. Graceful stopping under an explicitly permitted non-completion branch is respected. Ordinary incomplete tasks fail `RULE_GRACEFUL_STOPPING`. Harness cancellation never establishes graceful stopping.
+- **Duplicate Effects**: Repeated observations of a single effect in `BEFORE_EFFECT` are not counted as duplicates. For `AFTER_COMMIT` retries, missing duplicate facts return `UNKNOWN` (`MISSING_DUPLICATE_EFFECT_FACT`).
+- **Retry Safety**: Reused idempotency keys alone do not establish safety without verified target enforcement; unverified guarantees return `UNKNOWN` (`UNVERIFIED_TARGET_IDEMPOTENCY_ENFORCEMENT`).
+- **Fact Scoping**: `get_c2_fact_value` and `validate_c2_facts` match exact assertion versions, run scopes, and entity IDs. Conflicting facts within scope return `UNKNOWN`.
+- **Budgets & Causal Order**: Traces missing budget observations return `UNKNOWN` (`INCOMPLETE_BUDGET_EVIDENCE`). First violation selection follows causal/event order rather than rule list position.
 
 ---
 
 ### Testing & Verification Commands
 ```powershell
-# Run all Phase 1, Phase 2, Phase 3, Phase 4, and Health tests (87 tests)
+# Run all Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, and Health tests (110 tests)
 python -m pytest
 
-# Run Phase 4 specific tests
+# Run Phase 5 specific tests (13 tests hermetic SQLite, 1 skipped PostgreSQL opt-in)
+python -m pytest tests/test_c3_phase5.py
+
+# Run Phase 4 regression tests (31 tests)
 python -m pytest tests/test_c3_phase4.py
 
 # Check code formatting and linting

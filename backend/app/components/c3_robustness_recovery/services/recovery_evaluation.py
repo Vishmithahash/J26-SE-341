@@ -237,16 +237,61 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
         )
 
     # -----------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Rule B: Graceful Stopping (RULE_GRACEFUL_STOPPING)
     # -----------------------------------------------------------------------
+    recognized_graceful_outcomes = {
+        "ABORT_SAFE",
+        "DEGRADED_COMPLETION",
+        "USER_ESCALATION",
+        "GRACEFUL_STOP",
+        "SAFE_DEGRADED",
+    }
+    ordinary_incomplete_outcomes = {
+        "INCOMPLETE",
+        "ERROR",
+        "CRASHED",
+        "FAILED",
+        "TIMEOUT",
+        "UNHANDLED_EXCEPTION",
+        "UNKNOWN",
+    }
+
     if not is_completion_claimed:
-        # Caller stopped; verify if outcome is explicitly permitted
-        is_permitted_stop = any(
-            perm in caller_outcome
-            or perm in ("ABORT_SAFE", "DEGRADED_COMPLETION", "USER_ESCALATION")
-            for perm in permitted_terminal_outcomes
+        is_cancelled = (
+            fault_trial.execution_status == ExecutionStatus.CANCELLED
+            or "CANCEL" in caller_outcome.upper()
         )
-        if is_permitted_stop:
+        if is_cancelled:
+            rule_results.append(
+                RecoveryRuleResult(
+                    rule_id=RecoveryRuleId.RULE_GRACEFUL_STOPPING.value,
+                    rule_name="Graceful Stopping Verification",
+                    status=RuleEvaluationStatus.VIOLATED,
+                    reason_code="HARNESS_CANCELLATION_NOT_GRACEFUL",
+                    message="Harness cancellation never establishes graceful stopping.",
+                )
+            )
+        elif (
+            caller_outcome in ordinary_incomplete_outcomes
+            or caller_outcome not in permitted_terminal_outcomes
+        ):
+            rule_results.append(
+                RecoveryRuleResult(
+                    rule_id=RecoveryRuleId.RULE_GRACEFUL_STOPPING.value,
+                    rule_name="Graceful Stopping Verification",
+                    status=RuleEvaluationStatus.VIOLATED,
+                    reason_code="UNPERMITTED_STOPPING_OUTCOME",
+                    message=(
+                        f"Caller stopped with outcome '{caller_outcome}', which is an unpermitted or ordinary "
+                        f"incomplete outcome (permitted: {contract.permitted_terminal_outcomes})."
+                    ),
+                )
+            )
+        elif any(
+            caller_outcome == g or g in caller_outcome
+            for g in recognized_graceful_outcomes
+        ):
             rule_results.append(
                 RecoveryRuleResult(
                     rule_id=RecoveryRuleId.RULE_GRACEFUL_STOPPING.value,
@@ -263,8 +308,8 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                     status=RuleEvaluationStatus.VIOLATED,
                     reason_code="UNPERMITTED_STOPPING_OUTCOME",
                     message=(
-                        f"Caller stopped with outcome '{caller_outcome}', which is not permitted by "
-                        f"the recovery contract (permitted: {contract.permitted_terminal_outcomes})."
+                        f"Caller stopped with outcome '{caller_outcome}', which does not represent a recognized "
+                        f"graceful stopping outcome (permitted: {contract.permitted_terminal_outcomes})."
                     ),
                 )
             )
@@ -317,7 +362,7 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                 rule_name="Recovery Budget Constraints",
                 status=RuleEvaluationStatus.UNKNOWN,
                 reason_code="INCOMPLETE_BUDGET_EVIDENCE",
-                message="Evidence incomplete; cannot verify total calls budget.",
+                message="Evidence trace is partial or incomplete; cannot establish that all budgets were respected.",
             )
         )
     else:
@@ -376,6 +421,23 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                     message="Fixture settling was uncertain; potential late or duplicate side effects cannot be verified.",
                 )
             )
+        elif dup_c2_fact == C2FactValue.UNKNOWN and (
+            case.effect_phase == EffectPhase.AFTER_COMMIT and retries_count > 0
+        ):
+            # Post-commit operations retried without verified absence of duplicate effects
+            rule_results.append(
+                RecoveryRuleResult(
+                    rule_id=RecoveryRuleId.RULE_DUPLICATE_EFFECTS.value,
+                    rule_name="Duplicate Side-Effect Prevention",
+                    status=RuleEvaluationStatus.UNKNOWN,
+                    reason_code="MISSING_DUPLICATE_EFFECT_FACT",
+                    message=(
+                        "Post-commit operations were retried, but duplicate effect absence "
+                        "is not verified by C2 facts or complete observation evidence."
+                    ),
+                    supporting_fact_ids=["duplicate_side_effect_detected"],
+                )
+            )
         else:
             rule_results.append(
                 RecoveryRuleResult(
@@ -403,6 +465,13 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             idempotency_fact = get_c2_fact_value(
                 request.c2_facts, "idempotency_key_reused"
             )
+            target_enforced_fact = get_c2_fact_value(
+                request.c2_facts, "target_idempotency_enforced"
+            )
+            dup_fact = get_c2_fact_value(
+                request.c2_facts, "duplicate_side_effect_detected"
+            )
+
             if idempotency_fact == C2FactValue.FALSE:
                 rule_results.append(
                     RecoveryRuleResult(
@@ -426,15 +495,33 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                     )
                 )
             else:
-                rule_results.append(
-                    RecoveryRuleResult(
-                        rule_id=RecoveryRuleId.RULE_UNSAFE_RETRIES.value,
-                        rule_name="Unsafe Retry Prevention",
-                        status=RuleEvaluationStatus.SATISFIED,
-                        message="Retry after commit safely reused idempotency key.",
-                        supporting_fact_ids=["idempotency_key_reused"],
+                # Idempotency key reused is TRUE: verify target enforcement guarantee or observed absence of duplicates
+                if target_enforced_fact == C2FactValue.TRUE or (
+                    dup_fact == C2FactValue.FALSE and fault_trial.evidence_complete
+                ):
+                    rule_results.append(
+                        RecoveryRuleResult(
+                            rule_id=RecoveryRuleId.RULE_UNSAFE_RETRIES.value,
+                            rule_name="Unsafe Retry Prevention",
+                            status=RuleEvaluationStatus.SATISFIED,
+                            message="Retry after commit safely reused idempotency key with verified target enforcement.",
+                            supporting_fact_ids=["idempotency_key_reused"],
+                        )
                     )
-                )
+                else:
+                    rule_results.append(
+                        RecoveryRuleResult(
+                            rule_id=RecoveryRuleId.RULE_UNSAFE_RETRIES.value,
+                            rule_name="Unsafe Retry Prevention",
+                            status=RuleEvaluationStatus.UNKNOWN,
+                            reason_code="UNVERIFIED_TARGET_IDEMPOTENCY_ENFORCEMENT",
+                            message=(
+                                "Idempotency key was reused, but target idempotency enforcement is not verified "
+                                "by observed effect evidence or target guarantee."
+                            ),
+                            supporting_fact_ids=["idempotency_key_reused"],
+                        )
+                    )
         else:
             rule_results.append(
                 RecoveryRuleResult(
@@ -516,17 +603,35 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             )
 
     # -----------------------------------------------------------------------
-    # Step 5: Verdict Determination
+    # Step 5: Verdict Determination and Causal Violation Ordering
     # -----------------------------------------------------------------------
-    first_violated: str | None = None
+    violated_rules: list[tuple[float, int, RecoveryRuleResult]] = []
     has_violation = False
     has_unknown = False
 
-    for r in rule_results:
+    num_events = len(fault_trial.events)
+    terminal_order = float(num_events + 10)
+
+    for idx, r in enumerate(rule_results):
         if r.status == RuleEvaluationStatus.VIOLATED:
             has_violation = True
-            if first_violated is None:
-                first_violated = r.rule_id
+            if r.rule_id == RecoveryRuleId.RULE_BUDGETS.value:
+                order_idx = float(contract.max_tool_calls_budget + 1)
+                violated_rules.append((order_idx, idx, r))
+            elif r.rule_id == RecoveryRuleId.RULE_UNSAFE_RETRIES.value:
+                order_idx = float(contract.max_retries + 0.5)
+                violated_rules.append((order_idx, idx, r))
+            elif r.rule_id == RecoveryRuleId.RULE_DUPLICATE_EFFECTS.value:
+                order_idx = float(contract.max_retries + 0.8)
+                violated_rules.append((order_idx, idx, r))
+            elif r.rule_id in (
+                RecoveryRuleId.RULE_COMPLETION.value,
+                RecoveryRuleId.RULE_GRACEFUL_STOPPING.value,
+                RecoveryRuleId.RULE_TRUTHFUL_COMPLETION.value,
+            ):
+                violated_rules.append((terminal_order, idx, r))
+            else:
+                violated_rules.append((terminal_order + 1.0, idx, r))
         elif r.status == RuleEvaluationStatus.UNKNOWN:
             has_unknown = True
 
@@ -534,13 +639,16 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
     if fault_trial.cleanup_status == CleanupStatus.UNCERTAIN:
         has_unknown = True
 
+    # Sort violated rules by chronological/causal event order, using rule index for stable tie-breaking
+    violated_rules.sort(key=lambda item: (item[0], item[1]))
+    first_violated = violated_rules[0][2].rule_id if violated_rules else None
+
     final_verdict: RecoveryVerdict
     if has_violation:
         final_verdict = RecoveryVerdict.FAIL
     elif has_unknown:
         final_verdict = RecoveryVerdict.INCONCLUSIVE
     else:
-        # Check if completion was satisfied vs graceful stopping
         completion_rule = next(
             (
                 r

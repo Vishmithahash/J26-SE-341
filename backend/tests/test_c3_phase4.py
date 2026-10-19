@@ -767,3 +767,311 @@ def test_static_endpoints_preserve_null_recovery_verdict():
     )
     assert gen_resp.status_code == 200
     assert gen_resp.json()["recovery_verdict"] is None
+
+
+# ---------------------------------------------------------------------------
+# 6. Confirmed Phase 4 Audit Defect Regression Tests
+# ---------------------------------------------------------------------------
+
+
+def test_audit_graceful_stopping_permitted_outcome_without_completion_assertions():
+    """A permitted graceful stop branch does not fail solely because completion state was not satisfied."""
+    contract = make_demonstration_recovery_contract().model_copy(
+        update={
+            "permitted_terminal_outcomes": ["ABORT_SAFE"],
+            "required_state_assertions": ["state_order_created"],
+        }
+    )
+    # Caller safely aborted; task completion state was NOT created
+    evidence = make_synthetic_matched_evidence(
+        caller_outcome="ABORT_SAFE", retries_count=0, tool_calls_count=1
+    )
+    req = RecoveryEvaluationRequest(
+        project_id="proj-qa-001",
+        case_id="case-c3-demo-001",
+        candidate_case=make_demonstration_candidate_case(),
+        recovery_contract=contract,
+        matched_evidence=evidence,
+        c2_facts=[],  # No completion facts
+    )
+    result = evaluate_recovery(req)
+
+    assert result.evaluation_status == EvaluationStatus.EVALUATED
+    assert result.recovery_verdict == RecoveryVerdict.PASS_GRACEFUL
+    rule_map = {r.rule_id: r for r in result.rule_results}
+    assert (
+        rule_map[RecoveryRuleId.RULE_COMPLETION.value].status
+        == RuleEvaluationStatus.NOT_APPLICABLE
+    )
+    assert (
+        rule_map[RecoveryRuleId.RULE_GRACEFUL_STOPPING.value].status
+        == RuleEvaluationStatus.SATISFIED
+    )
+
+
+def test_audit_ordinary_incomplete_task_not_automatically_graceful():
+    """Ordinary incomplete task is not automatically graceful stopping."""
+    contract = make_demonstration_recovery_contract().model_copy(
+        update={"permitted_terminal_outcomes": ["ABORT_SAFE", "SUCCESS_CLEAN_RECOVERY"]}
+    )
+    evidence = make_synthetic_matched_evidence(
+        caller_outcome="INCOMPLETE", retries_count=0, tool_calls_count=1
+    )
+    req = RecoveryEvaluationRequest(
+        project_id="proj-qa-001",
+        case_id="case-c3-demo-001",
+        candidate_case=make_demonstration_candidate_case(),
+        recovery_contract=contract,
+        matched_evidence=evidence,
+        c2_facts=[],
+    )
+    result = evaluate_recovery(req)
+
+    assert result.evaluation_status == EvaluationStatus.EVALUATED
+    assert result.recovery_verdict == RecoveryVerdict.FAIL
+    rule_map = {r.rule_id: r for r in result.rule_results}
+    assert (
+        rule_map[RecoveryRuleId.RULE_GRACEFUL_STOPPING.value].status
+        == RuleEvaluationStatus.VIOLATED
+    )
+    assert (
+        rule_map[RecoveryRuleId.RULE_GRACEFUL_STOPPING.value].reason_code
+        == "UNPERMITTED_STOPPING_OUTCOME"
+    )
+
+
+def test_audit_harness_cancellation_never_graceful():
+    """Harness cancellation never establishes graceful stopping."""
+    contract = make_demonstration_recovery_contract().model_copy(
+        update={"permitted_terminal_outcomes": ["ABORT_SAFE", "SUCCESS_CLEAN_RECOVERY"]}
+    )
+    # Caller had CANCELLED status
+    evidence = make_synthetic_matched_evidence(
+        caller_outcome="CANCELLED_BY_HARNESS", retries_count=0
+    )
+    req = RecoveryEvaluationRequest(
+        project_id="proj-qa-001",
+        case_id="case-c3-demo-001",
+        candidate_case=make_demonstration_candidate_case(),
+        recovery_contract=contract,
+        matched_evidence=evidence,
+        c2_facts=[],
+    )
+    result = evaluate_recovery(req)
+
+    assert result.recovery_verdict == RecoveryVerdict.FAIL
+    rule_map = {r.rule_id: r for r in result.rule_results}
+    assert (
+        rule_map[RecoveryRuleId.RULE_GRACEFUL_STOPPING.value].status
+        == RuleEvaluationStatus.VIOLATED
+    )
+    assert (
+        rule_map[RecoveryRuleId.RULE_GRACEFUL_STOPPING.value].reason_code
+        == "HARNESS_CANCELLATION_NOT_GRACEFUL"
+    )
+
+
+def test_audit_distinct_effects_across_workflow_not_duplicates():
+    """Multiple distinct effects across legitimate workflow are not automatically duplicates."""
+    evidence = make_synthetic_matched_evidence(
+        caller_outcome="SUCCESS_AFTER_RETRY",
+        observed_effects=["cart_item_added", "order_placed"],
+    )
+    c2_facts = [
+        C2AssertionFact(assertion_id="state_order_created", value=C2FactValue.TRUE)
+    ]
+    req = RecoveryEvaluationRequest(
+        project_id="proj-qa-001",
+        case_id="case-c3-demo-001",
+        candidate_case=make_demonstration_candidate_case(),
+        recovery_contract=make_demonstration_recovery_contract(),
+        matched_evidence=evidence,
+        c2_facts=c2_facts,
+    )
+    result = evaluate_recovery(req)
+
+    assert result.evaluation_status == EvaluationStatus.EVALUATED
+    rule_map = {r.rule_id: r for r in result.rule_results}
+    assert (
+        rule_map[RecoveryRuleId.RULE_DUPLICATE_EFFECTS.value].status
+        == RuleEvaluationStatus.SATISFIED
+    )
+
+
+def test_audit_repeated_observations_of_one_effect_not_duplicates():
+    """Repeated observations of one effect are not counted as duplicates."""
+    evidence = make_synthetic_matched_evidence(
+        caller_outcome="SUCCESS_AFTER_RETRY",
+        observed_effects=["order_placed", "order_placed"],  # repeated observation
+    )
+    c2_facts = [
+        C2AssertionFact(assertion_id="state_order_created", value=C2FactValue.TRUE)
+    ]
+    req = RecoveryEvaluationRequest(
+        project_id="proj-qa-001",
+        case_id="case-c3-demo-001",
+        candidate_case=make_demonstration_candidate_case(),
+        recovery_contract=make_demonstration_recovery_contract(),
+        matched_evidence=evidence,
+        c2_facts=c2_facts,
+    )
+    result = evaluate_recovery(req)
+
+    rule_map = {r.rule_id: r for r in result.rule_results}
+    assert (
+        rule_map[RecoveryRuleId.RULE_DUPLICATE_EFFECTS.value].status
+        == RuleEvaluationStatus.SATISFIED
+    )
+
+
+def test_audit_retry_safety_idempotency_key_alone_unverified_target():
+    """Idempotency key reuse without verified target enforcement yields UNKNOWN in AFTER_COMMIT."""
+    contract = make_demonstration_recovery_contract().model_copy(
+        update={"allow_retry_on_unverified_commit": False}
+    )
+    case = make_demonstration_candidate_case().model_copy(
+        update={"effect_phase": EffectPhase.AFTER_COMMIT}
+    )
+    evidence = make_synthetic_matched_evidence(
+        caller_outcome="SUCCESS_AFTER_RETRY", retries_count=1
+    )
+    # Only idempotency_key_reused = TRUE, without target_idempotency_enforced or duplicate_side_effect_detected
+    c2_facts = [
+        C2AssertionFact(assertion_id="state_order_created", value=C2FactValue.TRUE),
+        C2AssertionFact(assertion_id="idempotency_key_reused", value=C2FactValue.TRUE),
+    ]
+    req = RecoveryEvaluationRequest(
+        project_id="proj-qa-001",
+        case_id="case-c3-demo-001",
+        candidate_case=case,
+        recovery_contract=contract,
+        matched_evidence=evidence,
+        c2_facts=c2_facts,
+    )
+    result = evaluate_recovery(req)
+
+    assert result.recovery_verdict == RecoveryVerdict.INCONCLUSIVE
+    rule_map = {r.rule_id: r for r in result.rule_results}
+    assert (
+        rule_map[RecoveryRuleId.RULE_UNSAFE_RETRIES.value].status
+        == RuleEvaluationStatus.UNKNOWN
+    )
+    assert (
+        rule_map[RecoveryRuleId.RULE_UNSAFE_RETRIES.value].reason_code
+        == "UNVERIFIED_TARGET_IDEMPOTENCY_ENFORCEMENT"
+    )
+
+
+def test_audit_retry_safety_target_enforcement_verified():
+    """Idempotency key reuse with verified target enforcement yields SATISFIED."""
+    contract = make_demonstration_recovery_contract().model_copy(
+        update={"allow_retry_on_unverified_commit": False}
+    )
+    case = make_demonstration_candidate_case().model_copy(
+        update={"effect_phase": EffectPhase.AFTER_COMMIT}
+    )
+    evidence = make_synthetic_matched_evidence(
+        caller_outcome="SUCCESS_AFTER_RETRY", retries_count=1
+    )
+    c2_facts = [
+        C2AssertionFact(assertion_id="state_order_created", value=C2FactValue.TRUE),
+        C2AssertionFact(assertion_id="idempotency_key_reused", value=C2FactValue.TRUE),
+        C2AssertionFact(
+            assertion_id="target_idempotency_enforced", value=C2FactValue.TRUE
+        ),
+        C2AssertionFact(
+            assertion_id="duplicate_side_effect_detected", value=C2FactValue.FALSE
+        ),
+    ]
+    req = RecoveryEvaluationRequest(
+        project_id="proj-qa-001",
+        case_id="case-c3-demo-001",
+        candidate_case=case,
+        recovery_contract=contract,
+        matched_evidence=evidence,
+        c2_facts=c2_facts,
+    )
+    result = evaluate_recovery(req)
+
+    assert result.recovery_verdict == RecoveryVerdict.PASS_COMPLETED
+    rule_map = {r.rule_id: r for r in result.rule_results}
+    assert (
+        rule_map[RecoveryRuleId.RULE_UNSAFE_RETRIES.value].status
+        == RuleEvaluationStatus.SATISFIED
+    )
+
+
+def test_audit_fact_scoping_conflicts_prevent_unjustified_passes():
+    """Matching facts with conflicting values in same scope return UNKNOWN to prevent unjustified pass."""
+    facts = [
+        C2AssertionFact(
+            assertion_id="state_order_created",
+            assertion_version="1.0.0",
+            value=C2FactValue.TRUE,
+            time_scope="post_recovery",
+        ),
+        C2AssertionFact(
+            assertion_id="state_order_created",
+            assertion_version="2.0.0",
+            value=C2FactValue.FALSE,
+            time_scope="post_recovery",
+        ),
+    ]
+    val = get_c2_fact_value(facts, "state_order_created", time_scope="post_recovery")
+    assert val == C2FactValue.UNKNOWN
+
+
+def test_audit_causal_ordering_selects_earliest_observable_violation():
+    """Causal ordering selects the budget violation that occurred during execution before completion."""
+    evidence = make_synthetic_matched_evidence(
+        caller_outcome="SUCCESS_AFTER_RETRY",
+        retries_count=5,  # Exceeded budget (max 1)
+    )
+    c2_facts = [
+        C2AssertionFact(
+            assertion_id="state_order_created",
+            value=C2FactValue.FALSE,  # Also false completion
+        )
+    ]
+    req = RecoveryEvaluationRequest(
+        project_id="proj-qa-001",
+        case_id="case-c3-demo-001",
+        candidate_case=make_demonstration_candidate_case(),
+        recovery_contract=make_demonstration_recovery_contract(),
+        matched_evidence=evidence,
+        c2_facts=c2_facts,
+    )
+    result = evaluate_recovery(req)
+
+    assert result.recovery_verdict == RecoveryVerdict.FAIL
+    # Budget violation happened during execution, prior to terminal completion check
+    assert result.first_violated_rule == RecoveryRuleId.RULE_BUDGETS.value
+
+
+def test_audit_incomplete_traces_prevent_budget_satisfaction():
+    """Incomplete trace prevents verifying total budget -> UNKNOWN."""
+    evidence = make_synthetic_matched_evidence(caller_outcome="SUCCESS_AFTER_RETRY")
+    evidence.fault_trial.evidence_complete = False
+    c2_facts = [
+        C2AssertionFact(assertion_id="state_order_created", value=C2FactValue.TRUE)
+    ]
+    req = RecoveryEvaluationRequest(
+        project_id="proj-qa-001",
+        case_id="case-c3-demo-001",
+        candidate_case=make_demonstration_candidate_case(),
+        recovery_contract=make_demonstration_recovery_contract(),
+        matched_evidence=evidence,
+        c2_facts=c2_facts,
+    )
+    result = evaluate_recovery(req)
+
+    rule_map = {r.rule_id: r for r in result.rule_results}
+    assert (
+        rule_map[RecoveryRuleId.RULE_BUDGETS.value].status
+        == RuleEvaluationStatus.UNKNOWN
+    )
+    assert (
+        rule_map[RecoveryRuleId.RULE_BUDGETS.value].reason_code
+        == "INCOMPLETE_BUDGET_EVIDENCE"
+    )
+    assert result.recovery_verdict == RecoveryVerdict.INCONCLUSIVE
