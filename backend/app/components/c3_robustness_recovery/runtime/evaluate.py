@@ -175,7 +175,15 @@ def run_evaluation_cli(args: list[str] | None = None) -> int:
         )
         from app.database import SessionLocal
 
-        project_id = parsed.project_id or evidence.project_id
+        if parsed.project_id and parsed.project_id != evidence.project_id:
+            print(
+                f"Error: Project scope mismatch: Evidence declares project '{evidence.project_id}', "
+                f"which does not match specified --project-id '{parsed.project_id}'.",
+                file=sys.stderr,
+            )
+            return 1
+
+        project_id = evidence.project_id
         db = SessionLocal()
         try:
             req = EvaluationComputeRequest(

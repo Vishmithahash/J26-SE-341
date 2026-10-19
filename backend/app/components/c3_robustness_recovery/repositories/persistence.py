@@ -148,14 +148,31 @@ class C3PersistenceRepository:
         )
 
         for order, case in enumerate(suite.selected_cases):
+            if getattr(case, "project_id", None) and case.project_id != project_id:
+                raise ConflictError(
+                    f"Project scope mismatch: Case '{case.case_id}' declares project '{case.project_id}', "
+                    f"which does not match suite storage project '{project_id}'."
+                )
+
             case_dict = sanitize_arguments(case.model_dump(mode="json"))
             content_digest = compute_content_digest(case_dict)
+            case_fp = (
+                suite.case_fingerprints.get(case.case_id)
+                or (getattr(case, "fingerprint", None))
+                or content_digest
+            )
+
+            # Prevent conflicting immutable content under existing case identity
+            existing_case = self.get_case(project_id, case.case_id)
+            if existing_case and existing_case.content_digest != content_digest:
+                raise ConflictError(
+                    f"Case ID '{case.case_id}' already exists in project '{project_id}' with conflicting content digest."
+                )
+
             case_model = C3CaseModel(
                 case_id=case.case_id,
                 suite_digest=suite.suite_digest,
-                case_fingerprint=case.fingerprint
-                if hasattr(case, "fingerprint") and case.fingerprint
-                else content_digest[:16],
+                case_fingerprint=case_fp,
                 content_digest=content_digest,
                 project_id=project_id,
                 case_family_id=case.case_family_id,

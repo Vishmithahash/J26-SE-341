@@ -115,6 +115,11 @@ def import_execution_artifact(
     # Import any associated pair evidences transactionally
     for ev in request.case_evidences:
         validate_evidence_linkage(ev)
+        if ev.project_id != request.project_id:
+            raise ValueError(
+                f"Project scope mismatch: Case evidence declares project '{ev.project_id}', "
+                f"which does not match execution import project '{request.project_id}'."
+            )
         repo.save_matched_pair(
             project_id=request.project_id,
             evidence=ev,

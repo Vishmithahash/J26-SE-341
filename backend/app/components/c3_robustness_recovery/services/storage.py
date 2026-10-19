@@ -200,7 +200,11 @@ def store_matched_pair(
 ) -> MatchedPairRecordResponse:
     """Validate evidence linkage and idempotently persist matched pair evidence."""
     validate_evidence_linkage(evidence)
-
+    if evidence.project_id != project_id:
+        raise ValueError(
+            f"Project scope mismatch: Evidence declares project '{evidence.project_id}', "
+            f"which does not match requested project '{project_id}'."
+        )
     repo = C3PersistenceRepository(db)
     pair_model, _ = repo.save_matched_pair(
         project_id=project_id, evidence=evidence, execution_id=execution_id

@@ -832,16 +832,71 @@ Before persisting verdicts in Phase 5, confirmed Phase 4 evaluation defects were
 
 ---
 
+## Component 3: Phase 6 — Research Validation, Baselines, Metrics & Acceptance
+
+Phase 6 completes the agreed six-phase research and backend-acceptance plan for Component 3. It establishes reproducible experiment manifest planning with zero family-split leakage, two-domain adapter generality, independent reviewer label provenance, comparative baselines and ablations, pure research metrics with explicit denominators, and bounded multi-project batch execution.
+
+### Canonical Phase 6 Structure
+```text
+backend/app/components/c3_robustness_recovery/
+    contracts/
+        research.py            # Typed Pydantic v2 experiment manifests, splits, reviewer labels, and metric contracts
+    services/
+        experiment_plan.py     # Deterministic manifest generation, split leakage verification, and label validation
+        research_metrics.py    # Pure mathematical metric calculation with explicit denominators and safe undefined handling
+    runtime/
+        banking_adapter.py     # Second domain adapter (wire transfers) with out-of-band ledger commit observation
+        research_runner.py     # Bounded batch runner, baseline/ablation evaluation runner, and concurrency verifier
+backend/tests/
+    test_c3_phase6.py          # Hermetic tests covering Phase 5 defect fixes, splits, metrics, baselines, and batch runs
+backend/docs/
+    c3_final_acceptance_report.md # Final acceptance matrix and verification report
+```
+
+### Key Research Capabilities
+
+1. **Family-Split Isolation & Leakage Prevention**:
+   - Cases belong to cohesive `case_family_id` groupings.
+   - Partitions into `TRAIN_DEV` and `HELD_OUT_TEST` occur strictly at the case-family level. Sibling variants never cross split boundaries.
+   - `verify_split_leakage()` guarantees disjointness; overlapping families raise immediate validation errors.
+
+2. **Two-Domain Target Generality & Honest Prerequisites**:
+   - **Domain 1 (E-Commerce)**: `demonstration_order_placement` with order state verification.
+   - **Domain 2 (Banking Wire Transfer)**: `wire_transfer` with double-entry balance updates and out-of-band transaction receipt verification (`verify_committed_transfer`).
+   - **Live Integration Blockers**: `check_two_domain_prerequisites()` accurately reports live integration as `BLOCKED` since live target endpoints and tested agents are not present in the workspace.
+
+3. **Comparative Baselines & Ablations**:
+   - **`OUTCOME_ONLY_BASELINE`**: Re-evaluates evidence without C2 state assertions, blindly trusting caller outcome strings. Production C3 correctly catches silent failures that the baseline misses.
+   - **`NO_STATE_FACTS`**: Evaluates recovery with state facts ablated to `UNKNOWN`, proving graceful degradation to `INCONCLUSIVE` without fabricating `True`.
+   - **`NO_EXPOSURE_RECEIPTS`**: Ablates injection receipts to `EXPOSURE_UNKNOWN`, accurately classifying trials as ineligible (`NOT_EVALUATED`).
+
+4. **Pure Research Metrics & Denominators**:
+   - Standard-library math only (`math`, `collections.Counter`).
+   - Clear distinction of units: candidate, case family, matched pair, evaluated trial.
+   - Explicit denominators for Accuracy, Precision, Recall, F1, False-Pass Rate, Exposure Rate, and Clean Control Qualification Rate.
+   - Undefined cases (e.g., zero positive predictions) return `is_defined=False` with explanatory reasons rather than manufactured 100% scores.
+
+5. **Multi-Project Concurrency Isolation**:
+   - Concurrent suite executions across separate tenants (`project_id`) maintain strict boundary isolation without data corruption or cross-tenant query leaks.
+
+### Final Acceptance Report
+See [`docs/c3_final_acceptance_report.md`](docs/c3_final_acceptance_report.md) for the comprehensive acceptance matrix, verification evidence, planned vs. achieved counts, and explicit blockers.
+
+---
+
 ### Testing & Verification Commands
 ```powershell
-# Run all Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, and Health tests (110 tests)
+# Run all Phase 1 through Phase 6 tests + Health tests (125 passed, 2 opt-in skipped)
 python -m pytest
 
-# Run Phase 5 specific tests (13 tests hermetic SQLite, 1 skipped PostgreSQL opt-in)
-python -m pytest tests/test_c3_phase5.py
+# Run Phase 6 specific tests (15 tests hermetic SQLite, 1 skipped PostgreSQL opt-in)
+python -m pytest tests/test_c3_phase6.py -v
 
-# Run Phase 4 regression tests (31 tests)
-python -m pytest tests/test_c3_phase4.py
+# Run Phase 5 persistence tests (13 tests hermetic SQLite, 1 skipped PostgreSQL opt-in)
+python -m pytest tests/test_c3_phase5.py -v
+
+# Run Phase 4 recovery evaluation tests (31 tests)
+python -m pytest tests/test_c3_phase4.py -v
 
 # Check code formatting and linting
 python -m ruff check .

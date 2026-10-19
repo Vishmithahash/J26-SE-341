@@ -420,6 +420,21 @@ async def main_async(args: list[str]) -> int:
         with open(suite_path, encoding="utf-8") as f:  # noqa: ASYNC230
             data = json.load(f)
         suite = FrozenSuite.model_validate(data)
+        if suite.selected_cases:
+            declared_proj = suite.selected_cases[0].project_id
+            if (
+                declared_proj
+                and parsed.project_id != "proj-demo-qa"
+                and parsed.project_id != declared_proj
+            ):
+                print(
+                    f"Error: Project scope mismatch: Suite declares project '{declared_proj}', "
+                    f"which does not match specified --project-id '{parsed.project_id}'.",
+                    file=sys.stderr,
+                )
+                return 1
+            if declared_proj and parsed.project_id == "proj-demo-qa":
+                parsed.project_id = declared_proj
         print(f"Loaded suite '{suite.suite_id}' (digest: {suite.suite_digest[:16]}...)")
     else:
         # Generate on the fly
