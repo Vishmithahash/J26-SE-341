@@ -225,18 +225,41 @@ When evaluated against a differently scoped rule declaring `evaluation_boundary:
 
 ## 9. Proposal Requirements Mapping (FR1–FR13)
 
-| Requirement | Proposal Scope | Phase 1 Status | Phase 1 Delivered Capabilities & Boundary |
+| Requirement | Proposal Scope | Phase Status | Delivered Capabilities & Boundary |
 |---|---|---|---|
-| **FR1** | Artifact Intake & Normalization | **Complete (Phase 1 scope)** | Normalized text with headings/sections and structured JSON. PDF/OCR deferred. |
-| **FR2** | Candidate Policy Derivation | **Complete (Phase 1 scope)** | Controlled-language pattern extractor & structured importer. Ambiguity & unsupported detection. LLM extraction deferred. |
-| **FR3** | Versioned Policy Contracts | **Complete** | Pydantic v2 schemas, immutable versions, canonical SHA-256 hashing, contract lifecycle (`DRAFT` $\to$ `VALIDATED` $\to$ `ACCEPTED`). |
-| **FR4** | Test Case Generation | *Deferred (Phase 2)* | Future stub contracts defined (`PolicyTestCaseStub`, `TestCaseKind`: `BENIGN`, `DIRECT_POLICY_CHALLENGE`, `INDIRECT_PROMPT_INJECTION`). |
-| **FR5** | Execution Readiness Verification | *Deferred (Phase 2)* | Schema definitions preserved. Live target checks deferred. |
-| **FR6** | Shared Orchestration Integration | *Deferred (Phase 3)* | Protocol interface `ExecutionEvidenceConsumer` defined. |
-| **FR7** | Target Adapters (NexaCart, etc.) | *Deferred (Phase 3)* | Target integration deferred. Synthetic fixtures supported. |
-| **FR8** | Injection Placement & Delivery | *Deferred (Phase 3)* | Channel placement metadata defined in contracts. |
-| **FR9** | Trusted Evidence Capture | **Partial (Phase 1 scope)** | Comprehensive evidence models defined (principal, instruction, attempt, tool, effect, exposure). Live capture deferred. |
-| **FR10** | Deterministic Policy Evaluation | **Complete** | Deterministic 3-valued Kleene evaluator. Exact verdicts (`PASS`, `FAIL`, `INCONCLUSIVE`, `NOT_EXERCISED`). Evaluation boundaries supported. |
-| **FR11** | Explanation & Violation Attribution | **Complete** | Structured `RuleEvaluationFinding` with violation stages, evidence linkage, separate attack outcome and utility. |
-| **FR12** | Policy-Change Impact Analysis | *Deferred (Phase 4)* | Versioned contract and rule storage ready for diff analysis in Phase 4. |
-| **FR13** | Reporting & Export | **Partial (Phase 1 scope)** | Per-rule and aggregated evaluation report models and protocol `ReportingExporter`. Shared export deferred. |
+| **FR1** | Policy Document Ingestion | **Complete (Phase 1)** | Markdown outline parser and structured JSON ingestion with exact character offset tracking. |
+| **FR2** | Policy Derivation & Extraction | **Complete (Phase 1)** | Controlled-language pattern extractor and structured rule importer. Ambiguous terms flagged. |
+| **FR3** | Formal Policy Contract Specification | **Complete (Phase 1)** | Typed Pydantic v2 schemas, immutable versioning, canonical hashing, and draft-to-accepted lifecycle. |
+| **FR4** | Security Boundary Definition | **Complete (Phase 1)** | Explicit evaluation boundaries (`ATTEMPTED_ACTION`, `COMMITTED_EFFECT`, `DISCLOSURE`). |
+| **FR5** | Automatic Policy Test Generation | **Complete (Phase 2)** | Bounded generator for `BENIGN`, `DIRECT_POLICY_CHALLENGE`, and `INDIRECT_PROMPT_INJECTION` across authorization, confidentiality, and instruction authority. |
+| **FR6** | Generated-Case Validation & Readiness | **Complete (Phase 2)** | Independent static validator checking schemas, fixtures, bounds, hidden info separation, and draft-to-frozen lifecycle. |
+| **FR7** | Test Fixture & Domain Binding | **Complete (Phase 2)** | Typed project-scoped `DomainBinding` (roles, tools, resources, fixtures, untrusted injection channels, protected data). |
+| **FR8** | Runtime Evidence Capture | *Deferred (Phase 3)* | Runtime ingestion, causal action provenance tracking, and tamper-resistant trace logging. |
+| **FR9** | Isolated Execution Harness Integration | *Deferred (Phase 3)* | Controlled injection delivery, multi-turn execution runner, and fixture reset orchestration. |
+| **FR10** | Deterministic Policy Evaluation | **Complete (Phase 1/2)** | Kleene 3-valued logic engine across all 3 policy families (`PASS`, `FAIL`, `INCONCLUSIVE`, `NOT_EXERCISED`). |
+| **FR11** | Policy & Test Versioning Immutability | **Complete (Phase 1/2)** | Immutable versioned contracts and frozen case snapshots with DB uniqueness constraints. |
+| **FR12** | Affected-Test Identification & Regeneration | *Deferred (Phase 5)* | Dependency graph diffing, selective case invalidation, and incremental regeneration. |
+| **FR13** | Reporting, Metrics & Findings Attribution | **Partial (Phase 2)** | Generation batch reports, case exports, and violation findings with separate attack outcome and utility. |
+
+---
+
+## 10. Phase 1 Audit and Confirmed Repairs
+
+During the Phase 2 audit, the following concrete defects and invariants were investigated, repaired, and regression-tested (`backend/tests/c4/test_phase1_repairs.py`):
+
+1. **Source Reference Span Bounds & Excerpt Matching**:
+   - `validate_source_reference` now verifies that `0 <= start_char < end_char <= len(artifact_text)` and validates that `supporting_excerpt == artifact_text[start_char:end_char]`. Excerpt mismatches are flagged with `ValidationIssueCode.EXCERPT_MISMATCH`.
+2. **Predicate Field Path & Operand Verification**:
+   - `validate_predicate_condition` checks field roots against `SUPPORTED_PATH_ROOTS` allowlist (`principal`, `tool_call`, `authorization`, `approval`, `instruction`, `disclosure`, `effect`) and enforces typed operand validity for comparisons.
+3. **Evidence-Origin and Trust Classification Enforcement**:
+   - Pydantic root validators in `InstructionSourceEvidence` strictly reject untrusted sources (`SUPPORT_TICKET`, `CUSTOMER_CHAT`, `WEB_RETRIEVAL`, `EMAIL_MESSAGE`) claiming `TRUSTED_GOVERNANCE` classification.
+   - `EvaluationEvidencePackage` verifies that all `ArgumentProvenance` records reference declared instruction sources.
+4. **Instruction-Authority Deterministic Evaluation**:
+   - Evaluator engine implements Kleene 3-valued evaluation for `PolicyFamily.INSTRUCTION_AUTHORITY`. Missing required provenance evidence yields `Verdict.INCONCLUSIVE` instead of guessing based on suspicious text wording alone.
+5. **Exposure Semantics Invariant**:
+   - An established prohibited action violation (`Verdict.FAIL`) at the attempted-action boundary is never erased when exposure evidence is missing or unknown.
+6. **Effect Semantics and Independent Outcomes**:
+   - A backend tool error or exception does not by itself prove unchanged protected state without concrete `EffectEvidence`. Missing effect evidence leaves `attack_outcome` as `AttackOutcome.UNKNOWN`.
+
+*Note*: Passing unit tests verify conformance of implemented code against coded specifications; they do not by themselves establish complete research proposal compliance.
+

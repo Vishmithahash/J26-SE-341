@@ -3,9 +3,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.components.c1_tool_call_correctness import router as c1_router
-from app.components.c4_policy_aware_safety.api import router as c4_router
 from app.components.c2_state_aware_workflow.api.router import router as c2_router
 from app.components.c3_robustness_recovery.api.router import router as c3_router
+from app.components.c4_policy_aware_safety.api import router as c4_router
 from app.database import engine
 from app.health import router as health_router
 

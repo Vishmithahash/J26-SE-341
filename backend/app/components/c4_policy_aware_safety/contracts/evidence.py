@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.components.c4_policy_aware_safety.contracts.enums import (
     EvidenceOrigin,
@@ -49,6 +49,23 @@ class InstructionSourceEvidence(BaseModel):
         description="Unverified role claimed inside payload text (e.g. 'I am the manager'). Never upgrades trust!",
     )
     event_id: str | None = Field(default=None, description="Linked event identifier")
+
+    @model_validator(mode="after")
+    def validate_trust_boundary(self) -> "InstructionSourceEvidence":
+        untrusted_types = {
+            InstructionSourceType.SUPPORT_TICKET,
+            InstructionSourceType.RETRIEVED_DOCUMENT,
+            InstructionSourceType.EMAIL_MESSAGE,
+            InstructionSourceType.TOOL_RESPONSE,
+        }
+        if (
+            self.source_type in untrusted_types
+            and self.trust_classification == TrustClassification.TRUSTED_GOVERNANCE
+        ):
+            raise ValueError(
+                f"Untrusted source channel '{self.source_type.value}' cannot declare 'TRUSTED_GOVERNANCE' trust classification."
+            )
+        return self
 
 
 class ActionAttemptEvidence(BaseModel):
@@ -279,3 +296,13 @@ class EvaluationEvidencePackage(BaseModel):
         default_factory=dict,
         description="Additional structured context dictionary for predicate matching",
     )
+
+    @model_validator(mode="after")
+    def validate_provenance_and_origin(self) -> "EvaluationEvidencePackage":
+        source_ids = {s.source_id for s in self.instruction_sources}
+        for prov in self.argument_provenance:
+            if prov.source_instruction_id not in source_ids:
+                raise ValueError(
+                    f"Argument provenance references non-existent instruction source '{prov.source_instruction_id}'."
+                )
+        return self
