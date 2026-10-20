@@ -61,6 +61,7 @@ engine = create_engine(
     echo=False,
     hide_parameters=True,
     pool_pre_ping=True,
+    pool_recycle=300,
     pool_size=5,
     max_overflow=5,
     pool_timeout=10.0,

@@ -370,7 +370,7 @@ def test_valid_missing_expired_and_tampered_tokens(
         email="tokenadmin@example.com",
         password="admin_password_long_enough",
     )
-    settings = get_settings()
+    settings = app.dependency_overrides[get_settings]()
 
     # 1. Missing token
     res_missing = client.get("/api/v1/auth/me")
@@ -602,18 +602,18 @@ def test_cli_help_and_parser_without_database():
 
 def test_secret_canaries_do_not_appear_in_validation_errors(client: TestClient):
     canary = "CANARY_SECRET_LEAK_TEST_998877"
-    # Submit short password containing canary
+    # Submit short password containing canary (< 8 chars)
     res = client.post(
         "/api/v1/auth/signup",
         json={
             "name": "Canary Test",
             "email": "canary@example.com",
-            "password": canary[:10],
+            "password": canary[:6],
         },
     )
     assert res.status_code == 422
     assert canary not in res.text
-    assert canary[:10] not in res.text
+    assert canary[:6] not in res.text
 
 
 def test_existing_health_and_component_routes_intact(client: TestClient):
@@ -629,3 +629,160 @@ def test_existing_health_and_component_routes_intact(client: TestClient):
     c3_res = client.get("/api/v1/c3/fault-catalog")
     assert c3_res.status_code == 200
     assert "families" in c3_res.json()
+
+
+def test_update_profile_name_success(client: TestClient):
+    signup_res = client.post(
+        "/api/v1/auth/signup",
+        json={
+            "name": "Original Name",
+            "email": "updateprofile@example.com",
+            "password": "ValidPassword12345!",
+        },
+    )
+    assert signup_res.status_code == 201
+
+    login_res = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "updateprofile@example.com",
+            "password": "ValidPassword12345!",
+        },
+    )
+    assert login_res.status_code == 200
+    token = login_res.json()["access_token"]
+
+    res = client.patch(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Updated Test User"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["name"] == "Updated Test User"
+
+    # Verify persisted in /me
+    me_res = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert me_res.status_code == 200
+    assert me_res.json()["name"] == "Updated Test User"
+
+
+def test_update_profile_rejects_injected_fields(client: TestClient):
+    signup_res = client.post(
+        "/api/v1/auth/signup",
+        json={
+            "name": "Injection Target",
+            "email": "injectfields@example.com",
+            "password": "ValidPassword12345!",
+        },
+    )
+    assert signup_res.status_code == 201
+
+    login_res = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "injectfields@example.com",
+            "password": "ValidPassword12345!",
+        },
+    )
+    assert login_res.status_code == 200
+    token = login_res.json()["access_token"]
+
+    # Attempt privilege escalation or field injection
+    res = client.patch(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "New Name", "role": "ADMIN", "is_active": False},
+    )
+    assert res.status_code == 422
+
+
+def test_update_profile_requires_auth(client: TestClient):
+    res = client.patch(
+        "/api/v1/auth/me",
+        json={"name": "Unauthorized Attempt"},
+    )
+    assert res.status_code == 401
+
+
+def test_change_password_workflow(client: TestClient, db_session):
+    # Register a new dedicated user for password change testing
+    signup_res = client.post(
+        "/api/v1/auth/signup",
+        json={
+            "name": "Password Change Tester",
+            "email": "pwdchange@example.com",
+            "password": "InitialPassword123!",
+        },
+    )
+    assert signup_res.status_code == 201
+
+    # Login to obtain token
+    login_res = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "pwdchange@example.com",
+            "password": "InitialPassword123!",
+        },
+    )
+    assert login_res.status_code == 200
+    token = login_res.json()["access_token"]
+
+    # Attempt change with wrong current password
+    fail_res = client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "WrongCurrentPassword123!",
+            "new_password": "NewValidPassword456!",
+        },
+    )
+    assert fail_res.status_code == 400
+    assert "incorrect" in fail_res.json()["detail"].lower()
+
+    # Attempt change with short new password (< 8 chars)
+    short_res = client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "InitialPassword123!",
+            "new_password": "Short1!",
+        },
+    )
+    assert short_res.status_code == 422
+    assert "at least 8 characters" in short_res.text
+
+    # Successful password change
+    success_res = client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "InitialPassword123!",
+            "new_password": "BrandNewValidPassword789!",
+        },
+    )
+    assert success_res.status_code == 200
+
+    # Old password no longer works
+    old_login = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "pwdchange@example.com",
+            "password": "InitialPassword123!",
+        },
+    )
+    assert old_login.status_code == 401
+
+    # New password works
+    new_login = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "pwdchange@example.com",
+            "password": "BrandNewValidPassword789!",
+        },
+    )
+    assert new_login.status_code == 200
+    assert "access_token" in new_login.json()

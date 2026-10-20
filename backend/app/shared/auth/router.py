@@ -24,17 +24,21 @@ from app.shared.auth.dependencies import (
 )
 from app.shared.auth.models import User
 from app.shared.auth.schemas import (
+    PasswordChangeRequest,
     TokenResponse,
     UserListResponse,
     UserLoginRequest,
     UserResponse,
     UserSignupRequest,
+    UserUpdateRequest,
 )
 from app.shared.auth.security import login_rate_limiter
 from app.shared.auth.service import (
     authenticate_user,
+    change_user_password,
     list_users,
     register_user,
+    update_user_profile,
 )
 
 
@@ -63,7 +67,7 @@ class AuthSafeRoute(APIRoute):
                     if "password" in loc_str:
                         err_type = err.get("type", "")
                         if "string_too_short" in err_type or "min_length" in err_type:
-                            msg = "Password must be at least 15 characters."
+                            msg = "Password must be at least 8 characters."
                         elif "string_too_long" in err_type or "max_length" in err_type:
                             msg = "Password must not exceed 128 characters."
                         else:
@@ -112,7 +116,7 @@ admin_router = APIRouter(
     description=(
         "Registers a new account. Always assigns the USER role. "
         "Strictly forbids injected privilege fields. "
-        "Passwords require at least 15 characters."
+        "Passwords require at least 8 characters."
     ),
 )
 def signup(
@@ -176,6 +180,40 @@ def get_me(
     return UserResponse.model_validate(current_user)
 
 
+@auth_router.patch(
+    "/me",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update Profile",
+    description="Updates the current authenticated user's profile display name.",
+)
+def update_me(
+    update_data: UserUpdateRequest,
+    current_user: Annotated[User, Depends(require_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UserResponse:
+    updated = update_user_profile(db=db, user=current_user, update_data=update_data)
+    return UserResponse.model_validate(updated)
+
+
+@auth_router.post(
+    "/change-password",
+    status_code=status.HTTP_200_OK,
+    summary="Change Password",
+    description="Verifies the current password and updates to a new password.",
+)
+def change_password(
+    data: PasswordChangeRequest,
+    current_user: Annotated[User, Depends(require_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, str]:
+    change_user_password(
+        db=db,
+        user=current_user,
+        current_password=data.current_password,
+        new_password=data.new_password,
+    )
+    return {"message": "Password updated successfully."}
 @admin_router.get(
     "/users",
     response_model=UserListResponse,
