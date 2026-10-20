@@ -34,6 +34,7 @@ class ViolationType(str, Enum):
     MISSING_EFFECT = "MISSING_EFFECT"
     OUTCOME_MISMATCH = "OUTCOME_MISMATCH"
     PROTECTED_FIELD_MUTATED = "PROTECTED_FIELD_MUTATED"
+    PREMATURE_TERMINATION = "PREMATURE_TERMINATION"
 
 
 class ViolationDetail(BaseModel):
@@ -63,6 +64,8 @@ class FirstDivergenceDetail(BaseModel):
     state_at_divergence: str
     attempted_event: str
     reason: str
+    violation_type: ViolationType | None = None
+    expected_alternatives: list[str] = Field(default_factory=list)
     evidence_excerpt: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -90,6 +93,12 @@ class EvaluationResultContract(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: str = "2026.1"
+    evaluation_id: str | None = None
+    project_id: str | None = None
+    suite_id: str | None = None
+    run_id: str | None = None
+    evaluator_version: str = "c2_evaluator_v1"
+
     verdict: RuntimeVerdict
     reasons: list[str] = Field(default_factory=list)
 
@@ -104,7 +113,27 @@ class EvaluationResultContract(BaseModel):
     observed_states: list[str] = Field(default_factory=list)
     violations: list[ViolationDetail] = Field(default_factory=list)
     first_divergence: FirstDivergenceDetail | None = None
+    divergence_localisation_uncertainty: str | None = None
     evidence_references: list[str] = Field(default_factory=list)
     coverage: WorkflowCoverageSummary = Field(default_factory=WorkflowCoverageSummary)
+    detailed_coverage: Any = None
     evaluator_timing_ms: float = 0.0
     evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ReproductionVerificationResult(BaseModel):
+    """Result of independent replay verification against retained execution evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    is_reproducible: bool
+    original_evaluation_id: str
+    run_id: str
+    original_verdict: RuntimeVerdict
+    replay_verdict: RuntimeVerdict
+    semantic_equality: bool
+    differences: list[str] = Field(default_factory=list)
+    original_evidence_digest: str
+    replay_evaluator_version: str
+    evaluated_freshly: bool = True
+    verified_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

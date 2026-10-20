@@ -11,13 +11,25 @@ from app.components.c2_state_aware_workflow.integrations.interfaces import (
     StateObservationInterface,
     UnifiedReportingInterface,
 )
+from app.components.c2_state_aware_workflow.integrations.reporting import (
+    C2ReportExportService,
+    C2ReportPublisher,
+)
+from app.components.c2_state_aware_workflow.integrations.service import (
+    C2IntegrationService,
+    LocalSyntheticRunnerAdapter,
+)
 
 __all__ = [
     "AgentExecutionInterface",
+    "C2IntegrationService",
+    "C2ReportExportService",
+    "C2ReportPublisher",
     "EvidenceIngestionInterface",
     "FixtureResetInterface",
     "IntegrationStatus",
     "LocalSyntheticFixtureManager",
+    "LocalSyntheticRunnerAdapter",
     "LocalSyntheticStateObserver",
     "SharedIntakeInterface",
     "StateObservationInterface",
