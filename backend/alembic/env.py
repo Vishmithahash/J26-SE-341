@@ -2,6 +2,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import create_engine, pool
 
+import app.components.c1_tool_call_correctness.models  # noqa: F401
 import app.components.c3_robustness_recovery.models  # noqa: F401
 import app.components.c2_state_aware_workflow  # noqa: F401
 from alembic import context
