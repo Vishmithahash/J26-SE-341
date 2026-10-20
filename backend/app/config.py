@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     app_env: str = Field(default="development", alias="APP_ENV")
     debug: bool = Field(default=False, alias="DEBUG")
     database_url: SecretStr = Field(..., alias="DATABASE_URL")
+    auth_secret_key: SecretStr = Field(default=SecretStr(""), alias="AUTH_SECRET_KEY")
+    auth_jwt_algorithm: str = Field(default="HS256", alias="AUTH_JWT_ALGORITHM")
+    auth_access_token_expire_minutes: int = Field(
+        default=15, alias="AUTH_ACCESS_TOKEN_EXPIRE_MINUTES"
+    )
+    auth_jwt_issuer: str | None = Field(default=None, alias="AUTH_JWT_ISSUER")
+    auth_jwt_audience: str | None = Field(default=None, alias="AUTH_JWT_AUDIENCE")
 
     @field_validator("database_url", mode="after")
     @classmethod
