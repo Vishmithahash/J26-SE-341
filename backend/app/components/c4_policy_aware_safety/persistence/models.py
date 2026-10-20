@@ -3,6 +3,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Integer,
     String,
@@ -467,6 +468,112 @@ class C4RegressionBatchModel(Base):
             "idempotency_key",
             name="uq_c4_regression_batches_proj_idempotency",
         ),
+    )
+
+
+class C4HistoricalReEvaluationModel(Base):
+    """SQLAlchemy model for immutable historical run re-evaluations under candidate policies."""
+
+    __tablename__ = "c4_historical_re_evaluations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    re_eval_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    source_run_id: Mapped[str] = mapped_column(
+        String(128), index=True, nullable=False
+    )
+    original_contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    original_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    candidate_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    derived_policy_verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    re_eval_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class C4EvaluationDatasetModel(Base):
+    """SQLAlchemy model for versioned and frozen evaluation datasets."""
+
+    __tablename__ = "c4_evaluation_datasets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(
+        String(128), index=True, nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    domain_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    dataset_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_frozen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    dataset_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    frozen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "dataset_id",
+            "version",
+            name="uq_c4_eval_datasets_proj_id_ver",
+        ),
+    )
+
+
+class C4EvaluationReviewModel(Base):
+    """SQLAlchemy model for independent reviewer decisions."""
+
+    __tablename__ = "c4_evaluation_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    case_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    reviewer_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    verdict_decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    review_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class C4ExperimentModel(Base):
+    """SQLAlchemy model for reproducible evaluation experiments."""
+
+    __tablename__ = "c4_experiments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    experiment_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    domain_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    strategy_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    experiment_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
 

@@ -2,8 +2,10 @@
 
 import hashlib
 import json
+import math
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from app.components.c4_policy_aware_safety.contracts.enums import (
@@ -23,10 +25,27 @@ from app.components.c4_policy_aware_safety.contracts.rules import (
 
 
 def _canonical_json(obj: Any) -> str:
-    """Produce deterministic canonical JSON string."""
+    """Produce deterministic canonical JSON string without lossy numeric rounding.
+    
+    Preserves exact numeric precision (integer minor units, exact Decimals) and rejects
+    unsupported non-finite floats (NaN, Inf).
+    """
     def _normalize(val: Any) -> Any:
-        if val is None or isinstance(val, (int, float, str, bool)):
+        if val is None or isinstance(val, (bool, str, int)):
             return val
+        if isinstance(val, float):
+            if math.isnan(val) or math.isinf(val):
+                raise ValueError(
+                    f"Non-finite numeric value '{val}' is unsupported in policy diffing."
+                )
+            # Exact decimal representation without lossy rounding
+            return f"{Decimal(str(val)):f}" if abs(val) < 1e15 else str(val)
+        if isinstance(val, Decimal):
+            if not val.is_finite():
+                raise ValueError(
+                    f"Non-finite Decimal value '{val}' is unsupported in policy diffing."
+                )
+            return f"{val:f}"
         if hasattr(val, "model_dump"):
             return _normalize(val.model_dump(mode="json"))
         if isinstance(val, dict):

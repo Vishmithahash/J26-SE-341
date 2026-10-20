@@ -14,6 +14,7 @@ from app.components.c4_policy_aware_safety.contracts.execution import (
 from app.components.c4_policy_aware_safety.contracts.regression import (
     CaseDecisionAction,
     ExecutionModeType,
+    HistoricalReEvaluationRecord,
     PlanLifecycleState,
     PolicyComparisonRecord,
     PolicyComparisonRequest,
@@ -442,8 +443,26 @@ class C4RegressionService:
                     rep_rule_id = getattr(
                         rep_case, "target_rule_id", getattr(rep_case, "rule_id", "")
                     )
-                    # Historical evidence re-evaluation
-                    historical_re_eval_ids.append(last_run.run_id)
+                    # Create immutable HistoricalReEvaluationRecord
+                    re_eval_record = HistoricalReEvaluationRecord(
+                        re_eval_id=f"reeval-{uuid.uuid4().hex[:12]}",
+                        project_id=project_id,
+                        source_run_id=last_run.run_id,
+                        source_evidence_references=[last_run.run_id],
+                        original_contract_id=plan.baseline_contract_id,
+                        original_contract_version=plan.baseline_contract_version,
+                        candidate_contract_id=plan.candidate_contract_id,
+                        candidate_contract_version=plan.candidate_contract_version,
+                        evaluator_version="3-valued-kleene-v1",
+                        evaluator_config_digest=getattr(candidate, "content_hash", "default"),
+                        derived_policy_verdict=last_run.policy_verdict,
+                        derived_findings=last_run.findings if hasattr(last_run, "findings") else [],
+                        analysis_mode="HISTORICAL_RE_EVALUATION",
+                        explanation=f"Re-evaluated historical run evidence {last_run.run_id} under candidate policy without fresh agent execution.",
+                        created_at=datetime.now(UTC),
+                    )
+                    self.repository.save_historical_re_evaluation(re_eval_record)
+                    historical_re_eval_ids.append(re_eval_record.re_eval_id)
                     verdict_transitions.append(
                         VerdictTransition(
                             case_id=rep_case.case_id,
@@ -451,7 +470,7 @@ class C4RegressionService:
                             baseline_verdict=last_run.policy_verdict,
                             candidate_verdict=last_run.policy_verdict,
                             transition_type=VerdictTransitionType.PASS_TO_PASS,
-                            explanation=f"Re-evaluated historical run evidence {last_run.run_id} under candidate policy without fresh agent execution.",
+                            explanation=re_eval_record.explanation,
                             is_requirement_change=False,
                         )
                     )
@@ -484,9 +503,24 @@ class C4RegressionService:
                 for d in plan.case_decisions
                 if d.impact_level.value == "UNAFFECTED"
             ),
-            "retired_count": len(plan.retired_cases),
-            "retained_count": len(plan.retained_cases),
+            "regenerate_count": sum(
+                1 for d in plan.case_decisions if d.action.value == "REGENERATE"
+            ),
+            "revalidate_count": sum(
+                1 for d in plan.case_decisions if d.action.value == "REVALIDATE"
+            ),
+            "revise_count": sum(
+                1 for d in plan.case_decisions if d.action.value == "REVISE"
+            ),
+            "retire_count": len(plan.retired_cases),
+            "retain_count": len(plan.retained_cases),
             "replacement_count": len(plan.proposed_replacement_cases),
+            "blocked_count": sum(
+                1 for d in plan.case_decisions if d.action.value == "BLOCKED"
+            ),
+            "needs_review_count": sum(
+                1 for d in plan.case_decisions if d.action.value == "NEEDS_REVIEW"
+            ),
         }
 
         exec_summary = {

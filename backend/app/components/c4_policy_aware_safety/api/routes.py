@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -22,6 +23,13 @@ from app.components.c4_policy_aware_safety.contracts.cases import (
 from app.components.c4_policy_aware_safety.contracts.enums import (
     ContractLifecycleState,
     RuleReviewStatus,
+)
+from app.components.c4_policy_aware_safety.contracts.evaluation import (
+    EvaluationDatasetRecord,
+    ExperimentConfigRecord,
+    ExperimentReportRecord,
+    InterRaterAgreement,
+    ReviewerDecision,
 )
 from app.components.c4_policy_aware_safety.contracts.evaluator import (
     EvaluationReport,
@@ -77,6 +85,12 @@ from app.components.c4_policy_aware_safety.derivation.importer import (
 )
 from app.components.c4_policy_aware_safety.derivation.intake import normalize_artifact
 from app.components.c4_policy_aware_safety.domains.registry import domain_registry
+from app.components.c4_policy_aware_safety.evaluation.experiments import (
+    ExperimentService,
+)
+from app.components.c4_policy_aware_safety.evaluation.review import (
+    ReviewService,
+)
 from app.components.c4_policy_aware_safety.evaluator.engine import (
     DeterministicPolicyEvaluator,
 )
@@ -1414,6 +1428,191 @@ def re_evaluate_historical(
         return batch
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ==============================================================================
+# 12. Phase 6 Research Evaluation Endpoints
+# ==============================================================================
+@router.post(
+    "/evaluation/datasets",
+    response_model=EvaluationDatasetRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register and validate a versioned evaluation dataset",
+)
+def register_evaluation_dataset(
+    project_id: str,
+    dataset: EvaluationDatasetRecord,
+    db: Annotated[Session, Depends(get_db)],
+):
+    if dataset.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project ID mismatch: dataset declares '{dataset.project_id}', route has '{project_id}'.",
+        )
+    review_service = ReviewService()
+    leakage_errors = review_service.validate_split_leakage(dataset)
+    if leakage_errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Split leakage validation failed: {'; '.join(leakage_errors)}",
+        )
+    repo = C4Repository(db)
+    return repo.save_evaluation_dataset(dataset)
+
+
+@router.get(
+    "/evaluation/datasets",
+    response_model=list[EvaluationDatasetRecord],
+    summary="List evaluation datasets for project",
+)
+def list_evaluation_datasets(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    return repo.list_evaluation_datasets(project_id)
+
+
+@router.get(
+    "/evaluation/datasets/{dataset_id}",
+    response_model=EvaluationDatasetRecord,
+    summary="Retrieve evaluation dataset by ID and optional version",
+)
+def get_evaluation_dataset(
+    project_id: str,
+    dataset_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    version: int = 1,
+):
+    repo = C4Repository(db)
+    dataset = repo.get_evaluation_dataset(project_id, dataset_id, version)
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evaluation dataset '{dataset_id}' v{version} not found in project '{project_id}'.",
+        )
+    return dataset
+
+
+@router.post(
+    "/evaluation/datasets/{dataset_id}/freeze",
+    response_model=EvaluationDatasetRecord,
+    summary="Freeze an evaluation dataset to guarantee immutability for final benchmark evaluation",
+)
+def freeze_evaluation_dataset(
+    project_id: str,
+    dataset_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    version: int = 1,
+):
+    repo = C4Repository(db)
+    dataset = repo.get_evaluation_dataset(project_id, dataset_id, version)
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evaluation dataset '{dataset_id}' v{version} not found.",
+        )
+    if dataset.is_frozen:
+        return dataset
+
+    dataset.is_frozen = True
+    dataset.frozen_at = datetime.now(UTC)
+    return repo.save_evaluation_dataset(dataset)
+
+
+@router.post(
+    "/evaluation/reviews",
+    response_model=ReviewerDecision,
+    status_code=status.HTTP_201_CREATED,
+    summary="Record an independent reviewer judgment",
+)
+def record_reviewer_decision(
+    project_id: str,
+    review: ReviewerDecision,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    return repo.save_evaluation_review(review, project_id)
+
+
+@router.get(
+    "/evaluation/reviews/agreement",
+    response_model=InterRaterAgreement,
+    summary="Calculate Cohen's Kappa agreement between two independent reviewers",
+)
+def get_reviewer_agreement(
+    project_id: str,
+    reviewer_1: str,
+    reviewer_2: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    all_reviews = repo.list_evaluation_reviews(project_id)
+    r1_reviews = [r for r in all_reviews if r.reviewer_id == reviewer_1]
+    r2_reviews = [r for r in all_reviews if r.reviewer_id == reviewer_2]
+
+    service = ReviewService()
+    return service.calculate_inter_rater_agreement(r1_reviews, r2_reviews)
+
+
+@router.post(
+    "/evaluation/experiments",
+    response_model=ExperimentConfigRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a reproducible evaluation experiment configuration",
+)
+def create_experiment(
+    project_id: str,
+    config: ExperimentConfigRecord,
+    db: Annotated[Session, Depends(get_db)],
+):
+    if config.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project ID mismatch: config declares '{config.project_id}', route has '{project_id}'.",
+        )
+    repo = C4Repository(db)
+    service = ExperimentService(repository=repo)
+    return service.create_experiment(config)
+
+
+@router.post(
+    "/evaluation/experiments/{experiment_id}/execute",
+    response_model=ExperimentReportRecord,
+    summary="Execute reproducible evaluation experiment trials and compute stratified metrics",
+)
+def execute_experiment(
+    project_id: str,
+    experiment_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = ExperimentService(repository=repo)
+    try:
+        return service.execute_experiment(project_id, experiment_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/evaluation/experiments/{experiment_id}/report",
+    response_model=ExperimentReportRecord,
+    summary="Retrieve completed experiment report with uncertainty summaries",
+)
+def get_experiment_report(
+    project_id: str,
+    experiment_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    report = repo.get_experiment_report(project_id, experiment_id)
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment report '{experiment_id}' not found in project '{project_id}'.",
+        )
+    return report
+
 
 
 

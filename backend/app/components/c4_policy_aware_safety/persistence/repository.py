@@ -15,6 +15,12 @@ from app.components.c4_policy_aware_safety.contracts.enums import (
     ArtifactKind,
     ContractLifecycleState,
 )
+from app.components.c4_policy_aware_safety.contracts.evaluation import (
+    EvaluationDatasetRecord,
+    ExperimentConfigRecord,
+    ExperimentReportRecord,
+    ReviewerDecision,
+)
 from app.components.c4_policy_aware_safety.contracts.evaluator import (
     RuleEvaluationFinding,
 )
@@ -30,6 +36,7 @@ from app.components.c4_policy_aware_safety.contracts.onboarding import (
     C4OnboardingJobRecord,
 )
 from app.components.c4_policy_aware_safety.contracts.regression import (
+    HistoricalReEvaluationRecord,
     PolicyComparisonRecord,
     RegressionBatchRecord,
     RegressionPlanRecord,
@@ -44,10 +51,14 @@ from app.components.c4_policy_aware_safety.persistence.models import (
     C4CandidateRuleModel,
     C4ContractModel,
     C4DomainBindingModel,
+    C4EvaluationDatasetModel,
+    C4EvaluationReviewModel,
     C4ExecutionRunModel,
+    C4ExperimentModel,
     C4ExtractionJobModel,
     C4FindingModel,
     C4GenerationBatchModel,
+    C4HistoricalReEvaluationModel,
     C4OnboardingJobModel,
     C4PolicyComparisonModel,
     C4RegressionBatchModel,
@@ -450,14 +461,36 @@ class C4Repository:
     def get_test_case(
         self, project_id: str, case_id: str, version: int | None = None
     ) -> PolicyTestCase | None:
-        stmt = select(C4TestCaseModel).where(
-            C4TestCaseModel.project_id == project_id,
-            C4TestCaseModel.case_id == case_id,
-        )
+        """Exact version lookup for a test case.
+        
+        If version is specified, returns that exact version or None (never falls back to latest).
+        If version is None, explicitly delegates to get_latest_test_case.
+        """
         if version is not None:
-            stmt = stmt.where(C4TestCaseModel.case_version == version)
-        else:
-            stmt = stmt.order_by(desc(C4TestCaseModel.case_version)).limit(1)
+            stmt = select(C4TestCaseModel).where(
+                C4TestCaseModel.project_id == project_id,
+                C4TestCaseModel.case_id == case_id,
+                C4TestCaseModel.case_version == version,
+            )
+            model = self.db.execute(stmt).scalar_one_or_none()
+            if not model:
+                return None
+            return PolicyTestCase.model_validate(model.case_data)
+        return self.get_latest_test_case(project_id, case_id)
+
+    def get_latest_test_case(
+        self, project_id: str, case_id: str
+    ) -> PolicyTestCase | None:
+        """Retrieve the latest version of a test case by case_id."""
+        stmt = (
+            select(C4TestCaseModel)
+            .where(
+                C4TestCaseModel.project_id == project_id,
+                C4TestCaseModel.case_id == case_id,
+            )
+            .order_by(desc(C4TestCaseModel.case_version))
+            .limit(1)
+        )
         model = self.db.execute(stmt).scalar_one_or_none()
         if not model:
             return None
@@ -1004,6 +1037,225 @@ class C4Repository:
         if not model:
             return None
         return RegressionBatchRecord.model_validate(model.batch_data)
+
+    # 14. Historical Re-Evaluations
+    def save_historical_re_evaluation(
+        self, record: HistoricalReEvaluationRecord
+    ) -> HistoricalReEvaluationRecord:
+        model = C4HistoricalReEvaluationModel(
+            re_eval_id=record.re_eval_id,
+            project_id=record.project_id,
+            source_run_id=record.source_run_id,
+            original_contract_id=record.original_contract_id,
+            original_contract_version=record.original_contract_version,
+            candidate_contract_id=record.candidate_contract_id,
+            candidate_contract_version=record.candidate_contract_version,
+            derived_policy_verdict=record.derived_policy_verdict,
+            re_eval_data=record.model_dump(mode="json"),
+            created_at=record.created_at,
+        )
+        self.db.add(model)
+        self.db.commit()
+        return record
+
+    def get_historical_re_evaluation(
+        self, project_id: str, re_eval_id: str
+    ) -> HistoricalReEvaluationRecord | None:
+        stmt = select(C4HistoricalReEvaluationModel).where(
+            C4HistoricalReEvaluationModel.project_id == project_id,
+            C4HistoricalReEvaluationModel.re_eval_id == re_eval_id,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return HistoricalReEvaluationRecord.model_validate(model.re_eval_data)
+
+    def list_historical_re_evaluations(
+        self, project_id: str, source_run_id: str | None = None
+    ) -> list[HistoricalReEvaluationRecord]:
+        stmt = (
+            select(C4HistoricalReEvaluationModel)
+            .where(C4HistoricalReEvaluationModel.project_id == project_id)
+            .order_by(desc(C4HistoricalReEvaluationModel.created_at))
+        )
+        if source_run_id:
+            stmt = stmt.where(C4HistoricalReEvaluationModel.source_run_id == source_run_id)
+        models = self.db.execute(stmt).scalars().all()
+        return [HistoricalReEvaluationRecord.model_validate(m.re_eval_data) for m in models]
+
+    # 15. Evaluation Datasets
+    def save_evaluation_dataset(
+        self, dataset: EvaluationDatasetRecord
+    ) -> EvaluationDatasetRecord:
+        stmt = select(C4EvaluationDatasetModel).where(
+            C4EvaluationDatasetModel.project_id == dataset.project_id,
+            C4EvaluationDatasetModel.dataset_id == dataset.dataset_id,
+            C4EvaluationDatasetModel.version == dataset.version,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        dataset_dict = dataset.model_dump(mode="json")
+
+        if existing:
+            if existing.is_frozen:
+                raise ValueError(
+                    f"Evaluation dataset '{dataset.dataset_id}' v{dataset.version} is FROZEN and immutable."
+                )
+            existing.dataset_hash = dataset.dataset_hash
+            existing.is_frozen = dataset.is_frozen
+            existing.dataset_data = dataset_dict
+            existing.frozen_at = dataset.frozen_at
+        else:
+            model = C4EvaluationDatasetModel(
+                dataset_id=dataset.dataset_id,
+                version=dataset.version,
+                project_id=dataset.project_id,
+                domain_id=dataset.domain_id,
+                dataset_hash=dataset.dataset_hash,
+                is_frozen=dataset.is_frozen,
+                dataset_data=dataset_dict,
+                created_at=dataset.created_at,
+                frozen_at=dataset.frozen_at,
+            )
+            self.db.add(model)
+
+        self.db.commit()
+        return dataset
+
+    def get_evaluation_dataset(
+        self, project_id: str, dataset_id: str, version: int = 1
+    ) -> EvaluationDatasetRecord | None:
+        stmt = select(C4EvaluationDatasetModel).where(
+            C4EvaluationDatasetModel.project_id == project_id,
+            C4EvaluationDatasetModel.dataset_id == dataset_id,
+            C4EvaluationDatasetModel.version == version,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return EvaluationDatasetRecord.model_validate(model.dataset_data)
+
+    def list_evaluation_datasets(self, project_id: str) -> list[EvaluationDatasetRecord]:
+        stmt = (
+            select(C4EvaluationDatasetModel)
+            .where(C4EvaluationDatasetModel.project_id == project_id)
+            .order_by(desc(C4EvaluationDatasetModel.created_at))
+        )
+        models = self.db.execute(stmt).scalars().all()
+        return [EvaluationDatasetRecord.model_validate(m.dataset_data) for m in models]
+
+    # 16. Evaluation Reviews
+    def save_evaluation_review(
+        self, review: ReviewerDecision, project_id: str
+    ) -> ReviewerDecision:
+        model = C4EvaluationReviewModel(
+            review_id=review.review_id,
+            project_id=project_id,
+            case_id=review.case_id,
+            reviewer_id=review.reviewer_id,
+            verdict_decision=review.verdict_decision,
+            review_data=review.model_dump(mode="json"),
+            created_at=review.timestamp,
+        )
+        self.db.add(model)
+        self.db.commit()
+        return review
+
+    def list_evaluation_reviews(
+        self, project_id: str, case_id: str | None = None
+    ) -> list[ReviewerDecision]:
+        stmt = (
+            select(C4EvaluationReviewModel)
+            .where(C4EvaluationReviewModel.project_id == project_id)
+            .order_by(desc(C4EvaluationReviewModel.created_at))
+        )
+        if case_id:
+            stmt = stmt.where(C4EvaluationReviewModel.case_id == case_id)
+        models = self.db.execute(stmt).scalars().all()
+        return [ReviewerDecision.model_validate(m.review_data) for m in models]
+
+    # 17. Experiments
+    def save_experiment(
+        self, config: ExperimentConfigRecord
+    ) -> ExperimentConfigRecord:
+        stmt = select(C4ExperimentModel).where(
+            C4ExperimentModel.project_id == config.project_id,
+            C4ExperimentModel.experiment_id == config.experiment_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        config_dict = config.model_dump(mode="json")
+
+        if existing:
+            existing.experiment_data = config_dict
+        else:
+            model = C4ExperimentModel(
+                experiment_id=config.experiment_id,
+                project_id=config.project_id,
+                domain_id=config.domain_id,
+                dataset_id=config.dataset_id,
+                strategy_type=config.strategy_type.value,
+                status="CREATED",
+                experiment_data=config_dict,
+                created_at=config.created_at,
+            )
+            self.db.add(model)
+
+        self.db.commit()
+        return config
+
+    def get_experiment_config(
+        self, project_id: str, experiment_id: str
+    ) -> ExperimentConfigRecord | None:
+        stmt = select(C4ExperimentModel).where(
+            C4ExperimentModel.project_id == project_id,
+            C4ExperimentModel.experiment_id == experiment_id,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return ExperimentConfigRecord.model_validate(model.experiment_data)
+
+    def save_experiment_report(
+        self, report: ExperimentReportRecord
+    ) -> ExperimentReportRecord:
+        stmt = select(C4ExperimentModel).where(
+            C4ExperimentModel.project_id == report.project_id,
+            C4ExperimentModel.experiment_id == report.experiment_id,
+        )
+        existing = self.db.execute(stmt).scalar_one_or_none()
+        report_dict = report.model_dump(mode="json")
+
+        if existing:
+            existing.status = report.status.value
+            existing.experiment_data = report_dict
+            existing.completed_at = report.completed_at
+        else:
+            model = C4ExperimentModel(
+                experiment_id=report.experiment_id,
+                project_id=report.project_id,
+                domain_id=report.config.domain_id,
+                dataset_id=report.config.dataset_id,
+                strategy_type=report.config.strategy_type.value,
+                status=report.status.value,
+                experiment_data=report_dict,
+                created_at=report.config.created_at,
+                completed_at=report.completed_at,
+            )
+            self.db.add(model)
+
+        self.db.commit()
+        return report
+
+    def get_experiment_report(
+        self, project_id: str, experiment_id: str
+    ) -> ExperimentReportRecord | None:
+        stmt = select(C4ExperimentModel).where(
+            C4ExperimentModel.project_id == project_id,
+            C4ExperimentModel.experiment_id == experiment_id,
+        )
+        model = self.db.execute(stmt).scalar_one_or_none()
+        if not model:
+            return None
+        return ExperimentReportRecord.model_validate(model.experiment_data)
 
 
 

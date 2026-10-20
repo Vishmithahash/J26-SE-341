@@ -230,3 +230,23 @@ class HistoricalReEvaluationRequest(BaseModel):
     project_id: str
     plan_id: str
     run_ids: list[str] = Field(default_factory=list)
+
+
+class HistoricalReEvaluationRecord(BaseModel):
+    """Immutable record of re-evaluating historical run evidence under a candidate policy version."""
+
+    re_eval_id: str
+    project_id: str
+    source_run_id: str
+    source_evidence_references: list[str] = Field(default_factory=list)
+    original_contract_id: str
+    original_contract_version: int
+    candidate_contract_id: str
+    candidate_contract_version: int
+    evaluator_version: str = "3-valued-kleene-v1"
+    evaluator_config_digest: str = "default"
+    derived_policy_verdict: str
+    derived_findings: list[dict[str, Any]] = Field(default_factory=list)
+    analysis_mode: str = "HISTORICAL_RE_EVALUATION"
+    explanation: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

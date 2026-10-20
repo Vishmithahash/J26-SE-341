@@ -334,6 +334,7 @@ class ConfiguredLlmExtractionProvider:
         model_identifier: str | None = None,
         endpoint_url: str | None = None,
         api_key: str | None = None,
+        http_client: Any | None = None,
     ) -> None:
         self.provider_id = provider_id
         self.model_identifier = (
@@ -351,16 +352,17 @@ class ConfiguredLlmExtractionProvider:
             or os.environ.get("C4_EXTRACTION_API_KEY")
             or os.environ.get("LLM_API_KEY")
         )
+        self.http_client = http_client
         self.prompt_template_version = "v5.0.0"
         self.schema_version = "c4_candidate_v1"
 
     def check_readiness(self) -> ExtractionReadinessReport:
         blockers = []
-        if not self.endpoint_url:
+        if not self.endpoint_url and not self.http_client:
             blockers.append(
                 "MODEL_NOT_CONFIGURED: Missing LLM endpoint URL (set C4_EXTRACTION_MODEL_URL or LLM_API_BASE)."
             )
-        if not self.api_key:
+        if not self.api_key and not self.http_client:
             blockers.append(
                 "MODEL_NOT_CONFIGURED: Missing LLM API key (set C4_EXTRACTION_API_KEY or LLM_API_KEY)."
             )
@@ -395,7 +397,7 @@ class ConfiguredLlmExtractionProvider:
 
         start_time = datetime.now(UTC)
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {self.api_key or 'redacted'}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -416,10 +418,21 @@ class ConfiguredLlmExtractionProvider:
             "temperature": 0.0,
             "response_format": {"type": "json_object"},
         }
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(self.endpoint_url, headers=headers, json=payload)
+
+        try:
+            if self.http_client is not None:
+                resp = self.http_client.post(self.endpoint_url or "http://configured-llm.local", headers=headers, json=payload)
+            else:
+                with httpx.Client(timeout=30.0) as client:
+                    resp = client.post(self.endpoint_url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
+        except Exception as e:  # noqa: BLE001
+            # Handle provider or network error safely without leaking credentials
+            sanitized_err = str(e).replace(self.api_key or "NO_KEY", "[REDACTED]")
+            if self.api_key and self.api_key in sanitized_err:
+                sanitized_err = "[REDACTED_SECRET]"
+            raise RuntimeError(f"Configured extraction provider invocation failed: {sanitized_err}") from None
 
         latency_ms = max(
             1, int((datetime.now(UTC) - start_time).total_seconds() * 1000)
@@ -427,7 +440,20 @@ class ConfiguredLlmExtractionProvider:
         raw_content = (
             data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
         )
-        parsed = json.loads(raw_content)
+        try:
+            parsed = json.loads(raw_content)
+        except json.JSONDecodeError:
+            metadata = {
+                "provider_id": self.provider_id,
+                "model_identifier": self.model_identifier,
+                "prompt_template_version": self.prompt_template_version,
+                "schema_version": self.schema_version,
+                "latency_ms": latency_ms,
+                "malformed": True,
+                "error": "Malformed JSON from provider response content.",
+            }
+            return [{"malformed_output": True, "raw_content": raw_content[:200]}], metadata
+
         candidates = parsed.get("candidates", []) if isinstance(parsed, dict) else []
 
         metadata = {
