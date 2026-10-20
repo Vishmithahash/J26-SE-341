@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ListChecks, Workflow, RotateCcw, ShieldCheck } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { ProjectProvider } from './context/ProjectContext';
 import { ProtectedRoute } from './components/layout/ProtectedRoute';
 import { AppLayout } from './components/layout/AppLayout';
 
@@ -12,6 +13,9 @@ import { SignUpPage } from './pages/auth/SignUpPage';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { UsersPage } from './pages/admin/UsersPage';
 import { UserDashboard } from './pages/user/UserDashboard';
+import { ProjectsListPage } from './pages/projects/ProjectsListPage';
+import { ProjectFormPage } from './pages/projects/ProjectFormPage';
+import { ProjectDetailPage } from './pages/projects/ProjectDetailPage';
 import { ModelSelectionPage } from './pages/shared/ModelSelectionPage';
 import { ProfilePage } from './pages/shared/ProfilePage';
 import { SettingsPage } from './pages/shared/SettingsPage';
@@ -42,125 +46,143 @@ export const App = () => {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            {/* Role-aware Root Redirect */}
-            <Route path="/" element={<RootRedirect />} />
+        <ProjectProvider>
+          <BrowserRouter>
+            <Routes>
+              {/* Role-aware Root Redirect */}
+              <Route path="/" element={<RootRedirect />} />
 
-            {/* Public Auth Routes */}
-            <Route path="/sign-in" element={<SignInPage />} />
-            <Route path="/sign-up" element={<SignUpPage />} />
+              {/* Public Auth Routes */}
+              <Route path="/sign-in" element={<SignInPage />} />
+              <Route path="/sign-up" element={<SignUpPage />} />
 
-            {/* Administrator Routes */}
-            <Route
-              path="/admin"
-              element={
-                <ProtectedRoute requiredRole="ADMIN">
-                  <AppLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Navigate to="/admin/dashboard" replace />} />
-              <Route path="dashboard" element={<AdminDashboard />} />
-              <Route path="users" element={<UsersPage />} />
+              {/* Administrator Routes */}
               <Route
-                path="tool-call-correctness"
+                path="/admin"
                 element={
-                  <EmptyComponentPage
-                    title="Explainable Tool-Call Correctness Testing"
-                    icon={ListChecks}
-                  />
+                  <ProtectedRoute requiredRole="ADMIN">
+                    <AppLayout />
+                  </ProtectedRoute>
                 }
-              />
-              <Route
-                path="workflow-testing"
-                element={
-                  <EmptyComponentPage
-                    title="State-Aware Multi-Step Workflow Testing"
-                    icon={Workflow}
-                  />
-                }
-              />
-              <Route
-                path="robustness-recovery"
-                element={
-                  <EmptyComponentPage
-                    title="Robustness and Failure Recovery Testing"
-                    icon={RotateCcw}
-                  />
-                }
-              />
-              <Route
-                path="policy-safety"
-                element={
-                  <EmptyComponentPage
-                    title="Policy-Aware Safety and Prompt-Injection Testing"
-                    icon={ShieldCheck}
-                  />
-                }
-              />
-              <Route path="model-selection" element={<ModelSelectionPage />} />
-              <Route path="profile" element={<ProfilePage />} />
-              <Route path="settings" element={<SettingsPage />} />
-            </Route>
+              >
+                <Route index element={<Navigate to="/admin/dashboard" replace />} />
+                <Route path="dashboard" element={<AdminDashboard />} />
+                <Route path="users" element={<UsersPage />} />
 
-            {/* User Routes */}
-            <Route
-              path="/app"
-              element={
-                <ProtectedRoute requiredRole="USER">
-                  <AppLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Navigate to="/app/dashboard" replace />} />
-              <Route path="dashboard" element={<UserDashboard />} />
-              <Route
-                path="tool-call-correctness"
-                element={
-                  <EmptyComponentPage
-                    title="Explainable Tool-Call Correctness Testing"
-                    icon={ListChecks}
-                  />
-                }
-              />
-              <Route
-                path="workflow-testing"
-                element={
-                  <EmptyComponentPage
-                    title="State-Aware Multi-Step Workflow Testing"
-                    icon={Workflow}
-                  />
-                }
-              />
-              <Route
-                path="robustness-recovery"
-                element={
-                  <EmptyComponentPage
-                    title="Robustness and Failure Recovery Testing"
-                    icon={RotateCcw}
-                  />
-                }
-              />
-              <Route
-                path="policy-safety"
-                element={
-                  <EmptyComponentPage
-                    title="Policy-Aware Safety and Prompt-Injection Testing"
-                    icon={ShieldCheck}
-                  />
-                }
-              />
-              <Route path="model-selection" element={<ModelSelectionPage />} />
-              <Route path="profile" element={<ProfilePage />} />
-              <Route path="settings" element={<SettingsPage />} />
-            </Route>
+                {/* Shared Projects Workspace */}
+                <Route path="projects" element={<ProjectsListPage />} />
+                <Route path="projects/new" element={<ProjectFormPage />} />
+                <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+                <Route path="projects/:projectId/edit" element={<ProjectFormPage />} />
 
-            {/* Standalone Access Denied & 404 */}
-            <Route path="/access-denied" element={<AccessDeniedPage />} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </BrowserRouter>
+                {/* Preserved Empty Research Component Shells */}
+                <Route
+                  path="tool-call-correctness"
+                  element={
+                    <EmptyComponentPage
+                      title="Explainable Tool-Call Correctness Testing"
+                      icon={ListChecks}
+                    />
+                  }
+                />
+                <Route
+                  path="workflow-testing"
+                  element={
+                    <EmptyComponentPage
+                      title="State-Aware Multi-Step Workflow Testing"
+                      icon={Workflow}
+                    />
+                  }
+                />
+                <Route
+                  path="robustness-recovery"
+                  element={
+                    <EmptyComponentPage
+                      title="Robustness and Failure Recovery Testing"
+                      icon={RotateCcw}
+                    />
+                  }
+                />
+                <Route
+                  path="policy-safety"
+                  element={
+                    <EmptyComponentPage
+                      title="Policy-Aware Safety and Prompt-Injection Testing"
+                      icon={ShieldCheck}
+                    />
+                  }
+                />
+                <Route path="model-selection" element={<ModelSelectionPage />} />
+                <Route path="profile" element={<ProfilePage />} />
+                <Route path="settings" element={<SettingsPage />} />
+              </Route>
+
+              {/* User Routes */}
+              <Route
+                path="/app"
+                element={
+                  <ProtectedRoute requiredRole="USER">
+                    <AppLayout />
+                  </ProtectedRoute>
+                }
+              >
+                <Route index element={<Navigate to="/app/dashboard" replace />} />
+                <Route path="dashboard" element={<UserDashboard />} />
+
+                {/* Shared Projects Workspace */}
+                <Route path="projects" element={<ProjectsListPage />} />
+                <Route path="projects/new" element={<ProjectFormPage />} />
+                <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+                <Route path="projects/:projectId/edit" element={<ProjectFormPage />} />
+
+                {/* Preserved Empty Research Component Shells */}
+                <Route
+                  path="tool-call-correctness"
+                  element={
+                    <EmptyComponentPage
+                      title="Explainable Tool-Call Correctness Testing"
+                      icon={ListChecks}
+                    />
+                  }
+                />
+                <Route
+                  path="workflow-testing"
+                  element={
+                    <EmptyComponentPage
+                      title="State-Aware Multi-Step Workflow Testing"
+                      icon={Workflow}
+                    />
+                  }
+                />
+                <Route
+                  path="robustness-recovery"
+                  element={
+                    <EmptyComponentPage
+                      title="Robustness and Failure Recovery Testing"
+                      icon={RotateCcw}
+                    />
+                  }
+                />
+                <Route
+                  path="policy-safety"
+                  element={
+                    <EmptyComponentPage
+                      title="Policy-Aware Safety and Prompt-Injection Testing"
+                      icon={ShieldCheck}
+                    />
+                  }
+                />
+                <Route path="model-selection" element={<ModelSelectionPage />} />
+                <Route path="profile" element={<ProfilePage />} />
+                <Route path="settings" element={<SettingsPage />} />
+              </Route>
+
+              {/* Standalone Access Denied & 404 */}
+              <Route path="/access-denied" element={<AccessDeniedPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </BrowserRouter>
+        </ProjectProvider>
       </AuthProvider>
     </ThemeProvider>
   );

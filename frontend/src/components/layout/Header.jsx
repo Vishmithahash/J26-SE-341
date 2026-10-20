@@ -9,13 +9,16 @@ import {
   Settings,
   LogOut,
   ChevronDown,
+  FolderKanban,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useProject } from '../../context/ProjectContext';
 
 export const Header = ({ onOpenMobileNav }) => {
   const { user, logout } = useAuth();
   const { mode, setMode } = useTheme();
+  const { activeProject } = useProject();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -61,6 +64,10 @@ export const Header = ({ onOpenMobileNav }) => {
   const getPageInfo = () => {
     const path = location.pathname;
     if (path.includes('/dashboard')) return { title: 'Dashboard', crumb: 'Overview' };
+    if (path.includes('/projects/new')) return { title: 'Register Application', crumb: 'Projects' };
+    if (path.includes('/edit')) return { title: 'Edit Configuration', crumb: 'Projects' };
+    if (path.includes('/projects/')) return { title: 'Project Details', crumb: 'Projects' };
+    if (path.includes('/projects')) return { title: 'Projects Workspace', crumb: 'Projects' };
     if (path.includes('/users')) return { title: 'Registered Users', crumb: 'Administration' };
     if (path.includes('/tool-call-correctness'))
       return { title: 'Explainable Tool-Call Correctness Testing', crumb: 'Components' };
@@ -113,8 +120,20 @@ export const Header = ({ onOpenMobileNav }) => {
         </div>
       </div>
 
-      {/* Right: Theme Toggle and Account Menu */}
+      {/* Right: Active Project Pill, Theme Toggle and Account Menu */}
       <div className="flex items-center gap-2 sm:gap-3">
+        {/* Active Project Pill */}
+        {activeProject && (
+          <Link
+            to={`${basePath}/projects/${activeProject.project_id}`}
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/70 text-xs font-semibold hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors"
+            title={`Active Project: ${activeProject.name}`}
+          >
+            <FolderKanban className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+            <span className="max-w-[140px] truncate">{activeProject.name}</span>
+          </Link>
+        )}
+
         {/* Theme mode dropdown */}
         <div className="relative" ref={themeRef}>
           <button

@@ -12,6 +12,7 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  FolderKanban,
   Shield,
   Layers,
 } from 'lucide-react';
@@ -43,6 +44,11 @@ export const Sidebar = ({
       label: 'Dashboard',
       path: `${basePath}/dashboard`,
       icon: LayoutDashboard,
+    },
+    {
+      label: 'Projects',
+      path: `${basePath}/projects`,
+      icon: FolderKanban,
     },
     ...(isAdmin
       ? [
