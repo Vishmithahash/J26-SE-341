@@ -1,6 +1,6 @@
 import React from 'react';
 
-export const UnderstatedIllustration: React.FC<{ className?: string }> = ({ className = 'w-full h-auto' }) => {
+export const UnderstatedIllustration = ({ className = 'w-full h-auto' }) => {
   return (
     <svg
       viewBox="0 0 480 360"

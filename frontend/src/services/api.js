@@ -1,12 +1,7 @@
-import type { TokenResponse, User, UserListResponse } from '../types/auth';
-
 const TOKEN_KEY = 'qa_auth_token';
 
 class ApiError extends Error {
-  status: number;
-  data: any;
-
-  constructor(status: number, message: string, data?: any) {
+  constructor(status, message, data) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
@@ -14,11 +9,11 @@ class ApiError extends Error {
   }
 }
 
-function getStoredToken(): string | null {
+function getStoredToken() {
   return sessionStorage.getItem(TOKEN_KEY);
 }
 
-export function setStoredToken(token: string | null): void {
+export function setStoredToken(token) {
   if (token) {
     sessionStorage.setItem(TOKEN_KEY, token);
   } else {
@@ -26,13 +21,13 @@ export function setStoredToken(token: string | null): void {
   }
 }
 
-function parseFastAPIError(data: any, fallbackMessage: string): string {
+function parseFastAPIError(data, fallbackMessage) {
   if (!data) return fallbackMessage;
   if (typeof data === 'string') return data;
   if (typeof data.detail === 'string') return data.detail;
   if (Array.isArray(data.detail)) {
     // Array of pydantic errors: [{ loc: [...], msg: "..." }]
-    const messages = data.detail.map((err: any) => {
+    const messages = data.detail.map((err) => {
       const field = Array.isArray(err.loc) ? err.loc[err.loc.length - 1] : '';
       const cleanField = field && field !== 'body' ? `${field}: ` : '';
       return `${cleanField}${err.msg || 'Invalid field'}`;
@@ -42,24 +37,24 @@ function parseFastAPIError(data: any, fallbackMessage: string): string {
   return fallbackMessage;
 }
 
-let onUnauthorizedCallback: (() => void) | null = null;
+let onUnauthorizedCallback = null;
 
-export function setOnUnauthorizedCallback(cb: () => void) {
+export function setOnUnauthorizedCallback(cb) {
   onUnauthorizedCallback = cb;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request(path, options = {}) {
   const token = getStoredToken();
-  const headers: Record<string, string> = {
+  const headers = {
     'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string>),
+    ...options.headers,
   };
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  let response: Response;
+  let response;
   try {
     response = await fetch(path, {
       ...options,
@@ -77,7 +72,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   if (!response.ok) {
-    let errorData: any = null;
+    let errorData = null;
     try {
       errorData = await response.json();
     } catch {
@@ -98,22 +93,22 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   // If 204 No Content
   if (response.status === 204) {
-    return {} as T;
+    return {};
   }
 
   return response.json();
 }
 
 export const api = {
-  async signup(name: string, email: string, password: string): Promise<User> {
-    return request<User>('/api/v1/auth/signup', {
+  async signup(name, email, password) {
+    return request('/api/v1/auth/signup', {
       method: 'POST',
       body: JSON.stringify({ name, email, password }),
     });
   },
 
-  async login(email: string, password: string): Promise<TokenResponse> {
-    const res = await request<TokenResponse>('/api/v1/auth/login', {
+  async login(email, password) {
+    const res = await request('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
@@ -121,21 +116,21 @@ export const api = {
     return res;
   },
 
-  async getMe(): Promise<User> {
-    return request<User>('/api/v1/auth/me', {
+  async getMe() {
+    return request('/api/v1/auth/me', {
       method: 'GET',
     });
   },
 
-  async updateProfile(name: string): Promise<User> {
-    return request<User>('/api/v1/auth/me', {
+  async updateProfile(name) {
+    return request('/api/v1/auth/me', {
       method: 'PATCH',
       body: JSON.stringify({ name }),
     });
   },
 
-  async changePassword(currentPassword: string, newPassword: string): Promise<{ message: string }> {
-    return request<{ message: string }>('/api/v1/auth/change-password', {
+  async changePassword(currentPassword, newPassword) {
+    return request('/api/v1/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({
         current_password: currentPassword,
@@ -144,17 +139,17 @@ export const api = {
     });
   },
 
-  async getAdminUsers(limit = 20, offset = 0): Promise<UserListResponse> {
-    return request<UserListResponse>(`/api/v1/admin/users?limit=${limit}&offset=${offset}`, {
+  async getAdminUsers(limit = 20, offset = 0) {
+    return request(`/api/v1/admin/users?limit=${limit}&offset=${offset}`, {
       method: 'GET',
     });
   },
 
-  logout(): void {
+  logout() {
     setStoredToken(null);
   },
 
-  getToken(): string | null {
+  getToken() {
     return getStoredToken();
   },
 };

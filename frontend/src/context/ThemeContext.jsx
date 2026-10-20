@@ -1,21 +1,12 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import type { DisplayDensity, ThemeMode } from '../types/auth';
-
-interface ThemeContextType {
-  mode: ThemeMode;
-  resolvedTheme: 'light' | 'dark';
-  setMode: (mode: ThemeMode) => void;
-  density: DisplayDensity;
-  setDensity: (density: DisplayDensity) => void;
-}
 
 const THEME_KEY = 'qa_theme_mode';
 const DENSITY_KEY = 'qa_density_pref';
 
-const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
+const ThemeContext = createContext(undefined);
 
-export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [mode, setModeState] = useState<ThemeMode>(() => {
+export const ThemeProvider = ({ children }) => {
+  const [mode, setModeState] = useState(() => {
     try {
       const saved = localStorage.getItem(THEME_KEY);
       if (saved === 'light' || saved === 'dark' || saved === 'system') {
@@ -27,7 +18,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return 'system';
   });
 
-  const [density, setDensityState] = useState<DisplayDensity>(() => {
+  const [density, setDensityState] = useState(() => {
     try {
       const saved = localStorage.getItem(DENSITY_KEY);
       return saved === 'compact' ? 'compact' : 'comfortable';
@@ -36,7 +27,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   });
 
-  const [systemIsDark, setSystemIsDark] = useState<boolean>(() => {
+  const [systemIsDark, setSystemIsDark] = useState(() => {
     return (
       typeof window !== 'undefined' &&
       window.matchMedia &&
@@ -48,7 +39,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const handler = (e: MediaQueryListEvent) => setSystemIsDark(e.matches);
+    const handler = (e) => setSystemIsDark(e.matches);
     mediaQuery.addEventListener('change', handler);
     return () => mediaQuery.removeEventListener('change', handler);
   }, []);
@@ -70,7 +61,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     document.documentElement.setAttribute('data-density', density);
   }, [density]);
 
-  const setMode = (newMode: ThemeMode) => {
+  const setMode = (newMode) => {
     setModeState(newMode);
     try {
       localStorage.setItem(THEME_KEY, newMode);
@@ -79,7 +70,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const setDensity = (newDensity: DisplayDensity) => {
+  const setDensity = (newDensity) => {
     setDensityState(newDensity);
     try {
       localStorage.setItem(DENSITY_KEY, newDensity);

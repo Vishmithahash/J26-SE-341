@@ -11,18 +11,17 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { api } from '../../services/api';
-import type { User } from '../../types/auth';
 
 const PAGE_SIZE = 10;
 
-export const UsersPage: React.FC = () => {
-  const [users, setUsers] = useState<User[]>([]);
-  const [total, setTotal] = useState<number>(0);
-  const [offset, setOffset] = useState<number>(0);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+export const UsersPage = () => {
+  const [users, setUsers] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState(null);
 
-  const fetchUsers = async (currentOffset: number) => {
+  const fetchUsers = async (currentOffset) => {
     setIsLoading(true);
     setErrorMessage(null);
     try {
@@ -30,7 +29,7 @@ export const UsersPage: React.FC = () => {
       setUsers(res.items);
       setTotal(res.total);
       setOffset(res.offset);
-    } catch (err: any) {
+    } catch (err) {
       setErrorMessage(err.message || 'Failed to load user accounts.');
     } finally {
       setIsLoading(false);

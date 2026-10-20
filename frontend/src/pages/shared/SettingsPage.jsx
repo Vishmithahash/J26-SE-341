@@ -18,9 +18,9 @@ import { useTheme } from '../../context/ThemeContext';
 import { api } from '../../services/api';
 
 // Count Unicode code points (matching Python string length for supplementary characters/emojis)
-const countCodePoints = (str: string): number => Array.from(str).length;
+const countCodePoints = (str) => Array.from(str).length;
 
-export const SettingsPage: React.FC = () => {
+export const SettingsPage = () => {
   const { user, logout } = useAuth();
   const { mode, setMode, density, setDensity } = useTheme();
   const navigate = useNavigate();
@@ -37,9 +37,9 @@ export const SettingsPage: React.FC = () => {
   const [showConfirm, setShowConfirm] = useState(false);
 
   const [isChangingPassword, setIsChangingPassword] = useState(false);
-  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState(null);
 
-  const handlePasswordChange = async (e: React.FormEvent) => {
+  const handlePasswordChange = async (e) => {
     e.preventDefault();
     if (isChangingPassword) return;
     setPasswordError(null);
@@ -81,7 +81,7 @@ export const SettingsPage: React.FC = () => {
         state: { message: 'Password updated successfully. Please sign in with your new password.' },
         replace: true,
       });
-    } catch (err: any) {
+    } catch (err) {
       setPasswordError(err.message || 'Failed to update password. Please check your current password.');
     } finally {
       setIsChangingPassword(false);

@@ -5,9 +5,9 @@ import { useAuth } from '../../context/AuthContext';
 import { UnderstatedIllustration } from '../../components/common/UnderstatedIllustration';
 
 // Count Unicode code points (matching Python string length for supplementary characters/emojis)
-const countCodePoints = (str: string): number => Array.from(str).length;
+const countCodePoints = (str) => Array.from(str).length;
 
-export const SignUpPage: React.FC = () => {
+export const SignUpPage = () => {
   const { signup } = useAuth();
   const navigate = useNavigate();
 
@@ -19,10 +19,10 @@ export const SignUpPage: React.FC = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState(null);
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (isLoading) return;
     setErrorMessage(null);
@@ -63,7 +63,7 @@ export const SignUpPage: React.FC = () => {
       // Send only name, email, and password (confirm password stays in frontend)
       await signup(cleanName, cleanEmail, password);
       setIsSuccess(true);
-    } catch (err: any) {
+    } catch (err) {
       const msg = err.message || '';
       if (msg.includes('status 500') || msg.includes('status 503') || msg.includes('temporarily unavailable')) {
         setErrorMessage('The service is temporarily unable to reach the database. Please try again in a few moments.');

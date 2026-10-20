@@ -2,12 +2,12 @@ import React, { useState } from 'react';
 import { Mail, Shield, Calendar, CheckCircle, Save, AlertCircle, Check } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
-export const ProfilePage: React.FC = () => {
+export const ProfilePage = () => {
   const { user, updateUserDisplay } = useAuth();
 
   const [name, setName] = useState(user?.name || '');
   const [isLoading, setIsLoading] = useState(false);
-  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [feedback, setFeedback] = useState(null);
 
   const initials = user?.name
     ? user.name
@@ -18,7 +18,7 @@ export const ProfilePage: React.FC = () => {
         .slice(0, 2)
     : 'QA';
 
-  const handleUpdateName = async (e: React.FormEvent) => {
+  const handleUpdateName = async (e) => {
     e.preventDefault();
     setFeedback(null);
 
@@ -32,7 +32,7 @@ export const ProfilePage: React.FC = () => {
     try {
       await updateUserDisplay(trimmed);
       setFeedback({ type: 'success', message: 'Display name updated successfully.' });
-    } catch (err: any) {
+    } catch (err) {
       setFeedback({ type: 'error', message: err.message || 'Failed to update name.' });
     } finally {
       setIsLoading(false);

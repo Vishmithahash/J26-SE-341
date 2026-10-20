@@ -1,28 +1,16 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { api, setOnUnauthorizedCallback } from '../services/api';
-import type { User } from '../types/auth';
 
-interface AuthContextType {
-  user: User | null;
-  token: string | null;
-  isLoading: boolean;
-  login: (email: string, password: string) => Promise<User>;
-  signup: (name: string, email: string, password: string) => Promise<User>;
-  logout: () => void;
-  updateUserDisplay: (name: string) => Promise<User>;
-  refreshUser: () => Promise<void>;
-}
+const AuthContext = createContext(undefined);
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(() => api.getToken());
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(() => api.getToken());
+  const [isLoading, setIsLoading] = useState(true);
 
   // Monotonically increasing counter to prevent stale asynchronous responses
   // from restoring a logged-out account or overwriting a newly signed-in account.
-  const sessionCounterRef = useRef<number>(0);
+  const sessionCounterRef = useRef(0);
 
   const logout = useCallback(() => {
     sessionCounterRef.current += 1;
@@ -71,7 +59,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshUser();
   }, [logout, refreshUser]);
 
-  const login = async (email: string, password: string): Promise<User> => {
+  const login = async (email, password) => {
     // Increment generation and clear previous account data immediately to avoid carry-over
     const thisSession = ++sessionCounterRef.current;
     setUser(null);
@@ -91,11 +79,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return res.user;
   };
 
-  const signup = async (name: string, email: string, password: string): Promise<User> => {
+  const signup = async (name, email, password) => {
     return api.signup(name, email, password);
   };
 
-  const updateUserDisplay = async (name: string): Promise<User> => {
+  const updateUserDisplay = async (name) => {
     const updated = await api.updateProfile(name);
     setUser(updated);
     return updated;

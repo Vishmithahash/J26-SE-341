@@ -17,14 +17,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
-interface SidebarProps {
-  isCollapsed: boolean;
-  setIsCollapsed: (collapsed: boolean) => void;
-  isMobileOpen: boolean;
-  setIsMobileOpen: (open: boolean) => void;
-}
-
-export const Sidebar: React.FC<SidebarProps> = ({
+export const Sidebar = ({
   isCollapsed,
   setIsCollapsed,
   isMobileOpen,
@@ -36,7 +29,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Close mobile drawer on Escape key
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = (e) => {
       if (e.key === 'Escape' && isMobileOpen) {
         setIsMobileOpen(false);
       }

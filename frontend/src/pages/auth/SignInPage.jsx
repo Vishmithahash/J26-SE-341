@@ -4,7 +4,7 @@ import { Layers, Eye, EyeOff, Lock, Mail, AlertCircle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { UnderstatedIllustration } from '../../components/common/UnderstatedIllustration';
 
-export const SignInPage: React.FC = () => {
+export const SignInPage = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -13,12 +13,12 @@ export const SignInPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState(null);
 
   // Success message passed from registration redirect
-  const registrationSuccessMessage = (location.state as any)?.message;
+  const registrationSuccessMessage = location.state?.message;
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (isLoading) return;
     setErrorMessage(null);
@@ -35,7 +35,7 @@ export const SignInPage: React.FC = () => {
       const user = await login(cleanEmail, password);
 
       // Safe return path handling: must stay inside the application and respect role permissions
-      const requestedPath = (location.state as any)?.from;
+      const requestedPath = location.state?.from;
       let destination = user.role === 'ADMIN' ? '/admin/dashboard' : '/app/dashboard';
 
       if (
@@ -52,7 +52,7 @@ export const SignInPage: React.FC = () => {
       }
 
       navigate(destination, { replace: true });
-    } catch (err: any) {
+    } catch (err) {
       setErrorMessage(err.message || 'Authentication failed. Please verify your credentials.');
     } finally {
       setIsLoading(false);

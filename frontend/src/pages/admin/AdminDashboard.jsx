@@ -16,13 +16,12 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
-import type { User } from '../../types/auth';
 import { getModelPreference } from '../../services/modelPreference';
 
-export const AdminDashboard: React.FC = () => {
+export const AdminDashboard = () => {
   const { user } = useAuth();
-  const [userTotal, setUserTotal] = useState<number | null>(null);
-  const [recentUsers, setRecentUsers] = useState<User[]>([]);
+  const [userTotal, setUserTotal] = useState(null);
+  const [recentUsers, setRecentUsers] = useState([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
 
   const modelPref = user ? getModelPreference(user.id) : null;

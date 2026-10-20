@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { FileQuestion, Home } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
-export const NotFoundPage: React.FC = () => {
+export const NotFoundPage = () => {
   const { user } = useAuth();
   const returnPath = user
     ? user.role === 'ADMIN'

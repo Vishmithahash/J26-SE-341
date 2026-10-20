@@ -1,12 +1,6 @@
 import React from 'react';
-import type { LucideIcon } from 'lucide-react';
 
-interface EmptyComponentPageProps {
-  title: string;
-  icon: LucideIcon;
-}
-
-export const EmptyComponentPage: React.FC<EmptyComponentPageProps> = ({
+export const EmptyComponentPage = ({
   title,
   icon: Icon,
 }) => {

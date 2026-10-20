@@ -1,4 +1,4 @@
-import './setup';
+import './setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -17,14 +17,14 @@ describe('Component Shell Isolation and Name Verification', () => {
   ];
 
   it('preserves the exact required titles for all four components', () => {
-    const appRoutesPath = path.resolve(__dirname, '../App.tsx');
+    const appRoutesPath = path.resolve(__dirname, '../App.jsx');
     const appContent = fs.readFileSync(appRoutesPath, 'utf8');
 
     for (const name of COMPONENT_NAMES) {
       assert.equal(
         appContent.includes(name),
         true,
-        `Expected App.tsx to include full title: "${name}"`
+        `Expected App.jsx to include full title: "${name}"`
       );
     }
   });
@@ -32,7 +32,7 @@ describe('Component Shell Isolation and Name Verification', () => {
   it('guarantees EmptyComponentPage contains no placeholder text or icons in its main body', () => {
     const emptyPagePath = path.resolve(
       __dirname,
-      '../pages/shared/EmptyComponentPage.tsx'
+      '../pages/shared/EmptyComponentPage.jsx'
     );
     const pageContent = fs.readFileSync(emptyPagePath, 'utf8');
 
@@ -46,7 +46,7 @@ describe('Component Shell Isolation and Name Verification', () => {
     const servicesDir = path.resolve(__dirname, '../services');
     const serviceFiles = fs.readdirSync(servicesDir);
 
-    // Only api.ts, modelPreference.ts, and test/setup should exist
+    // Only api.js, modelPreference.js, and test/setup should exist
     for (const file of serviceFiles) {
       assert.equal(
         file.includes('c1_') ||
@@ -66,7 +66,7 @@ describe('Component Shell Isolation and Name Verification', () => {
   it('verifies model preferences collect no API keys or secrets', () => {
     const modelPrefPath = path.resolve(
       __dirname,
-      '../pages/shared/ModelSelectionPage.tsx'
+      '../pages/shared/ModelSelectionPage.jsx'
     );
     const modelPrefContent = fs.readFileSync(modelPrefPath, 'utf8');
 

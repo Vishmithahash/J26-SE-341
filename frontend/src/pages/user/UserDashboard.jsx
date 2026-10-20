@@ -16,7 +16,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { getModelPreference } from '../../services/modelPreference';
 
-export const UserDashboard: React.FC = () => {
+export const UserDashboard = () => {
   const { user } = useAuth();
   const modelPref = user ? getModelPreference(user.id) : null;
 

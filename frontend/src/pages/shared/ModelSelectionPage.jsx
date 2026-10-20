@@ -16,16 +16,15 @@ import {
   saveModelPreference,
   clearModelPreference,
 } from '../../services/modelPreference';
-import type { ModelPreference } from '../../types/auth';
 
-export const ModelSelectionPage: React.FC = () => {
+export const ModelSelectionPage = () => {
   const { user } = useAuth();
   const userId = user?.id || 0;
 
-  const [connectionType, setConnectionType] = useState<'local' | 'hosted'>('local');
-  const [provider, setProvider] = useState<'ollama' | 'openai-compatible' | 'custom'>('ollama');
+  const [connectionType, setConnectionType] = useState('local');
+  const [provider, setProvider] = useState('ollama');
   const [modelId, setModelId] = useState('');
-  const [feedback, setFeedback] = useState<{ type: 'success' | 'info'; message: string } | null>(null);
+  const [feedback, setFeedback] = useState(null);
 
   // Load existing preference scoped to current authenticated user
   useEffect(() => {
@@ -44,7 +43,7 @@ export const ModelSelectionPage: React.FC = () => {
   }, [userId]);
 
   // Adjust provider default when switching connection type
-  const handleConnectionTypeChange = (type: 'local' | 'hosted') => {
+  const handleConnectionTypeChange = (type) => {
     setConnectionType(type);
     if (type === 'local') {
       setProvider('ollama');
@@ -54,7 +53,7 @@ export const ModelSelectionPage: React.FC = () => {
     setFeedback(null);
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = (e) => {
     e.preventDefault();
     if (!userId) return;
 
@@ -63,7 +62,7 @@ export const ModelSelectionPage: React.FC = () => {
       return;
     }
 
-    const pref: ModelPreference = {
+    const pref = {
       connectionType,
       provider,
       modelId: modelId.trim(),
@@ -228,7 +227,7 @@ export const ModelSelectionPage: React.FC = () => {
               <select
                 id="provider-select"
                 value={provider}
-                onChange={(e) => setProvider(e.target.value as any)}
+                onChange={(e) => setProvider(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-teal-600 shadow-sm"
               >
                 {connectionType === 'local' ? (

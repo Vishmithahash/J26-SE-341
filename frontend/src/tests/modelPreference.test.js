@@ -1,11 +1,11 @@
-import './setup';
+import './setup.js';
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   getModelPreference,
   saveModelPreference,
   clearModelPreference,
-} from '../services/modelPreference';
+} from '../services/modelPreference.js';
 
 describe('Model Preference Isolation and Storage Resilience', () => {
   beforeEach(() => {
@@ -14,8 +14,8 @@ describe('Model Preference Isolation and Storage Resilience', () => {
 
   it('correctly saves and retrieves model preference for a specific user ID', () => {
     const prefUser1 = {
-      connectionType: 'local' as const,
-      provider: 'ollama' as const,
+      connectionType: 'local',
+      provider: 'ollama',
       modelId: 'llama3.1:8b',
     };
 

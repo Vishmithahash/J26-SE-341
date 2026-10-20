@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { useTheme } from '../../context/ThemeContext';
 
-export const AppLayout: React.FC = () => {
+export const AppLayout = () => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const { density } = useTheme();

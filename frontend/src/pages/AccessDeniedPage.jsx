@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ShieldAlert, ArrowLeft, Home } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
-export const AccessDeniedPage: React.FC = () => {
+export const AccessDeniedPage = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
   const defaultDashboard = isAdmin ? '/admin/dashboard' : '/app/dashboard';

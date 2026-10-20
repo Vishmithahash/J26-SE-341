@@ -13,11 +13,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 
-interface HeaderProps {
-  onOpenMobileNav: () => void;
-}
-
-export const Header: React.FC<HeaderProps> = ({ onOpenMobileNav }) => {
+export const Header = ({ onOpenMobileNav }) => {
   const { user, logout } = useAuth();
   const { mode, setMode } = useTheme();
   const location = useLocation();
@@ -25,23 +21,23 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileNav }) => {
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isThemeOpen, setIsThemeOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const themeRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef(null);
+  const themeRef = useRef(null);
 
   const isAdmin = user?.role === 'ADMIN';
   const basePath = isAdmin ? '/admin' : '/app';
 
   // Close dropdowns on outside click or Escape key
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+    const handleClickOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
         setIsMenuOpen(false);
       }
-      if (themeRef.current && !themeRef.current.contains(event.target as Node)) {
+      if (themeRef.current && !themeRef.current.contains(event.target)) {
         setIsThemeOpen(false);
       }
     };
-    const handleKeyDown = (event: KeyboardEvent) => {
+    const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
         setIsMenuOpen(false);
         setIsThemeOpen(false);

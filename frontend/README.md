@@ -44,7 +44,7 @@ npm run lint
 # Run unit tests (auth, session safeguards, isolation, empty shells)
 npm test
 
-# Typecheck and create production build
+# Create production bundle
 npm run build
 ```
 
@@ -91,7 +91,7 @@ example.com {
 ## Testing & Quality Guarantees
 
 - **Linter**: `oxlint` (runs across all files with 0 warnings, 0 errors).
-- **TypeScript**: Strict compiler options enforced; passes without errors.
+- **JavaScript & JSX**: Modular ES2023 JavaScript and React 19 JSX without TypeScript dependencies.
 - **Node Test Runner**: 16 focused unit tests covering:
   - Unicode code point password counting (matching backend Python behavior for supplementary Unicode characters).
   - Return URL sanitization and role-aware navigation boundaries.

@@ -1,7 +1,7 @@
-import './setup';
+import './setup.js';
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { api, setStoredToken } from '../services/api';
+import { api, setStoredToken } from '../services/api.js';
 
 describe('Auth, Session, and Security Rules', () => {
   beforeEach(() => {
@@ -9,7 +9,7 @@ describe('Auth, Session, and Security Rules', () => {
   });
 
   describe('Unicode Code Point Password Counting', () => {
-    const countCodePoints = (str: string): number => Array.from(str).length;
+    const countCodePoints = (str) => Array.from(str).length;
 
     it('counts supplementary Unicode characters (surrogate pairs / emojis) as 1 character matching Python', () => {
       // Single emoji has JS string.length == 2, but 1 code point
@@ -50,10 +50,7 @@ describe('Auth, Session, and Security Rules', () => {
   });
 
   describe('Return URL Validation & Role-Permission Filtering', () => {
-    const sanitizeReturnUrl = (
-      requestedPath: unknown,
-      userRole: 'ADMIN' | 'USER'
-    ): string => {
+    const sanitizeReturnUrl = (requestedPath, userRole) => {
       const defaultDashboard =
         userRole === 'ADMIN' ? '/admin/dashboard' : '/app/dashboard';
 
@@ -102,7 +99,7 @@ describe('Auth, Session, and Security Rules', () => {
 
   describe('Stale Response Guard & Unknown Role Fail-Closed Logic', () => {
     it('rejects roles other than ADMIN and USER', () => {
-      const isRoleAllowed = (role: string) => role === 'ADMIN' || role === 'USER';
+      const isRoleAllowed = (role) => role === 'ADMIN' || role === 'USER';
 
       assert.equal(isRoleAllowed('ADMIN'), true);
       assert.equal(isRoleAllowed('USER'), true);
@@ -114,7 +111,7 @@ describe('Auth, Session, and Security Rules', () => {
     it('validates generation counters to discard late asynchronous responses from past sessions', () => {
       let currentSessionGen = 1;
 
-      const isResponseCurrent = (sessionGen: number) => sessionGen === currentSessionGen;
+      const isResponseCurrent = (sessionGen) => sessionGen === currentSessionGen;
 
       // Session 1 in-flight
       const requestSession = currentSessionGen;

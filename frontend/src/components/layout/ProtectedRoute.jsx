@@ -1,15 +1,9 @@
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import type { UserRole } from '../../types/auth';
 import { AccessDeniedPage } from '../../pages/AccessDeniedPage';
 
-interface ProtectedRouteProps {
-  children: React.ReactNode;
-  requiredRole?: UserRole;
-}
-
-export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
+export const ProtectedRoute = ({
   children,
   requiredRole,
 }) => {

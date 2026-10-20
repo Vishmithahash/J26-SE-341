@@ -20,7 +20,7 @@ import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 // Role-aware root redirect component
-const RootRedirect: React.FC = () => {
+const RootRedirect = () => {
   const { user, isLoading } = useAuth();
 
   if (isLoading) {
@@ -38,7 +38,7 @@ const RootRedirect: React.FC = () => {
   return <Navigate to={user.role === 'ADMIN' ? '/admin/dashboard' : '/app/dashboard'} replace />;
 };
 
-export const App: React.FC = () => {
+export const App = () => {
   return (
     <ThemeProvider>
       <AuthProvider>

@@ -1,8 +1,6 @@
-import type { ModelPreference } from '../types/auth';
-
 const STORAGE_PREFIX = 'qa_model_pref_';
 
-export function getModelPreference(userId: number): ModelPreference | null {
+export function getModelPreference(userId) {
   if (!userId) return null;
   try {
     const raw = localStorage.getItem(`${STORAGE_PREFIX}${userId}`);
@@ -22,7 +20,7 @@ export function getModelPreference(userId: number): ModelPreference | null {
   }
 }
 
-export function saveModelPreference(userId: number, pref: ModelPreference): void {
+export function saveModelPreference(userId, pref) {
   if (!userId) return;
   try {
     localStorage.setItem(
@@ -37,7 +35,7 @@ export function saveModelPreference(userId: number, pref: ModelPreference): void
   }
 }
 
-export function clearModelPreference(userId: number): void {
+export function clearModelPreference(userId) {
   if (!userId) return;
   try {
     localStorage.removeItem(`${STORAGE_PREFIX}${userId}`);
