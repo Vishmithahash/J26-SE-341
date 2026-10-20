@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -8,9 +9,27 @@ from app.components.c4_policy_aware_safety.contracts.artifacts import (
     ArtifactCreate,
     ArtifactVersionRecord,
 )
+from app.components.c4_policy_aware_safety.contracts.bindings import (
+    DomainBinding,
+    compute_binding_hash,
+)
+from app.components.c4_policy_aware_safety.contracts.cases import (
+    AgentVisiblePayload,
+    CaseLifecycleState,
+    EvaluatorPayload,
+    HarnessPayload,
+    PolicyTestCase,
+)
 from app.components.c4_policy_aware_safety.contracts.enums import (
     ContractLifecycleState,
     RuleReviewStatus,
+)
+from app.components.c4_policy_aware_safety.contracts.evaluation import (
+    EvaluationDatasetRecord,
+    ExperimentConfigRecord,
+    ExperimentReportRecord,
+    InterRaterAgreement,
+    ReviewerDecision,
 )
 from app.components.c4_policy_aware_safety.contracts.evaluator import (
     EvaluationReport,
@@ -18,6 +37,37 @@ from app.components.c4_policy_aware_safety.contracts.evaluator import (
 )
 from app.components.c4_policy_aware_safety.contracts.evidence import (
     EvaluationEvidencePackage,
+)
+from app.components.c4_policy_aware_safety.contracts.execution import (
+    C4ExecutionRequest,
+    C4ExecutionRunRecord,
+    C4RuntimeReadinessReport,
+    IdempotencyConflictError,
+    TargetExecutionMode,
+)
+from app.components.c4_policy_aware_safety.contracts.extraction import (
+    C4ExtractionJobRecord,
+    CandidateRuleReviewRequest,
+    ExtractionJobCreate,
+    ExtractionReadinessReport,
+)
+from app.components.c4_policy_aware_safety.contracts.future import TestCaseKind
+from app.components.c4_policy_aware_safety.contracts.generation import (
+    GenerationReport,
+    GenerationRequest,
+)
+from app.components.c4_policy_aware_safety.contracts.onboarding import (
+    C4OnboardingJobRecord,
+    DomainProfileDefinition,
+    OnboardingJobCreate,
+)
+from app.components.c4_policy_aware_safety.contracts.regression import (
+    ExecutionModeType,
+    PolicyComparisonRecord,
+    PolicyComparisonRequest,
+    RegressionBatchRecord,
+    RegressionPlanRecord,
+    RegressionReport,
 )
 from app.components.c4_policy_aware_safety.contracts.rules import (
     CandidateRule,
@@ -34,10 +84,36 @@ from app.components.c4_policy_aware_safety.derivation.importer import (
     StructuredRuleImporter,
 )
 from app.components.c4_policy_aware_safety.derivation.intake import normalize_artifact
+from app.components.c4_policy_aware_safety.domains.registry import domain_registry
+from app.components.c4_policy_aware_safety.evaluation.experiments import (
+    ExperimentService,
+)
+from app.components.c4_policy_aware_safety.evaluation.review import (
+    ReviewService,
+)
 from app.components.c4_policy_aware_safety.evaluator.engine import (
     DeterministicPolicyEvaluator,
 )
+from app.components.c4_policy_aware_safety.execution.adapters import (
+    LiveAUTAdapterStub,
+    SimulatedC4ApplicationAdapter,
+)
+from app.components.c4_policy_aware_safety.execution.runner import C4ExecutionRunner
+from app.components.c4_policy_aware_safety.extraction.provider import (
+    get_extraction_provider,
+)
+from app.components.c4_policy_aware_safety.freezing.service import CaseFreezingService
+from app.components.c4_policy_aware_safety.generation.generator import (
+    PolicyTestGenerator,
+)
+from app.components.c4_policy_aware_safety.onboarding.service import (
+    C4OnboardingService,
+)
 from app.components.c4_policy_aware_safety.persistence.repository import C4Repository
+from app.components.c4_policy_aware_safety.regression.service import C4RegressionService
+from app.components.c4_policy_aware_safety.validation.case_validator import (
+    PolicyTestCaseValidator,
+)
 from app.components.c4_policy_aware_safety.validation.validator import (
     PolicyContractValidator,
 )
@@ -387,3 +463,1157 @@ def get_findings(
     return repo.list_findings(
         project_id, case_id=case_id, run_id=run_id, contract_id=contract_id
     )
+
+
+# 6. Domain Bindings
+@router.post(
+    "/bindings",
+    response_model=DomainBinding,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a versioned domain binding",
+)
+def register_domain_binding(
+    project_id: str,
+    binding: DomainBinding,
+    db: Annotated[Session, Depends(get_db)],
+):
+    if binding.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Binding project_id '{binding.project_id}' does not match route project '{project_id}'.",
+        )
+    repo = C4Repository(db)
+    next_ver = repo.get_next_binding_version(project_id, binding.binding_id)
+    binding.version = next_ver
+    binding.content_hash = compute_binding_hash(binding)
+    return repo.save_domain_binding(binding)
+
+
+@router.get(
+    "/bindings/{binding_id}/versions/{version}",
+    response_model=DomainBinding,
+    summary="Retrieve a domain binding by ID and version",
+)
+def get_domain_binding(
+    project_id: str,
+    binding_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    binding = repo.get_domain_binding(project_id, binding_id, version)
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain binding '{binding_id}' v{version} not found in project '{project_id}'.",
+        )
+    return binding
+
+
+@router.get(
+    "/bindings",
+    response_model=list[DomainBinding],
+    summary="List domain bindings for a project",
+)
+def list_domain_bindings(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    binding_id: Annotated[str | None, Query()] = None,
+):
+    repo = C4Repository(db)
+    return repo.list_domain_bindings(project_id, binding_id=binding_id)
+
+
+# 7. Test Case Generation
+@router.post(
+    "/generate",
+    response_model=GenerationReport,
+    status_code=status.HTTP_200_OK,
+    summary="Automatically generate policy-specific test cases",
+)
+def generate_test_cases(
+    project_id: str,
+    request: GenerationRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    contract = repo.get_contract_version(
+        project_id, request.contract_id, request.contract_version
+    )
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Policy contract '{request.contract_id}' v{request.contract_version} not found in project '{project_id}'.",
+        )
+    if contract.lifecycle_state != ContractLifecycleState.ACCEPTED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Contract '{request.contract_id}' v{request.contract_version} is in state '{contract.lifecycle_state.value}'. Only ACCEPTED contracts can be used for test generation.",
+        )
+
+    binding = repo.get_domain_binding(
+        project_id, request.binding_id, request.binding_version
+    )
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain binding '{request.binding_id}' v{request.binding_version} not found in project '{project_id}'.",
+        )
+
+    generator = PolicyTestGenerator(config=request.config)
+    cases, report = generator.generate_cases(contract, binding)
+
+    if request.auto_validate:
+        validator = PolicyTestCaseValidator()
+        cases = validator.validate_batch(cases, contract, binding)
+        report.validated_count = sum(
+            1 for c in cases if c.lifecycle_state == CaseLifecycleState.VALIDATED
+        )
+        report.rejected_count = sum(
+            1 for c in cases if c.lifecycle_state == CaseLifecycleState.REJECTED
+        )
+        report.review_needed_count = sum(
+            1 for c in cases if c.lifecycle_state == CaseLifecycleState.NEEDS_REVIEW
+        )
+
+    if request.auto_freeze:
+        freezer = CaseFreezingService()
+        cases = freezer.freeze_batch(cases, contract)
+        report.frozen_count = sum(
+            1 for c in cases if c.lifecycle_state == CaseLifecycleState.FROZEN
+        )
+
+    repo.save_generation_batch(report)
+
+    for case in cases:
+        repo.save_test_case(case, batch_id=report.batch_id)
+
+    return report
+
+
+@router.get(
+    "/batches/{batch_id}",
+    response_model=GenerationReport,
+    summary="Retrieve a generation batch report",
+)
+def get_generation_batch(
+    project_id: str,
+    batch_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    report = repo.get_generation_batch(project_id, batch_id)
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Generation batch '{batch_id}' not found in project '{project_id}'.",
+        )
+    return report
+
+
+# 8. Test Cases Management
+@router.get(
+    "/cases",
+    response_model=list[PolicyTestCase],
+    summary="List generated policy test cases",
+)
+def list_test_cases(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    batch_id: Annotated[str | None, Query()] = None,
+    rule_id: Annotated[str | None, Query()] = None,
+    category: Annotated[TestCaseKind | None, Query()] = None,
+    lifecycle_state: Annotated[CaseLifecycleState | None, Query()] = None,
+):
+    repo = C4Repository(db)
+    return repo.list_test_cases(
+        project_id=project_id,
+        batch_id=batch_id,
+        rule_id=rule_id,
+        category=category.value if category else None,
+        lifecycle_state=lifecycle_state.value if lifecycle_state else None,
+    )
+
+
+@router.get(
+    "/cases/{case_id}/versions/{version}",
+    response_model=PolicyTestCase,
+    summary="Retrieve a policy test case by ID and version",
+)
+def get_test_case(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    return case
+
+
+@router.post(
+    "/cases/{case_id}/versions/{version}/validate",
+    response_model=PolicyTestCase,
+    summary="Independently validate a generated test case",
+)
+def validate_test_case(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    contract = repo.get_contract_version(
+        project_id, case.contract_id, case.contract_version
+    )
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Associated contract '{case.contract_id}' v{case.contract_version} not found.",
+        )
+    binding = repo.get_domain_binding(
+        project_id, case.domain_id, case.binding_version
+    )
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Associated domain binding '{case.domain_id}' v{case.binding_version} not found.",
+        )
+
+    validator = PolicyTestCaseValidator()
+    validated_case, _ = validator.validate_case(case, contract, binding)
+    return repo.save_test_case(validated_case)
+
+
+@router.post(
+    "/cases/{case_id}/versions/{version}/freeze",
+    response_model=PolicyTestCase,
+    summary="Freeze a validated test case to ensure snapshot immutability",
+)
+def freeze_test_case(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    contract = repo.get_contract_version(
+        project_id, case.contract_id, case.contract_version
+    )
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Associated contract '{case.contract_id}' v{case.contract_version} not found.",
+        )
+    binding = repo.get_domain_binding(
+        project_id, case.domain_id, case.binding_version
+    )
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Associated domain binding '{case.domain_id}' v{case.binding_version} not found.",
+        )
+
+    freezer = CaseFreezingService()
+    try:
+        frozen_case = freezer.freeze_case(case, contract)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot freeze case: {e!s}",
+        )
+    return repo.save_test_case(frozen_case)
+
+
+# 9. Payload Exports
+@router.get(
+    "/cases/{case_id}/versions/{version}/export/agent",
+    response_model=AgentVisiblePayload,
+    summary="Export strictly agent-visible payload (no hidden goals or assertions)",
+)
+def export_agent_payload(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    return case.build_agent_visible_payload()
+
+
+@router.get(
+    "/cases/{case_id}/versions/{version}/export/harness",
+    response_model=HarnessPayload,
+    summary="Export test harness orchestration payload",
+)
+def export_harness_payload(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    return case.build_harness_payload()
+
+
+@router.get(
+    "/cases/{case_id}/versions/{version}/export/evaluator",
+    response_model=EvaluatorPayload,
+    summary="Export evaluator assertions and hidden validation ground truth",
+)
+def export_evaluator_payload(
+    project_id: str,
+    case_id: str,
+    version: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, case_id, version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{case_id}' v{version} not found in project '{project_id}'.",
+        )
+    return case.build_evaluator_payload()
+
+
+# 9. Phase 3: Controlled Execution, Readiness, and Reporting
+@router.post(
+    "/runs/readiness",
+    response_model=C4RuntimeReadinessReport,
+    summary="Check runtime readiness of a case, domain binding, and execution adapter",
+)
+def check_execution_readiness(
+    project_id: str,
+    exec_req: C4ExecutionRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, exec_req.case_id, exec_req.case_version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{exec_req.case_id}' v{exec_req.case_version} not found in project '{project_id}'.",
+        )
+    binding = repo.get_domain_binding(project_id, exec_req.binding_id, exec_req.binding_version)
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain binding '{exec_req.binding_id}' v{exec_req.binding_version} not found in project '{project_id}'.",
+        )
+
+    if exec_req.execution_mode == TargetExecutionMode.LIVE_AUT:
+        adapter = LiveAUTAdapterStub()
+    else:
+        adapter = SimulatedC4ApplicationAdapter(behavior=exec_req.simulated_behavior)
+
+    runner = C4ExecutionRunner(repo)
+    return runner.check_readiness(case, binding, adapter)
+
+
+@router.post(
+    "/runs/execute",
+    response_model=C4ExecutionRunRecord,
+    status_code=status.HTTP_200_OK,
+    summary="Execute a frozen test case through registered adapter",
+)
+def execute_test_case(
+    project_id: str,
+    exec_req: C4ExecutionRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    case = repo.get_test_case(project_id, exec_req.case_id, exec_req.case_version)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test case '{exec_req.case_id}' v{exec_req.case_version} not found in project '{project_id}'.",
+        )
+    contract = repo.get_contract_version(project_id, exec_req.contract_id, exec_req.contract_version)
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Policy contract '{exec_req.contract_id}' v{exec_req.contract_version} not found in project '{project_id}'.",
+        )
+    binding = repo.get_domain_binding(project_id, exec_req.binding_id, exec_req.binding_version)
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain binding '{exec_req.binding_id}' v{exec_req.binding_version} not found in project '{project_id}'.",
+        )
+
+    if exec_req.execution_mode == TargetExecutionMode.LIVE_AUT:
+        adapter = LiveAUTAdapterStub()
+    else:
+        adapter = SimulatedC4ApplicationAdapter(behavior=exec_req.simulated_behavior)
+
+    runner = C4ExecutionRunner(repo)
+    try:
+        return runner.execute_case(
+            case=case,
+            contract=contract,
+            binding=binding,
+            adapter=adapter,
+            idempotency_key=exec_req.idempotency_key,
+        )
+    except IdempotencyConflictError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/runs/{run_id}",
+    response_model=C4ExecutionRunRecord,
+    summary="Retrieve a C4 execution run record",
+)
+def get_execution_run(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    run_rec = repo.get_execution_run(project_id, run_id)
+    if not run_rec:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution run '{run_id}' not found in project '{project_id}'.",
+        )
+    return run_rec
+
+
+@router.get(
+    "/runs",
+    response_model=list[C4ExecutionRunRecord],
+    summary="List execution runs for a project",
+)
+def list_execution_runs(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    case_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    repo = C4Repository(db)
+    return repo.list_execution_runs(project_id, case_id=case_id, limit=limit, offset=offset)
+
+
+@router.get(
+    "/runs/{run_id}/report",
+    summary="Export explainable findings and report for a run",
+)
+def export_run_report(
+    project_id: str,
+    run_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    run_rec = repo.get_execution_run(project_id, run_id)
+    if not run_rec:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution run '{run_id}' not found in project '{project_id}'.",
+        )
+    return {
+        "run_id": run_rec.run_id,
+        "project_id": run_rec.project_id,
+        "case_id": run_rec.case_id,
+        "case_version": run_rec.case_version,
+        "execution_status": run_rec.status.value,
+        "exposure_status": run_rec.exposure_status.value,
+        "policy_verdict": run_rec.policy_verdict,
+        "attacker_objective_outcome": run_rec.attacker_objective_outcome.value,
+        "task_utility_outcome": run_rec.task_utility_outcome.value,
+        "cleanup_status": run_rec.cleanup_status.value,
+        "pre_cleanup_effects": run_rec.pre_cleanup_effects,
+        "summary": run_rec.evaluation_report_summary,
+        "findings": run_rec.findings,
+        "error_message": run_rec.error_message,
+        "created_at": run_rec.created_at.isoformat(),
+        "completed_at": run_rec.completed_at.isoformat() if run_rec.completed_at else None,
+    }
+
+
+# ==============================================================================
+# Phase 4: Natural-Language Policy Extraction & Review Endpoints
+# ==============================================================================
+
+
+@router.get(
+    "/extraction/readiness",
+    response_model=ExtractionReadinessReport,
+    summary="Check extraction provider configuration and operational readiness",
+)
+def check_extraction_readiness(
+    project_id: str,
+    provider_id: str = Query(default="offline_mock"),
+):
+    provider = get_extraction_provider(provider_id=provider_id)
+    return provider.check_readiness()
+
+
+@router.post(
+    "/extraction/jobs",
+    response_model=C4ExtractionJobRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Initiate a natural-language policy extraction job",
+)
+def start_extraction_job(
+    project_id: str,
+    req: ExtractionJobCreate,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    artifact = repo.get_artifact(project_id, req.artifact_id, req.artifact_version)
+    if not artifact:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source artifact '{req.artifact_id}' v{req.artifact_version} not found in project '{project_id}'.",
+        )
+
+    # Use default ecommerce binding for generic extraction validation
+    profile = domain_registry.get_profile("domain-ecommerce-c4")
+    service = C4OnboardingService(repository=repo)
+    onboard_req = OnboardingJobCreate(
+        domain_id=profile.domain_id,
+        artifact_id=req.artifact_id,
+        artifact_version=req.artifact_version,
+        binding_id=profile.binding.binding_id,
+        binding_version=profile.binding.version,
+        provider_id=req.provider_id,
+    )
+    job = service.start_onboarding(project_id, onboard_req)
+    if not job.extraction_job_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to initialize extraction job.",
+        )
+    ext_job = repo.get_extraction_job(project_id, job.extraction_job_id)
+    if not ext_job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Extraction job '{job.extraction_job_id}' not found.",
+        )
+    return ext_job
+
+
+@router.get(
+    "/extraction/jobs/{job_id}",
+    response_model=C4ExtractionJobRecord,
+    summary="Retrieve extraction job status and results",
+)
+def get_extraction_job(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    job = repo.get_extraction_job(project_id, job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Extraction job '{job_id}' not found in project '{project_id}'.",
+        )
+    return job
+
+
+@router.post(
+    "/candidates/{rule_id}/review",
+    response_model=CandidateRule,
+    summary="Explicit human or dev review gate for an extracted candidate rule",
+)
+def review_candidate_rule(
+    project_id: str,
+    rule_id: str,
+    req: CandidateRuleReviewRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.review_candidate(project_id, rule_id, req)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ==============================================================================
+# Phase 4: Domain Profiles & Onboarding Pipeline Endpoints
+# ==============================================================================
+
+
+@router.get(
+    "/domains",
+    response_model=list[DomainProfileDefinition],
+    summary="List available domain profiles (E-Commerce, Booking)",
+)
+def list_domains(project_id: str):
+    return domain_registry.list_profiles()
+
+
+@router.get(
+    "/domains/{domain_id}/readiness",
+    summary="Check runtime and integration readiness for a domain",
+)
+def check_domain_readiness_endpoint(
+    project_id: str,
+    domain_id: str,
+    mode: str = Query(default="SIMULATED", description="'SIMULATED' or 'LIVE'"),
+):
+    try:
+        return domain_registry.check_domain_readiness(domain_id, mode)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs",
+    response_model=C4OnboardingJobRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start domain onboarding workflow across policy artifacts and domain bindings",
+)
+def start_onboarding(
+    project_id: str,
+    req: OnboardingJobCreate,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.start_onboarding(project_id, req)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/onboarding/jobs/{job_id}",
+    response_model=C4OnboardingJobRecord,
+    summary="Get status and details of an onboarding job",
+)
+def get_onboarding_job(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.get_onboarding_status(project_id, job_id)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs/{job_id}/build-draft-contract",
+    response_model=PolicyContractVersion,
+    summary="Assemble draft policy contract from explicitly accepted candidates",
+)
+def build_onboarding_draft_contract(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.build_draft_contract(project_id, job_id)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs/{job_id}/accept-contract",
+    response_model=PolicyContractVersion,
+    summary="Explicitly accept draft contract (DRAFT -> ACCEPTED review gate)",
+)
+def accept_onboarding_contract(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    reviewer: str = Query(default="dev_reviewer"),
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.accept_contract(project_id, job_id, reviewer=reviewer)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs/{job_id}/generate-cases",
+    response_model=list[PolicyTestCase],
+    summary="Generate and freeze policy test cases for accepted contract",
+)
+def generate_onboarding_cases(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.generate_and_freeze_cases(project_id, job_id)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/onboarding/jobs/{job_id}/execute",
+    response_model=list[C4ExecutionRunRecord],
+    summary="Execute frozen onboarding cases against controlled target adapter",
+)
+def execute_onboarding_cases(
+    project_id: str,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    execution_mode: str = Query(default="SIMULATED", description="'SIMULATED' or 'LIVE'"),
+):
+    repo = C4Repository(db)
+    service = C4OnboardingService(repository=repo)
+    try:
+        return service.execute_onboarding_cases(
+            project_id, job_id, execution_mode=execution_mode
+        )
+    except RuntimeError as e:
+        if "blocked" in str(e).lower():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+# 11. Policy Regression and Diffing Routes
+class RegressionPlanCreateRequest(BaseModel):
+    comparison_id: str
+    binding_id: str
+    binding_version: int
+
+
+class RegressionPlanExecuteRequest(BaseModel):
+    execution_mode: str = "FRESH_EXECUTION"
+    idempotency_key: str | None = None
+
+
+@router.post(
+    "/regression/compare",
+    response_model=PolicyComparisonRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Compare two accepted policy contracts and produce deterministic diff",
+)
+def compare_policy_contracts(
+    project_id: str,
+    request: PolicyComparisonRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    if request.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project ID mismatch: route '{project_id}' != payload '{request.project_id}'.",
+        )
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        return service.compare_contracts(request)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/regression/comparisons/{comparison_id}",
+    response_model=PolicyComparisonRecord,
+    summary="Retrieve an existing policy comparison",
+)
+def get_policy_comparison(
+    project_id: str,
+    comparison_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    comparison = repo.get_policy_comparison(project_id, comparison_id)
+    if not comparison:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Comparison '{comparison_id}' not found in project '{project_id}'.",
+        )
+    return comparison
+
+
+@router.post(
+    "/regression/plans",
+    response_model=RegressionPlanRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Build a typed regression plan with impact decisions",
+)
+def create_regression_plan(
+    project_id: str,
+    request: RegressionPlanCreateRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        return service.create_regression_plan(
+            project_id=project_id,
+            comparison_id=request.comparison_id,
+            binding_id=request.binding_id,
+            binding_version=request.binding_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/regression/plans/{plan_id}",
+    response_model=RegressionPlanRecord,
+    summary="Retrieve an existing regression plan",
+)
+def get_regression_plan(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    plan = repo.get_regression_plan(project_id, plan_id)
+    if not plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Regression plan '{plan_id}' not found in project '{project_id}'.",
+        )
+    return plan
+
+
+@router.post(
+    "/regression/plans/{plan_id}/regenerate",
+    response_model=RegressionPlanRecord,
+    summary="Selectively regenerate and revalidate affected cases for regression plan",
+)
+def regenerate_regression_plan(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        updated_plan, _ = service.regenerate_plan(project_id, plan_id)
+        return updated_plan
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/regression/plans/{plan_id}/freeze",
+    response_model=RegressionPlanRecord,
+    summary="Freeze a validated regression plan into immutable snapshot",
+)
+def freeze_regression_plan(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        return service.freeze_plan(project_id, plan_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/regression/plans/{plan_id}/execute",
+    response_model=RegressionBatchRecord,
+    summary="Selectively execute frozen regression plan against target adapter",
+)
+def execute_regression_plan(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    payload: RegressionPlanExecuteRequest | None = None,
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    req = payload or RegressionPlanExecuteRequest()
+    try:
+        mode = ExecutionModeType(req.execution_mode)
+    except ValueError:
+        mode = ExecutionModeType.FRESH_EXECUTION
+
+    try:
+        batch, _ = service.execute_plan(
+            project_id=project_id,
+            plan_id=plan_id,
+            execution_mode=mode,
+            idempotency_key=req.idempotency_key,
+        )
+        return batch
+    except IdempotencyConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/regression/plans/{plan_id}/report",
+    response_model=RegressionReport,
+    summary="Retrieve evidence-linked regression report for plan",
+)
+def get_regression_report(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    report = service.get_regression_report(project_id, plan_id)
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Regression report for plan '{plan_id}' not found.",
+        )
+    return report
+
+
+@router.post(
+    "/regression/plans/{plan_id}/re-evaluate-historical",
+    response_model=RegressionBatchRecord,
+    summary="Re-evaluate historical run evidence under candidate policy without fresh agent execution",
+)
+def re_evaluate_historical(
+    project_id: str,
+    plan_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = C4RegressionService(repository=repo)
+    try:
+        batch, _ = service.execute_plan(
+            project_id=project_id,
+            plan_id=plan_id,
+            execution_mode=ExecutionModeType.HISTORICAL_RE_EVALUATION,
+        )
+        return batch
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ==============================================================================
+# 12. Phase 6 Research Evaluation Endpoints
+# ==============================================================================
+@router.post(
+    "/evaluation/datasets",
+    response_model=EvaluationDatasetRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register and validate a versioned evaluation dataset",
+)
+def register_evaluation_dataset(
+    project_id: str,
+    dataset: EvaluationDatasetRecord,
+    db: Annotated[Session, Depends(get_db)],
+):
+    if dataset.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project ID mismatch: dataset declares '{dataset.project_id}', route has '{project_id}'.",
+        )
+    review_service = ReviewService()
+    leakage_errors = review_service.validate_split_leakage(dataset)
+    if leakage_errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Split leakage validation failed: {'; '.join(leakage_errors)}",
+        )
+    repo = C4Repository(db)
+    return repo.save_evaluation_dataset(dataset)
+
+
+@router.get(
+    "/evaluation/datasets",
+    response_model=list[EvaluationDatasetRecord],
+    summary="List evaluation datasets for project",
+)
+def list_evaluation_datasets(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    return repo.list_evaluation_datasets(project_id)
+
+
+@router.get(
+    "/evaluation/datasets/{dataset_id}",
+    response_model=EvaluationDatasetRecord,
+    summary="Retrieve evaluation dataset by ID and optional version",
+)
+def get_evaluation_dataset(
+    project_id: str,
+    dataset_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    version: int = 1,
+):
+    repo = C4Repository(db)
+    dataset = repo.get_evaluation_dataset(project_id, dataset_id, version)
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evaluation dataset '{dataset_id}' v{version} not found in project '{project_id}'.",
+        )
+    return dataset
+
+
+@router.post(
+    "/evaluation/datasets/{dataset_id}/freeze",
+    response_model=EvaluationDatasetRecord,
+    summary="Freeze an evaluation dataset to guarantee immutability for final benchmark evaluation",
+)
+def freeze_evaluation_dataset(
+    project_id: str,
+    dataset_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    version: int = 1,
+):
+    repo = C4Repository(db)
+    dataset = repo.get_evaluation_dataset(project_id, dataset_id, version)
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evaluation dataset '{dataset_id}' v{version} not found.",
+        )
+    if dataset.is_frozen:
+        return dataset
+
+    dataset.is_frozen = True
+    dataset.frozen_at = datetime.now(UTC)
+    return repo.save_evaluation_dataset(dataset)
+
+
+@router.post(
+    "/evaluation/reviews",
+    response_model=ReviewerDecision,
+    status_code=status.HTTP_201_CREATED,
+    summary="Record an independent reviewer judgment",
+)
+def record_reviewer_decision(
+    project_id: str,
+    review: ReviewerDecision,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    return repo.save_evaluation_review(review, project_id)
+
+
+@router.get(
+    "/evaluation/reviews/agreement",
+    response_model=InterRaterAgreement,
+    summary="Calculate Cohen's Kappa agreement between two independent reviewers",
+)
+def get_reviewer_agreement(
+    project_id: str,
+    reviewer_1: str,
+    reviewer_2: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    all_reviews = repo.list_evaluation_reviews(project_id)
+    r1_reviews = [r for r in all_reviews if r.reviewer_id == reviewer_1]
+    r2_reviews = [r for r in all_reviews if r.reviewer_id == reviewer_2]
+
+    service = ReviewService()
+    return service.calculate_inter_rater_agreement(r1_reviews, r2_reviews)
+
+
+@router.post(
+    "/evaluation/experiments",
+    response_model=ExperimentConfigRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a reproducible evaluation experiment configuration",
+)
+def create_experiment(
+    project_id: str,
+    config: ExperimentConfigRecord,
+    db: Annotated[Session, Depends(get_db)],
+):
+    if config.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project ID mismatch: config declares '{config.project_id}', route has '{project_id}'.",
+        )
+    repo = C4Repository(db)
+    service = ExperimentService(repository=repo)
+    return service.create_experiment(config)
+
+
+@router.post(
+    "/evaluation/experiments/{experiment_id}/execute",
+    response_model=ExperimentReportRecord,
+    summary="Execute reproducible evaluation experiment trials and compute stratified metrics",
+)
+def execute_experiment(
+    project_id: str,
+    experiment_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    service = ExperimentService(repository=repo)
+    try:
+        return service.execute_experiment(project_id, experiment_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/evaluation/experiments/{experiment_id}/report",
+    response_model=ExperimentReportRecord,
+    summary="Retrieve completed experiment report with uncertainty summaries",
+)
+def get_experiment_report(
+    project_id: str,
+    experiment_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    repo = C4Repository(db)
+    report = repo.get_experiment_report(project_id, experiment_id)
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment report '{experiment_id}' not found in project '{project_id}'.",
+        )
+    return report
+
+
+
+
+

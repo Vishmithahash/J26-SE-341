@@ -258,12 +258,55 @@ class C2TestCase(Base):
     )
 
 
+class C2ExecutionEvidence(Base):
+    """Stores retained runtime execution evidence, fixture snapshots, digests, and provenance."""
+
+    __tablename__ = "c2_execution_evidence"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    suite_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    test_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    evidence_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    model_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    execution_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    runner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    runner_version: Mapped[str] = mapped_column(
+        String(32), default="2026.1", nullable=False
+    )
+
+    execution_provenance: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    evidence_payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "suite_id", "test_id", "run_id", name="uq_c2_execution_run"
+        ),
+        Index("ix_c2_execution_lookup", "project_id", "suite_id", "test_id", "run_id"),
+    )
+
+
 class C2EvaluationResult(Base):
     """Stores execution evaluation outcomes and first-divergence localisation records."""
 
     __tablename__ = "c2_evaluation_results"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    execution_evidence_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("c2_execution_evidence.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     suite_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     test_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -276,6 +319,16 @@ class C2EvaluationResult(Base):
     )
     evaluator_version: Mapped[str] = mapped_column(
         String(32), default="c2_evaluator_v1", nullable=False
+    )
+    evaluator_config: Mapped[dict] = mapped_column(
+        JSON_TYPE, default=dict, nullable=False
+    )
+    evaluation_attempt: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    evidence_digest: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    reproduced_from_evaluation_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
     )
 
     verdict: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -307,8 +360,171 @@ class C2EvaluationResult(Base):
             "suite_id",
             "test_id",
             "run_id",
-            name="uq_c2_evaluation_run",
+            "evaluator_version",
+            "evaluation_attempt",
+            name="uq_c2_evaluation_attempt",
         ),
         Index("ix_c2_evaluation_lookup", "project_id", "suite_id", "test_id"),
         Index("ix_c2_evaluation_verdict", "project_id", "verdict"),
+    )
+
+
+class C2ExperimentDataset(Base):
+    """Stores versioned, partition-isolated experiment datasets and ground-truth manifests."""
+
+    __tablename__ = "c2_experiment_datasets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dataset_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    is_frozen: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+    frozen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    case_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    development_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    held_out_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    manifest_payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    experiments: Mapped[list["C2Experiment"]] = relationship(
+        "C2Experiment",
+        back_populates="dataset_record",
+        cascade="all, delete-orphan",
+        order_by="desc(C2Experiment.created_at)",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "dataset_id",
+            "version",
+            name="uq_c2_dataset_project_id_version",
+        ),
+        Index("ix_c2_dataset_lookup", "project_id", "dataset_id", "version"),
+    )
+
+
+class C2Experiment(Base):
+    """Stores baseline comparison experiment runs across B1-B4 over frozen datasets."""
+
+    __tablename__ = "c2_experiments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    experiment_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    dataset_record_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c2_experiment_datasets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dataset_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    dataset_version: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    status: Mapped[str] = mapped_column(
+        String(32), default="PENDING", nullable=False, index=True
+    )
+    configuration: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, nullable=False)
+    results_summary: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    dataset_record: Mapped["C2ExperimentDataset"] = relationship(
+        "C2ExperimentDataset",
+        back_populates="experiments",
+    )
+    case_results: Mapped[list["C2ExperimentCaseResult"]] = relationship(
+        "C2ExperimentCaseResult",
+        back_populates="experiment_record",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "experiment_id", name="uq_c2_experiment_project_id"
+        ),
+        Index("ix_c2_experiment_lookup", "project_id", "experiment_id"),
+    )
+
+
+class C2ExperimentCaseResult(Base):
+    """Stores individual baseline method predictions on an experiment case."""
+
+    __tablename__ = "c2_experiment_case_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    experiment_record_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c2_experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    experiment_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    case_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    method_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    partition: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    is_violation: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True)
+
+    can_localize: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    first_divergence_predicted_step: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    first_divergence_event_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+
+    evaluator_timing_ms: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False
+    )
+    source_evidence_digest: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    evidence_digest_consumed: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    is_excluded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    exclusion_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+    result_payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+
+    experiment_record: Mapped["C2Experiment"] = relationship(
+        "C2Experiment",
+        back_populates="case_results",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "experiment_record_id", "case_id", "method_id", name="uq_c2_exp_case_method"
+        ),
+        Index(
+            "ix_c2_exp_case_lookup",
+            "project_id",
+            "experiment_id",
+            "case_id",
+            "method_id",
+        ),
     )

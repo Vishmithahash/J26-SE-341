@@ -3,6 +3,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Integer,
     String,
@@ -149,3 +150,430 @@ class C4FindingModel(Base):
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
+
+
+class C4DomainBindingModel(Base):
+    """SQLAlchemy model for versioned domain and application bindings."""
+
+    __tablename__ = "c4_domain_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    binding_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    binding_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "binding_id",
+            "version",
+            name="uq_c4_domain_bindings_proj_id_ver",
+        ),
+    )
+
+
+class C4GenerationBatchModel(Base):
+    """SQLAlchemy model for test case generation batches and reports."""
+
+    __tablename__ = "c4_generation_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    binding_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    binding_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    seed: Mapped[int] = mapped_column(Integer, nullable=False)
+    config_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    report_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class C4TestCaseModel(Base):
+    """SQLAlchemy model for versioned and frozen policy test cases."""
+
+    __tablename__ = "c4_test_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    case_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    batch_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    rule_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    test_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    lifecycle_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="DRAFT"
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    case_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    frozen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "case_id",
+            "case_version",
+            name="uq_c4_test_cases_proj_id_ver",
+        ),
+    )
+
+
+class C4ExecutionRunModel(Base):
+    """SQLAlchemy model for C4 test case execution runs."""
+
+    __tablename__ = "c4_execution_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    case_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    case_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    binding_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    binding_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    adapter_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    adapter_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    adapter_config_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    simulated_behavior: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    exposure_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    attacker_objective_outcome: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_utility_outcome: Mapped[str] = mapped_column(String(64), nullable=False)
+    cleanup_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    request_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    injection_target_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    attempt_goal_outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    commit_goal_outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    backend_rejection_observed: Mapped[bool] = mapped_column(
+        default=False, nullable=True
+    )
+    run_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "idempotency_key",
+            name="uq_c4_execution_runs_proj_idempotency",
+        ),
+    )
+
+
+class C4ExtractionJobModel(Base):
+    """SQLAlchemy model for C4 natural-language policy extraction jobs."""
+
+    __tablename__ = "c4_extraction_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    artifact_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_identifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    readiness_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    prompt_template_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    options: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    job_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    candidates_extracted: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    validation_issues: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class C4OnboardingJobModel(Base):
+    """SQLAlchemy model for C4 domain onboarding orchestration jobs."""
+
+    __tablename__ = "c4_onboarding_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    domain_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    binding_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    binding_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    artifact_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    extraction_job_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    draft_contract_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    contract_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    batch_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    current_step: Mapped[str] = mapped_column(String(64), nullable=False)
+    step_results: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    gaps: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class C4PolicyComparisonModel(Base):
+    """SQLAlchemy model for policy contract comparison records."""
+
+    __tablename__ = "c4_policy_comparisons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    comparison_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    baseline_contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    baseline_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    candidate_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    comparison_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class C4RegressionPlanModel(Base):
+    """SQLAlchemy model for versioned regression plans and impact decisions."""
+
+    __tablename__ = "c4_regression_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    comparison_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    baseline_contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    baseline_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    candidate_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    binding_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    binding_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    plan_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    frozen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class C4RegressionBatchModel(Base):
+    """SQLAlchemy model for selective regression execution batches."""
+
+    __tablename__ = "c4_regression_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    plan_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    candidate_contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    candidate_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    adapter_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(128), index=True, nullable=True
+    )
+    request_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    batch_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "idempotency_key",
+            name="uq_c4_regression_batches_proj_idempotency",
+        ),
+    )
+
+
+class C4HistoricalReEvaluationModel(Base):
+    """SQLAlchemy model for immutable historical run re-evaluations under candidate policies."""
+
+    __tablename__ = "c4_historical_re_evaluations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    re_eval_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    source_run_id: Mapped[str] = mapped_column(
+        String(128), index=True, nullable=False
+    )
+    original_contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    original_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_contract_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    candidate_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    derived_policy_verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    re_eval_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class C4EvaluationDatasetModel(Base):
+    """SQLAlchemy model for versioned and frozen evaluation datasets."""
+
+    __tablename__ = "c4_evaluation_datasets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[str] = mapped_column(
+        String(128), index=True, nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    domain_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    dataset_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_frozen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    dataset_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    frozen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "dataset_id",
+            "version",
+            name="uq_c4_eval_datasets_proj_id_ver",
+        ),
+    )
+
+
+class C4EvaluationReviewModel(Base):
+    """SQLAlchemy model for independent reviewer decisions."""
+
+    __tablename__ = "c4_evaluation_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    case_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    reviewer_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    verdict_decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    review_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+
+class C4ExperimentModel(Base):
+    """SQLAlchemy model for reproducible evaluation experiments."""
+
+    __tablename__ = "c4_experiments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    experiment_id: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    domain_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    strategy_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    experiment_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+

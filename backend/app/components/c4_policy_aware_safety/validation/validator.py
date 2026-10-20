@@ -17,6 +17,7 @@ from app.components.c4_policy_aware_safety.contracts.predicates import (
     ALLOWLISTED_FIELD_PREFIXES,
     CompoundPredicate,
     PredicateCondition,
+    PredicateOperator,
 )
 from app.components.c4_policy_aware_safety.contracts.rules import (
     CandidateRule,
@@ -29,6 +30,132 @@ from app.components.c4_policy_aware_safety.derivation.intake import (
     validate_source_reference,
 )
 
+SUPPORTED_PATH_ROOTS = {
+    "principal": {"principal_id", "role", "roles", "attributes"},
+    "tool_call": {"name", "arguments"},
+    "action": {"tool_name", "arguments"},
+    "authorization": {"status", "decision", "allowed", "reason", "decision_reason"},
+    "approval": {"status", "approver_role", "approver_principal", "decision_reason", "approval_token"},
+    "disclosure": {"marker", "recipient", "destination_channel"},
+    "effect": {"target_entity", "state_change_observed", "committed_status", "delta"},
+    "instruction": {"source_id", "source_type", "trust_classification", "claimed_role_in_text", "origin"},
+    "trace": {"is_complete", "missing_stages", "total_events"},
+    "resource": {"type", "id", "owner_id"},
+    "context": None,  # dynamic keys permitted
+}
+
+
+def _validate_predicate_condition(pred: PredicateCondition) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    field = pred.field
+
+    # 1. Check prefix
+    if not any(field.startswith(pfx) for pfx in ALLOWLISTED_FIELD_PREFIXES):
+        issues.append(
+            ValidationIssue(
+                code=ValidationIssueCode.UNSUPPORTED,
+                message=f"Field '{field}' does not use an allowlisted evidence prefix ({', '.join(sorted(ALLOWLISTED_FIELD_PREFIXES))}).",
+                field=f"predicate.{field}",
+                severity=Severity.HIGH,
+                blocking=True,
+            )
+        )
+        return issues
+
+    parts = field.split(".")
+    if len(parts) < 2 or any(len(p.strip()) == 0 for p in parts):
+        issues.append(
+            ValidationIssue(
+                code=ValidationIssueCode.UNSUPPORTED,
+                message=f"Field path '{field}' is malformed.",
+                field=f"predicate.{field}",
+                severity=Severity.HIGH,
+                blocking=True,
+            )
+        )
+        return issues
+
+    root = parts[0]
+    first_child = parts[1]
+    allowed_children = SUPPORTED_PATH_ROOTS.get(root)
+    if allowed_children is not None and first_child not in allowed_children and root != "resource":
+        issues.append(
+            ValidationIssue(
+                code=ValidationIssueCode.UNSUPPORTED,
+                message=f"Unsupported field path '{field}'. Root '{root}' does not support field '{first_child}'.",
+                field=f"predicate.{field}",
+                severity=Severity.HIGH,
+                blocking=True,
+            )
+        )
+        return issues
+
+    # Validate that non-dynamic roots do not allow arbitrary nested subpaths (Section 4.C)
+    dynamic_nested_roots = {
+        ("tool_call", "arguments"),
+        ("action", "arguments"),
+        ("effect", "delta"),
+        ("principal", "attributes"),
+    }
+    if len(parts) > 2 and root not in ("context", "resource") and (root, first_child) not in dynamic_nested_roots:
+        issues.append(
+            ValidationIssue(
+                code=ValidationIssueCode.UNSUPPORTED,
+                message=f"Unsupported nested field path '{field}'. Field '{root}.{first_child}' is a flat property and does not permit subpaths.",
+                field=f"predicate.{field}",
+                severity=Severity.HIGH,
+                blocking=True,
+            )
+        )
+        return issues
+
+    # 2. Check operator and operand type compatibility
+    op = pred.operator
+    val = pred.value
+    from decimal import Decimal, InvalidOperation
+
+    ordered_ops = {
+        PredicateOperator.GREATER_THAN,
+        PredicateOperator.GREATER_THAN_OR_EQUAL,
+        PredicateOperator.LESS_THAN,
+        PredicateOperator.LESS_THAN_OR_EQUAL,
+    }
+    if op in ordered_ops:
+        is_num = False
+        if isinstance(val, (int, float, Decimal)) and not isinstance(val, bool):
+            is_num = True
+        elif isinstance(val, str):
+            try:
+                Decimal(val)
+                is_num = True
+            except (InvalidOperation, ValueError):
+                is_num = False
+        if not is_num:
+            issues.append(
+                ValidationIssue(
+                    code=ValidationIssueCode.UNSUPPORTED,
+                    message=f"Ordered comparison operator '{op.value}' requires a numeric or Decimal operand value, got {type(val).__name__} ({val!r}).",
+                    field=f"predicate.{field}",
+                    severity=Severity.HIGH,
+                    blocking=True,
+                )
+            )
+
+    if op in (PredicateOperator.IN, PredicateOperator.NOT_IN) and not isinstance(
+        val, (list, tuple, set)
+    ):
+        issues.append(
+            ValidationIssue(
+                code=ValidationIssueCode.UNSUPPORTED,
+                message=f"Membership operator '{op.value}' requires a collection operand value, got {type(val).__name__} ({val!r}).",
+                field=f"predicate.{field}",
+                severity=Severity.HIGH,
+                blocking=True,
+            )
+        )
+
+    return issues
+
 
 def _check_predicate_fields(
     pred: CompoundPredicate | PredicateCondition | None,
@@ -38,18 +165,7 @@ def _check_predicate_fields(
         return issues
 
     if isinstance(pred, PredicateCondition):
-        field = pred.field
-        if not any(field.startswith(pfx) for pfx in ALLOWLISTED_FIELD_PREFIXES):
-            issues.append(
-                ValidationIssue(
-                    code=ValidationIssueCode.UNSUPPORTED,
-                    message=f"Field '{field}' does not use an allowlisted evidence prefix ({', '.join(sorted(ALLOWLISTED_FIELD_PREFIXES))}).",
-                    field=f"predicate.{field}",
-                    severity=Severity.HIGH,
-                    blocking=True,
-                )
-            )
-        return issues
+        return _validate_predicate_condition(pred)
 
     for cond in pred.conditions:
         issues.extend(_check_predicate_fields(cond))
@@ -190,6 +306,42 @@ class PolicyContractValidator:
             is_valid=not has_blocking,
             issues=issues,
             rules_validated_count=len(candidate_rules),
+        )
+
+    def validate_contract(
+        self,
+        contract: PolicyContractVersion,
+        artifact_resolver: Callable[[str, str, int], ArtifactVersionRecord | None] | None = None,
+    ) -> ContractValidationResult:
+        resolver = artifact_resolver or (lambda p, a, v: None)
+        candidates = [
+            CandidateRule(
+                project_id=r.project_id,
+                rule_id=r.rule_id,
+                rule_version=r.rule_version,
+                policy_family=r.policy_family,
+                principal_selector=r.principal_selector,
+                action_selector=r.action_selector,
+                resource_selector=r.resource_selector,
+                applicability_conditions=r.applicability_conditions,
+                policy_requirement=r.policy_requirement,
+                compliance_conditions=r.compliance_conditions,
+                evaluation_boundary=r.evaluation_boundary,
+                required_evidence=r.required_evidence,
+                severity=r.severity,
+                source_references=r.source_references,
+                validation_issues=[],
+                review_status=r.review_status,
+                extraction_metadata=r.acceptance_metadata or {},
+            )
+            for r in contract.rules
+        ]
+        return self.validate_contract_draft(
+            contract.project_id,
+            contract.contract_id,
+            contract.version,
+            candidates,
+            resolver,
         )
 
     def build_accepted_contract(

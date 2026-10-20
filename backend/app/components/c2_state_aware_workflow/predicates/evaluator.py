@@ -63,6 +63,9 @@ class EvaluationContext:
         if not ref.path:
             return scope_data
 
+        if isinstance(scope_data, Mapping) and ref.path in scope_data:
+            return scope_data[ref.path]
+
         parts = ref.path.split(".")
         current: Any = scope_data
 
