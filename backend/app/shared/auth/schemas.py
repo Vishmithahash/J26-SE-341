@@ -41,7 +41,7 @@ class UserSignupRequest(BaseModel):
     """Public sign-up request contract.
 
     Strictly forbids unexpected or injected fields (e.g., role, is_admin, is_active).
-    Passwords must be at least 15 characters and up to 128 characters.
+    Passwords must be at least 8 characters and up to 128 characters.
     Spaces and Unicode are permitted; no silent transformation or truncation is applied.
     """
 
@@ -53,9 +53,9 @@ class UserSignupRequest(BaseModel):
     email: EmailField = Field(..., description="User email address")
     password: str = Field(
         ...,
-        min_length=15,
+        min_length=8,
         max_length=128,
-        description="Password (min 15 chars, max 128 chars, Unicode/spaces permitted)",
+        description="Password (min 8 chars, max 128 chars, Unicode/spaces permitted)",
     )
 
     @field_validator("name")
@@ -84,6 +84,48 @@ class UserLoginRequest(BaseModel):
     )
 
 
+class UserUpdateRequest(BaseModel):
+    """Profile update request contract.
+    
+    Accepts only allowed name data.
+    Strictly forbids role, is_active, password_hash, or other injected fields.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        ..., min_length=1, max_length=255, description="Updated user display name"
+    )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("Name cannot be empty or whitespace only.")
+        return stripped
+
+
+class PasswordChangeRequest(BaseModel):
+    """Password change request contract.
+    
+    Requires current password and valid new password (8-128 chars).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Current account password",
+    )
+    new_password: str = Field(
+        ...,
+        min_length=8,
+        max_length=128,
+        description="New password (min 8 chars, max 128 chars, Unicode/spaces permitted)",
+    )
 class UserResponse(BaseModel):
     """Safe public user representation.
 

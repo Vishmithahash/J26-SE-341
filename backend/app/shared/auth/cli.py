@@ -29,9 +29,9 @@ def _validate_email(email: str) -> str:
 
 
 def _get_validated_password() -> str:
-    pwd = getpass.getpass("Enter administrator password (min 15 chars): ")
-    if len(pwd) < 15:
-        raise ValueError("Password must be at least 15 characters.")
+    pwd = getpass.getpass("Enter administrator password (min 8 chars): ")
+    if len(pwd) < 8:
+        raise ValueError("Password must be at least 8 characters.")
     if len(pwd) > 128:
         raise ValueError("Password must not exceed 128 characters.")
     confirm = getpass.getpass("Confirm administrator password: ")
