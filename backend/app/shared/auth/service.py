@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.shared.auth.models import User, UserRole, normalize_email
-from app.shared.auth.schemas import UserSignupRequest
+from app.shared.auth.schemas import UserSignupRequest, UserUpdateRequest
 from app.shared.auth.security import (
     create_access_token,
     dummy_verify_password,
@@ -192,3 +192,38 @@ def promote_user_to_admin(db: Session, email: str) -> tuple[User, bool]:
     db.commit()
     db.refresh(user)
     return user, False
+
+
+def update_user_profile(
+    db: Session,
+    user: User,
+    update_data: UserUpdateRequest,
+) -> User:
+    """Update display name for the authenticated user."""
+    user.name = update_data.name
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def change_user_password(
+    db: Session,
+    user: User,
+    current_password: str,
+    new_password: str,
+) -> None:
+    """Verify current password and update to new password.
+
+    Guarantees:
+    - Verifies current password with Argon2id before updating.
+    - Never logs, returns, or stores plaintext passwords.
+    - Rehashes new password using standard Argon2id configuration.
+    """
+    if not verify_password(current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+    user.password_hash = hash_password(new_password)
+    db.commit()
+    db.refresh(user)
