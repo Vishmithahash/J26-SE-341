@@ -59,25 +59,40 @@ cp .env.example .env
 
 ---
 
-### 5. Add Neon Database Credentials
-Open `backend/.env` and paste your actual Neon connection string:
+### 5. Add Neon Database and Authentication Credentials
+Open `backend/.env` and paste your actual Neon connection string along with the authentication signing key:
 ```env
 DATABASE_URL="postgresql://username:password@hostname/database?sslmode=require"
+
+# Shared Authentication Configuration (min 32 bytes)
+AUTH_SECRET_KEY="replace-with-a-secure-random-secret-key-at-least-32-chars"
+AUTH_JWT_ALGORITHM="HS256"
+AUTH_ACCESS_TOKEN_EXPIRE_MINUTES="15"
+# Optional JWT claims
+# AUTH_JWT_ISSUER="agentic-qa-framework"
+# AUTH_JWT_AUDIENCE="agentic-qa-api"
 ```
-*Note: Unencrypted connections (`sslmode=disable`, `allow`, `prefer`) are strictly rejected. The framework automatically normalizes the driver to `postgresql+psycopg` and preserves parameters such as `channel_binding`.*
+*Note: Generate a secure secret key using: `python -c "import secrets; print(secrets.token_hex(32))"`.*
+*Unencrypted database connections (`sslmode=disable`, `allow`, `prefer`) are strictly rejected. The framework automatically normalizes the driver to `postgresql+psycopg` and preserves parameters such as `channel_binding`.*
 
 > **Direct vs. Pooled Connection String:**
 > For local development and migrations, prefer Neon's direct connection string (endpoint without `-pooler`). Pooled URLs can cause limitations with schema migrations when DDL transactions or session locks are required.
 
 ---
 
-### 6. Verify Alembic Migrations
+### 6. Verify and Apply Alembic Migrations
 Verify migration status against your database:
 ```powershell
 alembic current
 alembic heads
 ```
-*Note: "No revisions yet" is the expected result at this stage. No domain models or tables have been created yet. `alembic upgrade head` will be used once the first actual model migration is generated.*
+To apply all migrations to your database:
+```powershell
+alembic upgrade head
+```
+Revisions:
+- `e75342624f8c`: C3 persistence tables
+- `f1a89c2b4d3e`: Shared `users` table for platform authentication and role-based authorization
 
 ---
 
@@ -154,6 +169,227 @@ Other components will define responsibility-based subpackages aligned with their
 | `app/components/c2_state_aware_workflow` | **C2: State-Aware Multi-Step Workflow Testing** | Reserved (Not implemented) |
 | `app/components/c3_robustness_recovery` | **C3: Robustness and Failure Recovery Testing** | **Phases 1–7 Implemented & Verified Offline** (Cross-Component Integration Pending) |
 | `app/components/c4_policy_prompt_injection` | **C4: Policy-Aware Safety and Prompt-Injection Testing** | Reserved (Not implemented) |
+
+---
+
+## Shared Platform: Authentication & Role-Based Authorization
+
+The shared platform authentication and authorization module (`backend/app/shared/auth/`) provides system-wide user identity, credential security, token issuance, and role enforcement across the backend.
+
+### 1. Roles and Responsibilities
+
+| Role | Intended Audience | Permissions & Scope | Provisioning Model |
+|---|---|---|---|
+| **`USER`** | Standard QA engineers, researchers, and automated test runners | Authenticate, inspect own identity (`/api/v1/auth/me`), and execute permitted testing workflows | Assigned automatically upon public sign-up (`POST /api/v1/auth/signup`) |
+| **`ADMIN`** | Platform operators and system administrators | Elevated access, system user inspection (`GET /api/v1/admin/users`), platform maintenance | Provisioned strictly via internal developer/operator CLI |
+
+- **Public sign-up ALWAYS creates a `USER`**: There is no public parameter or first-user exception to grant `ADMIN`. Injected role fields are rejected.
+- **Unified Login**: Both `USER` and `ADMIN` use the same login endpoint (`POST /api/v1/auth/login`).
+- **Database-Driven Authorization**: Current user role and active status are loaded fresh from the database on every authenticated request; token claims are not trusted as final authorization authority.
+
+### 2. Endpoints and Request/Response Examples
+
+#### Public Sign-Up (`POST /api/v1/auth/signup`)
+Creates a new `USER` account. Rejects unknown or injected fields with HTTP 422. Enforces canonical email uniqueness and minimum 15-character passwords.
+
+**Request:**
+```http
+POST /api/v1/auth/signup
+Content-Type: application/json
+
+{
+  "name": "Jane QA Engineer",
+  "email": "jane@example.com",
+  "password": "correct_horse_battery_staple_12345"
+}
+```
+
+**Response (`HTTP 201 Created`):**
+```json
+{
+  "id": 1,
+  "name": "Jane QA Engineer",
+  "email": "jane@example.com",
+  "role": "USER",
+  "is_active": true,
+  "created_at_utc": "2026-10-20T09:30:00Z"
+}
+```
+
+**Duplicate Email Response (`HTTP 409 Conflict`):**
+```json
+{
+  "detail": "An account with this email already exists."
+}
+```
+
+#### Credentials Login (`POST /api/v1/auth/login`)
+Common login endpoint for `USER` and `ADMIN`. Returns a signed, short-lived JWT bearer token.
+
+**Request:**
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "jane@example.com",
+  "password": "correct_horse_battery_staple_12345"
+}
+```
+
+**Response (`HTTP 200 OK`):**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "expires_in": 900,
+  "user": {
+    "id": 1,
+    "name": "Jane QA Engineer",
+    "email": "jane@example.com",
+    "role": "USER",
+    "is_active": true,
+    "created_at_utc": "2026-10-20T09:30:00Z"
+  }
+}
+```
+
+**Invalid Credentials Response (`HTTP 401 Unauthorized`):**
+*Generic error returned identically for unknown email, incorrect password, and inactive accounts:*
+```json
+{
+  "detail": "Invalid email or password."
+}
+```
+
+#### Current User Identity (`GET /api/v1/auth/me`)
+Requires a valid bearer token.
+
+**Request:**
+```http
+GET /api/v1/auth/me
+Authorization: Bearer <access_token>
+```
+
+**Response (`HTTP 200 OK`):**
+```json
+{
+  "id": 1,
+  "name": "Jane QA Engineer",
+  "email": "jane@example.com",
+  "role": "USER",
+  "is_active": true,
+  "created_at_utc": "2026-10-20T09:30:00Z"
+}
+```
+
+#### List Users (`GET /api/v1/admin/users`)
+Restricted to callers with `ADMIN` role. Anonymous callers receive HTTP 401; standard `USER` callers receive HTTP 403.
+
+**Request:**
+```http
+GET /api/v1/admin/users?limit=20&offset=0
+Authorization: Bearer <admin_access_token>
+```
+
+**Response (`HTTP 200 OK`):**
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "name": "Platform Operator",
+      "email": "admin@example.com",
+      "role": "ADMIN",
+      "is_active": true,
+      "created_at_utc": "2026-10-20T09:00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+**Non-Admin Response (`HTTP 403 Forbidden`):**
+```json
+{
+  "detail": "Administrator access required."
+}
+```
+
+### 3. Bearer Token Usage
+Send the issued token in the `Authorization` HTTP header with the `Bearer` prefix:
+```http
+Authorization: Bearer <your_jwt_access_token>
+```
+If credentials are missing or invalid, endpoints respond with `HTTP 401 Unauthorized` and include a `WWW-Authenticate: Bearer` challenge header.
+
+### 4. Required Configuration
+The following environment variables configure authentication in `backend/.env`:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `AUTH_SECRET_KEY` | **Yes** (for token operations) | None | Cryptographic secret for signing HMAC-SHA256 JWTs (minimum 32 bytes) |
+| `AUTH_JWT_ALGORITHM` | No | `"HS256"` | JWT signing algorithm |
+| `AUTH_ACCESS_TOKEN_EXPIRE_MINUTES` | No | `15` | Lifetime of access tokens in minutes |
+| `AUTH_JWT_ISSUER` | No | `None` | Expected `iss` claim |
+| `AUTH_JWT_AUDIENCE` | No | `None` | Expected `aud` claim |
+
+*Fail-Closed Behavior*: If `AUTH_SECRET_KEY` is not provided, importing and running health checks continues to work, but token issuance and verification immediately fail closed with an explicit 500 error.
+
+### 5. Internal Administrator Provisioning CLI
+Administrators cannot be provisioned via HTTP endpoints. Operators manage admin accounts using the internal CLI under `app.shared.auth.cli`.
+
+Run all CLI commands from the `backend/` directory:
+
+#### Create an Administrator
+```powershell
+python -m app.shared.auth.cli create-admin --name "Admin Operator" --email "admin@example.com"
+```
+- Passwords are typed interactively using masked `getpass` prompts.
+- Passwords are never accepted via CLI flags or printed to stdout.
+- Will safely fail if an account with that email already exists.
+
+#### Promote an Existing User
+```powershell
+# Interactive confirmation prompt
+python -m app.shared.auth.cli promote-admin --email "user@example.com"
+
+# Non-interactive confirmation
+python -m app.shared.auth.cli promote-admin --email "user@example.com" --yes
+```
+- Existing user passwords are never modified or reset during promotion.
+- Requires explicit operator confirmation.
+
+#### CLI Help (Offline Safe)
+```powershell
+python -m app.shared.auth.cli --help
+python -m app.shared.auth.cli create-admin --help
+python -m app.shared.auth.cli promote-admin --help
+```
+*`--help` and pure module imports never open database connections.*
+
+### 6. Security Architecture & Implementation Details
+- **Argon2id Salted Hashing**: Uses `argon2-cffi` to generate memory-hard Argon2id hashes with unique salts. Password hashes are never returned in API payloads.
+- **Email Normalization Policy**: Emails are normalized consistently via `email.strip().lower()` during signup, login, and provisioning to prevent canonical alias collision attacks.
+- **Timing Attack Mitigation**: When login fails on an unknown email address, a precomputed dummy Argon2id verification executes to equalize execution latency with invalid password attempts.
+- **Sanitized Error Responses**: Custom `AuthSafeRoute` handlers sanitize `RequestValidationError` (HTTP 422) so submitted passwords and request payloads are never echoed back.
+- **Process-Local Login Throttling**: An in-memory rate limiter tracks consecutive failed login attempts by client IP (default: 5 failures / 60-second window). Exceeding this threshold returns `HTTP 429 Too Many Requests`.
+  > **Deployment Scope Notice**: The rate limiter is currently process-local to the running Python worker. In distributed or multi-worker deployments, a shared store (such as Redis) should be introduced to synchronize throttling state across processes.
+- **Token Expiry & Revocation**: Access tokens are strictly short-lived (default: 15 minutes). Client-side token deletion discards the credential; tokens remain valid for verification until their cryptographic expiration timestamp (`exp`).
+
+### 7. Authorization Status Across Existing Routes
+- **Protected Routes**:
+  - `GET /api/v1/auth/me`: Requires authenticated, active user (`require_active_user`).
+  - `GET /api/v1/admin/users`: Requires authenticated administrator (`require_admin`).
+- **Unprotected Public Platform Routes**:
+  - `GET /`: API metadata.
+  - `GET /health` and `GET /health/db`: Infrastructure health checks.
+  - `POST /api/v1/auth/signup` and `POST /api/v1/auth/login`: Public authentication entry points.
+- **Existing Research Routes Awaiting Coordinated Authorization Integration**:
+  - Component 3 (C3) endpoints under `/api/v1/c3/*` remain unauthenticated in this platform phase to avoid breaking existing C3 experiments and offline tests. Reusable dependencies (`get_current_user`, `require_active_user`, `require_admin`) are ready for coordinated adoption during multi-component integration.
+  - Future components (C1, C2, C4) will adopt the shared dependencies upon API registration.
 
 ---
 
