@@ -18,6 +18,13 @@ from app.components.c1_tool_call_correctness.contracts.configuration import (
     ToolDefinition,
     TraceCapability,
 )
+from app.components.c1_tool_call_correctness.contracts.correction import (
+    CorrectionAttemptRequest,
+    CorrectionDiffResponse,
+    CorrectionRecord,
+    CorrectionSummary,
+    ReviewRequest,
+)
 from app.components.c1_tool_call_correctness.contracts.diagnosis import (
     CandidateCodeLocation,
     CaseDiagnosisRecord,
@@ -67,6 +74,9 @@ from app.components.c1_tool_call_correctness.services.config_service import (
     list_project_configs,
     update_project_config,
 )
+from app.components.c1_tool_call_correctness.services.correction_service import (
+    CorrectionService,
+)
 from app.components.c1_tool_call_correctness.services.diagnosis_service import (
     DiagnosisService,
 )
@@ -94,6 +104,7 @@ router = APIRouter(
 
 execution_service = ExecutionService()
 diagnosis_service = DiagnosisService()
+correction_service = CorrectionService()
 
 
 def _serialize_config_model(model: C1ProjectConfigModel) -> ProjectConfigResponse:
@@ -858,5 +869,108 @@ def list_diagnoses_endpoint(
     limit: int = 50,
 ):
     return diagnosis_service.list_diagnoses(
+        db, project_id=project_id, run_id=run_id, limit=limit
+    )
+
+
+@router.post(
+    "/corrections/attempts",
+    response_model=CorrectionRecord,
+    status_code=status.HTTP_200_OK,
+    summary="Request automated candidate patch generation and sandbox verification for an eligible defect",
+)
+async def request_correction_endpoint(
+    project_id: str,
+    request: CorrectionAttemptRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return await correction_service.execute_correction_attempt(
+            db=db,
+            project_id=project_id,
+            request=request,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/corrections/{correction_id}",
+    response_model=CorrectionRecord,
+    summary="Retrieve candidate correction status, verification results, and review decision",
+)
+def get_correction_endpoint(
+    project_id: str,
+    correction_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    record = correction_service.get_correction_by_id(db, project_id, correction_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Correction '{correction_id}' not found.",
+        )
+    return record
+
+
+@router.get(
+    "/corrections/{correction_id}/diff",
+    response_model=CorrectionDiffResponse,
+    summary="Retrieve candidate patch unified diff representation for developer review",
+)
+def get_correction_diff_endpoint(
+    project_id: str,
+    correction_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return correction_service.get_correction_diff(db, project_id, correction_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+
+@router.post(
+    "/corrections/{correction_id}/review",
+    response_model=CorrectionRecord,
+    summary="Submit developer review decision (ACCEPTED or REJECTED) bound to exact candidate patch hash",
+)
+def review_correction_endpoint(
+    project_id: str,
+    correction_id: str,
+    request: ReviewRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return correction_service.submit_review(
+            db=db,
+            project_id=project_id,
+            correction_id=correction_id,
+            request=request,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/corrections",
+    response_model=list[CorrectionSummary],
+    summary="Inspect candidate correction attempts history for a project or run",
+)
+def list_corrections_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    run_id: str | None = None,
+    limit: int = 50,
+):
+    return correction_service.list_corrections(
         db, project_id=project_id, run_id=run_id, limit=limit
     )

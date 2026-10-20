@@ -19,6 +19,14 @@ from app.components.c1_tool_call_correctness.services.config_service import (
     list_project_configs,
     update_project_config,
 )
+from app.components.c1_tool_call_correctness.services.correction_engine import (
+    CorrectionEngine,
+    DeterministicPatchGenerator,
+    PatchGenerationProvider,
+)
+from app.components.c1_tool_call_correctness.services.correction_service import (
+    CorrectionService,
+)
 from app.components.c1_tool_call_correctness.services.correctness_evaluator import (
     DeterministicCorrectnessEvaluator,
 )
@@ -57,6 +65,12 @@ from app.components.c1_tool_call_correctness.services.generator_engine import (
     DeterministicCandidateGenerator,
     compute_case_canonical_hash,
 )
+from app.components.c1_tool_call_correctness.services.sandbox_interface import (
+    ContainerSandbox,
+    CorrectionSandbox,
+    DisposableIsolatedSandbox,
+    SandboxExecutionResult,
+)
 from app.components.c1_tool_call_correctness.services.source_inspector import (
     SourceInspectionError,
     SourceInspector,
@@ -69,6 +83,9 @@ from app.components.c1_tool_call_correctness.services.suite_selector import (
 from app.components.c1_tool_call_correctness.services.validator import (
     validate_project_config,
 )
+from app.components.c1_tool_call_correctness.services.verification_engine import (
+    VerificationEngine,
+)
 
 __all__ = [
     "AgentExecutionAdapter",
@@ -76,22 +93,31 @@ __all__ = [
     "ConfigNotFoundError",
     "ConfigServiceError",
     "ConfigValidationError",
+    "ContainerSandbox",
+    "CorrectionEngine",
+    "CorrectionSandbox",
+    "CorrectionService",
     "DeterministicCandidateGenerator",
     "DeterministicCorrectnessEvaluator",
     "DeterministicDiagnosisProvider",
+    "DeterministicPatchGenerator",
     "DiagnosisEngine",
     "DiagnosisProvider",
     "DiagnosisService",
+    "DisposableIsolatedSandbox",
     "ExecutionService",
     "ExplanationEngine",
     "FakeAgentAdapter",
     "ImmutableConfigError",
     "LiveAgentAdapter",
     "ModelAssistedDiagnosisProvider",
+    "PatchGenerationProvider",
+    "SandboxExecutionResult",
     "SourceInspectionError",
     "SourceInspector",
     "SuiteSelector",
     "SyntheticFixtureService",
+    "VerificationEngine",
     "compute_case_canonical_hash",
     "compute_suite_content_hash",
     "create_project_config",

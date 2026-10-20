@@ -17,6 +17,7 @@ def test_c1_models_metadata_registration():
     assert "c1_execution_runs" in tables
     assert "c1_case_executions" in tables
     assert "c1_case_diagnoses" in tables
+    assert "c1_corrections" in tables
 
     # Check columns in c1_project_configs
 
@@ -113,6 +114,6 @@ def test_alembic_offline_migration_compatibility(tmp_path):
 
     # Test offline SQL downgrade generation
     try:
-        command.downgrade(alembic_cfg, "c1_0004:base", sql=True)
+        command.downgrade(alembic_cfg, "c1_0005:base", sql=True)
     except Exception as exc:
         raise AssertionError(f"Alembic offline downgrade failed: {exc}") from exc

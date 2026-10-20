@@ -311,3 +311,71 @@ class C1CaseDiagnosisModel(Base):
             name="uq_c1_case_diagnosis_attempt",
         ),
     )
+
+
+class C1CorrectionModel(Base):
+    """Persisted correction attempt, sandbox verification results, and developer decision."""
+
+    __tablename__ = "c1_corrections"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    project_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c1_execution_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    case_execution_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c1_case_executions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    case_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    diagnosis_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c1_case_diagnoses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_commit: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    permitted_paths: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    candidate_patch: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="PENDING", index=True
+    )
+    is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ineligibility_reasons: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    verification_results: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    review: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    isolation_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="DISPOSABLE_SUBPROCESS"
+    )
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "case_id",
+            "attempt_number",
+            name="uq_c1_correction_attempt",
+        ),
+    )
