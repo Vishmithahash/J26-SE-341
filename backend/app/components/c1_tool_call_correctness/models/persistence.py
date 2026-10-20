@@ -182,6 +182,12 @@ class C1ExecutionRunModel(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    diagnoses = relationship(
+        "C1CaseDiagnosisModel",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class C1CaseExecutionModel(Base):
@@ -224,6 +230,12 @@ class C1CaseExecutionModel(Base):
     )
 
     run = relationship("C1ExecutionRunModel", back_populates="case_executions")
+    diagnoses = relationship(
+        "C1CaseDiagnosisModel",
+        back_populates="case_execution",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -231,5 +243,71 @@ class C1CaseExecutionModel(Base):
             "case_id",
             "attempt_number",
             name="uq_c1_case_execution_attempt",
+        ),
+    )
+
+
+class C1CaseDiagnosisModel(Base):
+    """Persisted diagnosis and evidence-linked explanation for a case execution."""
+
+    __tablename__ = "c1_case_diagnoses"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    project_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c1_execution_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    case_execution_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("c1_case_executions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    case_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    requirement_version: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="v1.0"
+    )
+    evaluator_version: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="c1-evaluator-v1.0"
+    )
+    explanation_version: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="c1-diagnosis-v1.0"
+    )
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="COMPLETED")
+    cause_category: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    explanation_summary: Mapped[str] = mapped_column(String(2000), nullable=False)
+    check_explanations: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    candidate_code_locations: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    evidence_refs: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    explanation_method: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="DETERMINISTIC_RULE_DERIVATION"
+    )
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    run = relationship("C1ExecutionRunModel", back_populates="diagnoses")
+    case_execution = relationship("C1CaseExecutionModel", back_populates="diagnoses")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "case_id",
+            "attempt_number",
+            "explanation_version",
+            name="uq_c1_case_diagnosis_attempt",
         ),
     )

@@ -22,6 +22,17 @@ from app.components.c1_tool_call_correctness.services.config_service import (
 from app.components.c1_tool_call_correctness.services.correctness_evaluator import (
     DeterministicCorrectnessEvaluator,
 )
+from app.components.c1_tool_call_correctness.services.diagnosis_engine import (
+    DiagnosisEngine,
+)
+from app.components.c1_tool_call_correctness.services.diagnosis_provider import (
+    DeterministicDiagnosisProvider,
+    DiagnosisProvider,
+    ModelAssistedDiagnosisProvider,
+)
+from app.components.c1_tool_call_correctness.services.diagnosis_service import (
+    DiagnosisService,
+)
 from app.components.c1_tool_call_correctness.services.evaluator_rules import (
     evaluate_argument_presence,
     evaluate_operator,
@@ -30,6 +41,9 @@ from app.components.c1_tool_call_correctness.services.evaluator_rules import (
 )
 from app.components.c1_tool_call_correctness.services.execution_service import (
     ExecutionService,
+)
+from app.components.c1_tool_call_correctness.services.explanation_engine import (
+    ExplanationEngine,
 )
 from app.components.c1_tool_call_correctness.services.fixture_service import (
     SyntheticFixtureService,
@@ -42,6 +56,10 @@ from app.components.c1_tool_call_correctness.services.generation_service import 
 from app.components.c1_tool_call_correctness.services.generator_engine import (
     DeterministicCandidateGenerator,
     compute_case_canonical_hash,
+)
+from app.components.c1_tool_call_correctness.services.source_inspector import (
+    SourceInspectionError,
+    SourceInspector,
 )
 from app.components.c1_tool_call_correctness.services.suite_selector import (
     SuiteSelector,
@@ -60,10 +78,18 @@ __all__ = [
     "ConfigValidationError",
     "DeterministicCandidateGenerator",
     "DeterministicCorrectnessEvaluator",
+    "DeterministicDiagnosisProvider",
+    "DiagnosisEngine",
+    "DiagnosisProvider",
+    "DiagnosisService",
     "ExecutionService",
+    "ExplanationEngine",
     "FakeAgentAdapter",
     "ImmutableConfigError",
     "LiveAgentAdapter",
+    "ModelAssistedDiagnosisProvider",
+    "SourceInspectionError",
+    "SourceInspector",
     "SuiteSelector",
     "SyntheticFixtureService",
     "compute_case_canonical_hash",

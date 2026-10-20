@@ -18,6 +18,12 @@ from app.components.c1_tool_call_correctness.contracts.configuration import (
     ToolDefinition,
     TraceCapability,
 )
+from app.components.c1_tool_call_correctness.contracts.diagnosis import (
+    CandidateCodeLocation,
+    CaseDiagnosisRecord,
+    DiagnosisRequest,
+    DiagnosisSummary,
+)
 from app.components.c1_tool_call_correctness.contracts.execution import (
     CaseExecutionDetail,
     ExecutionRequest,
@@ -61,6 +67,9 @@ from app.components.c1_tool_call_correctness.services.config_service import (
     list_project_configs,
     update_project_config,
 )
+from app.components.c1_tool_call_correctness.services.diagnosis_service import (
+    DiagnosisService,
+)
 from app.components.c1_tool_call_correctness.services.execution_service import (
     ExecutionService,
 )
@@ -84,6 +93,7 @@ router = APIRouter(
 )
 
 execution_service = ExecutionService()
+diagnosis_service = DiagnosisService()
 
 
 def _serialize_config_model(model: C1ProjectConfigModel) -> ProjectConfigResponse:
@@ -748,3 +758,105 @@ def check_adapter_readiness_endpoint(
         "is_ready": is_ready,
         "diagnostics": reason or "Adapter connection verified and ready.",
     }
+
+
+@router.post(
+    "/runs/{run_id}/diagnose",
+    response_model=list[CaseDiagnosisRecord],
+    status_code=status.HTTP_200_OK,
+    summary="Request evidence-linked explanations and supported root cause diagnosis for an execution run",
+)
+async def diagnose_run_endpoint(
+    project_id: str,
+    run_id: str,
+    request: DiagnosisRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return await diagnosis_service.execute_diagnosis(
+            db=db,
+            project_id=project_id,
+            run_id=run_id,
+            request=request,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/diagnoses/{diagnosis_id}",
+    response_model=CaseDiagnosisRecord,
+    summary="Retrieve a specific failure explanation and diagnosis record",
+)
+def get_diagnosis_endpoint(
+    project_id: str,
+    diagnosis_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    record = diagnosis_service.get_diagnosis_by_id(db, project_id, diagnosis_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Diagnosis '{diagnosis_id}' not found.",
+        )
+    return record
+
+
+@router.get(
+    "/runs/{run_id}/cases/{case_id}/diagnosis",
+    response_model=CaseDiagnosisRecord,
+    summary="Retrieve failure explanation and diagnosis for a specific case in a run",
+)
+def get_case_diagnosis_endpoint(
+    project_id: str,
+    run_id: str,
+    case_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    record = diagnosis_service.get_case_diagnosis(db, project_id, run_id, case_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Diagnosis for case '{case_id}' in run '{run_id}' not found.",
+        )
+    return record
+
+
+@router.get(
+    "/diagnoses/{diagnosis_id}/code-locations",
+    response_model=list[CandidateCodeLocation],
+    summary="Retrieve evidence-linked candidate code locations for a diagnosis",
+)
+def get_diagnosis_code_locations_endpoint(
+    project_id: str,
+    diagnosis_id: str,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return diagnosis_service.get_candidate_code_locations(
+            db, project_id, diagnosis_id
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/diagnoses",
+    response_model=list[DiagnosisSummary],
+    summary="Inspect diagnosis history for a project or run",
+)
+def list_diagnoses_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    run_id: str | None = None,
+    limit: int = 50,
+):
+    return diagnosis_service.list_diagnoses(
+        db, project_id=project_id, run_id=run_id, limit=limit
+    )
