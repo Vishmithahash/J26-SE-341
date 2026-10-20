@@ -18,6 +18,29 @@ def test_c1_models_metadata_registration():
     assert "c1_case_executions" in tables
     assert "c1_case_diagnoses" in tables
     assert "c1_corrections" in tables
+    assert "c1_reference_labels" in tables
+
+    # Check c1_reference_labels columns
+    ref_table = tables["c1_reference_labels"]
+    ref_expected_cols = {
+        "id",
+        "project_id",
+        "case_id",
+        "suite_id",
+        "task_family",
+        "dataset_split",
+        "ground_truth_verdict",
+        "ground_truth_cause",
+        "ground_truth_code_locations",
+        "valid_evidence_refs",
+        "reviewer_id",
+        "label_version",
+        "disagreements",
+        "adjudication",
+        "is_held_out",
+        "created_at",
+    }
+    assert ref_expected_cols.issubset({c.name for c in ref_table.columns})
 
     # Check columns in c1_project_configs
 
@@ -114,6 +137,6 @@ def test_alembic_offline_migration_compatibility(tmp_path):
 
     # Test offline SQL downgrade generation
     try:
-        command.downgrade(alembic_cfg, "c1_0005:base", sql=True)
+        command.downgrade(alembic_cfg, "c1_0006:base", sql=True)
     except Exception as exc:
         raise AssertionError(f"Alembic offline downgrade failed: {exc}") from exc

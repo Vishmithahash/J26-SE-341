@@ -69,8 +69,8 @@ class ExecutionService:
             return FakeAgentAdapter(mode=mode)
 
         conn_ref = config.agent_connection_ref
-        if conn_ref.startswith("urn:conn:mock"):
-            # Default mock connection uses clean AUTO simulated fake adapter
+        if conn_ref.startswith(("urn:conn:mock", "simulated:")):
+            # Default mock or simulated connection uses clean AUTO simulated fake adapter
             return FakeAgentAdapter(mode="AUTO")
 
         return LiveAgentAdapter(connection_ref=conn_ref)

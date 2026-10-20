@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -28,17 +28,21 @@ from app.components.c1_tool_call_correctness.contracts.correction import (
 from app.components.c1_tool_call_correctness.contracts.diagnosis import (
     CandidateCodeLocation,
     CaseDiagnosisRecord,
+    CauseCategory,
     DiagnosisRequest,
     DiagnosisSummary,
 )
 from app.components.c1_tool_call_correctness.contracts.execution import (
+    CapturedToolEvent,
     CaseExecutionDetail,
     ExecutionRequest,
     RunDetailResponse,
     RunSummary,
+    TraceCompleteness,
 )
 from app.components.c1_tool_call_correctness.contracts.generation import (
     AgentFacingTask,
+    ExpectedToolCallSpec,
     GeneratedCandidateCase,
     GenerationJobResponse,
     GenerationRequest,
@@ -46,6 +50,26 @@ from app.components.c1_tool_call_correctness.contracts.generation import (
 )
 from app.components.c1_tool_call_correctness.contracts.lifecycle import (
     SuiteVersion,
+)
+from app.components.c1_tool_call_correctness.contracts.reporting import (
+    ExportFormat,
+    WorkflowReportFilter,
+    WorkflowRunReport,
+)
+from app.components.c1_tool_call_correctness.contracts.research import (
+    AccuracyMetricsReport,
+    BaselineEvaluationRequest,
+    BaselineEvaluationResult,
+    BaselineType,
+    DatasetSplit,
+    ReferenceLabelImportRequest,
+    ReferenceLabelImportResponse,
+    ReferenceLabelRecord,
+)
+from app.components.c1_tool_call_correctness.contracts.results import (
+    CaseExecutionStatus,
+    CaseReadinessStatus,
+    CorrectnessVerdict,
 )
 from app.components.c1_tool_call_correctness.contracts.validation import (
     ValidationSummary,
@@ -56,6 +80,10 @@ from app.components.c1_tool_call_correctness.examples.nexacart_refund import (
     get_nexacart_refund_example_config,
 )
 from app.components.c1_tool_call_correctness.models.persistence import (
+    C1CaseDiagnosisModel,
+    C1CaseExecutionModel,
+    C1CorrectionModel,
+    C1ExecutionRunModel,
     C1GenerationRunModel,
     C1ProjectConfigModel,
     C1SuiteVersionModel,
@@ -80,6 +108,11 @@ from app.components.c1_tool_call_correctness.services.correction_service import 
 from app.components.c1_tool_call_correctness.services.diagnosis_service import (
     DiagnosisService,
 )
+from app.components.c1_tool_call_correctness.services.evaluator_baselines import (
+    ablated_diagnosis_engine,
+    model_baseline_evaluator,
+    schema_baseline_evaluator,
+)
 from app.components.c1_tool_call_correctness.services.execution_service import (
     ExecutionService,
 )
@@ -87,6 +120,15 @@ from app.components.c1_tool_call_correctness.services.generation_service import 
     execute_generation_job,
     get_generation_run,
     list_generation_runs,
+)
+from app.components.c1_tool_call_correctness.services.metrics_engine import (
+    metrics_engine,
+)
+from app.components.c1_tool_call_correctness.services.reporting_service import (
+    reporting_service,
+)
+from app.components.c1_tool_call_correctness.services.research_service import (
+    research_service,
 )
 from app.components.c1_tool_call_correctness.services.suite_selector import (
     extract_agent_facing_task,
@@ -974,3 +1016,336 @@ def list_corrections_endpoint(
     return correction_service.list_corrections(
         db, project_id=project_id, run_id=run_id, limit=limit
     )
+
+
+# --------------------------------------------------------------------------
+# REPORTING & EXPORT ENDPOINTS
+# --------------------------------------------------------------------------
+
+
+@router.get(
+    "/reports/workflow",
+    response_model=WorkflowRunReport,
+    summary="Paginated end-to-end workflow report across execution, diagnosis, correction, and review",
+)
+def get_workflow_report_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    run_id: str | None = None,
+    suite_id: str | None = None,
+    verdict: CorrectnessVerdict | None = None,
+    cause_category: CauseCategory | None = None,
+    is_verified: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    filt = WorkflowReportFilter(
+        project_id=project_id,
+        run_id=run_id,
+        suite_id=suite_id,
+        verdict=verdict,
+        cause_category=cause_category,
+        is_verified=is_verified,
+        limit=limit,
+        offset=offset,
+    )
+    return reporting_service.generate_workflow_report(db, filt)
+
+
+@router.get(
+    "/reports/export",
+    summary="Export machine-readable workflow report as redacted JSON or tabular CSV",
+)
+def export_workflow_report_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    run_id: str | None = None,
+    format: ExportFormat = ExportFormat.JSON,
+):
+    filt = WorkflowReportFilter(
+        project_id=project_id,
+        run_id=run_id,
+        limit=500,
+        offset=0,
+    )
+    report = reporting_service.generate_workflow_report(db, filt)
+
+    if format == ExportFormat.CSV:
+        csv_content = reporting_service.export_report_csv(report)
+        return Response(content=csv_content, media_type="text/csv")
+
+    json_content = reporting_service.export_report_json(report)
+    return Response(content=json_content, media_type="application/json")
+
+
+# --------------------------------------------------------------------------
+# RESEARCH DATA & INDEPENDENT LABELS
+# --------------------------------------------------------------------------
+
+
+@router.post(
+    "/research/labels",
+    response_model=ReferenceLabelImportResponse,
+    summary="Import independently reviewed ground truth reference labels with task_family split isolation",
+)
+def import_reference_labels_endpoint(
+    project_id: str,
+    request: ReferenceLabelImportRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return research_service.import_reference_labels(
+            db=db, project_id=project_id, request=request
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/research/labels",
+    response_model=list[ReferenceLabelRecord],
+    summary="Inspect independently reviewed ground truth reference labels",
+)
+def list_reference_labels_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    dataset_split: DatasetSplit | None = None,
+    task_family: str | None = None,
+    label_version: str | None = None,
+):
+    return research_service.list_reference_labels(
+        db=db,
+        project_id=project_id,
+        dataset_split=dataset_split,
+        task_family=task_family,
+        label_version=label_version,
+    )
+
+
+# --------------------------------------------------------------------------
+# RESEARCH METRICS & BASELINES
+# --------------------------------------------------------------------------
+
+
+@router.post(
+    "/research/metrics",
+    response_model=AccuracyMetricsReport,
+    summary="Compute documented accuracy, diagnosis, code localisation, and verification metrics",
+)
+def compute_research_metrics_endpoint(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    run_id: str | None = None,
+    dataset_split: DatasetSplit | None = None,
+):
+    # 1. Fetch labels
+    labels = research_service.list_reference_labels(
+        db, project_id=project_id, dataset_split=dataset_split
+    )
+    if not labels:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No reference labels found for project '{project_id}' in split '{dataset_split}'.",
+        )
+
+    # 2. Fetch executions
+    case_query = (
+        select(C1CaseExecutionModel)
+        .join(
+            C1ExecutionRunModel,
+            C1CaseExecutionModel.run_id == C1ExecutionRunModel.id,
+        )
+        .where(C1ExecutionRunModel.project_id == project_id)
+    )
+    if run_id:
+        case_query = case_query.where(C1CaseExecutionModel.run_id == run_id)
+
+    raw_cases = db.scalars(case_query).all()
+    executions: list[CaseExecutionDetail] = []
+    for rc in raw_cases:
+        executions.append(
+            CaseExecutionDetail(
+                execution_id=rc.id,
+                case_id=rc.case_id,
+                attempt_number=rc.attempt_number,
+                session_id=rc.session_id,
+                readiness_status=rc.readiness_status,
+                execution_status=rc.execution_status,
+                verdict=rc.verdict,
+                trace_completeness=rc.trace_completeness,
+                error_message=rc.error_message,
+                resolved_expectations=rc.resolved_expectations or [],
+                captured_events=rc.captured_events or [],
+                check_results=rc.check_results or [],
+            )
+        )
+
+    # 3. Fetch diagnoses
+    diag_query = select(C1CaseDiagnosisModel).where(
+        C1CaseDiagnosisModel.project_id == project_id
+    )
+    if run_id:
+        diag_query = diag_query.where(C1CaseDiagnosisModel.run_id == run_id)
+
+    raw_diags = db.scalars(diag_query).all()
+    diagnoses: list[CaseDiagnosisRecord] = []
+    for rd in raw_diags:
+        locs = []
+        for l in rd.candidate_code_locations or []:
+            try:
+                locs.append(CandidateCodeLocation.model_validate(l))
+            except (ValidationError, ValueError, TypeError, KeyError):
+                pass
+
+        diagnoses.append(
+            CaseDiagnosisRecord(
+                diagnosis_id=rd.id,
+                run_id=rd.run_id,
+                case_id=rd.case_id,
+                attempt_number=rd.attempt_number,
+                cause_category=CauseCategory(rd.cause_category),
+                explanation_summary=rd.explanation_summary,
+                check_explanations=[],
+                candidate_code_locations=locs,
+                evidence_refs=rd.evidence_refs or [],
+                source_hash=rd.source_hash,
+                explanation_method=rd.explanation_method,
+                metrics=rd.metrics or {},
+            )
+        )
+
+    # 4. Fetch corrections
+    corr_query = select(C1CorrectionModel).where(
+        C1CorrectionModel.project_id == project_id
+    )
+    if run_id:
+        corr_query = corr_query.where(C1CorrectionModel.run_id == run_id)
+    raw_corrs = db.scalars(corr_query).all()
+    corrections = [
+        {
+            "correction_id": rc.id,
+            "case_id": rc.case_id,
+            "status": rc.status,
+            "is_verified": rc.is_verified,
+            "verification_results": rc.verification_results or [],
+            "metrics": rc.metrics or {},
+        }
+        for rc in raw_corrs
+    ]
+
+    return metrics_engine.compute_metrics(
+        project_id=project_id,
+        run_id=run_id,
+        dataset_split=dataset_split,
+        reference_labels=labels,
+        executions=executions,
+        diagnoses=diagnoses,
+        corrections=corrections,
+    )
+
+
+@router.post(
+    "/research/baselines/evaluate",
+    response_model=BaselineEvaluationResult,
+    summary="Run comparative baseline or ablated diagnosis on an existing captured execution",
+)
+def evaluate_baseline_endpoint(
+    project_id: str,
+    request: BaselineEvaluationRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    # Fetch case execution
+    stmt = (
+        select(C1CaseExecutionModel)
+        .join(
+            C1ExecutionRunModel,
+            C1CaseExecutionModel.run_id == C1ExecutionRunModel.id,
+        )
+        .where(
+            C1ExecutionRunModel.project_id == project_id,
+            C1CaseExecutionModel.run_id == request.run_id,
+            C1CaseExecutionModel.case_id == request.case_id,
+        )
+    )
+    case_model = db.scalar(stmt)
+    if not case_model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Case execution '{request.case_id}' in run '{request.run_id}' not found.",
+        )
+
+    raw_events = case_model.captured_events or []
+    captured_events = []
+    for ev in raw_events:
+        try:
+            captured_events.append(CapturedToolEvent.model_validate(ev))
+        except (ValidationError, ValueError, TypeError, KeyError):
+            pass
+
+    raw_specs = case_model.resolved_expectations or []
+    resolved_expectations = []
+    for spec in raw_specs:
+        try:
+            resolved_expectations.append(ExpectedToolCallSpec.model_validate(spec))
+        except (ValidationError, ValueError, TypeError, KeyError):
+            pass
+
+    try:
+        readiness_status = CaseReadinessStatus(case_model.readiness_status)
+    except (ValueError, TypeError, KeyError):
+        readiness_status = CaseReadinessStatus.CONFIGURED
+
+    try:
+        execution_status = CaseExecutionStatus(case_model.execution_status)
+    except (ValueError, TypeError, KeyError):
+        execution_status = CaseExecutionStatus.EXECUTED
+
+    try:
+        verdict = CorrectnessVerdict(case_model.verdict)
+    except (ValueError, TypeError, KeyError):
+        verdict = CorrectnessVerdict.FAIL
+
+    try:
+        trace_completeness = TraceCompleteness(case_model.trace_completeness)
+    except (ValueError, TypeError, KeyError):
+        trace_completeness = TraceCompleteness.COMPLETE
+
+    exec_detail = CaseExecutionDetail(
+        execution_id=case_model.id,
+        case_id=case_model.case_id,
+        attempt_number=case_model.attempt_number,
+        session_id=case_model.session_id,
+        readiness_status=readiness_status,
+        execution_status=execution_status,
+        verdict=verdict,
+        trace_completeness=trace_completeness,
+        error_message=case_model.error_message,
+        resolved_expectations=resolved_expectations,
+        captured_events=captured_events,
+        check_results=[],
+    )
+
+    if request.baseline_type == BaselineType.SCHEMA_AND_CALL_ONLY:
+        # Load tool definitions from latest project config
+        cfgs = list_project_configs(db, project_id)
+        cfg = cfgs[0] if cfgs else None
+        tool_defs = {}
+        if cfg and cfg.tools:
+            for t in cfg.tools:
+                try:
+                    tool_defs[t["name"]] = ToolDefinition.model_validate(t)
+                except (ValidationError, ValueError, TypeError, KeyError):
+                    pass
+        return schema_baseline_evaluator.evaluate_case(exec_detail, tool_defs)
+
+    elif request.baseline_type == BaselineType.MODEL_ARGUMENT_JUDGE:
+        return model_baseline_evaluator.evaluate_case(exec_detail)
+
+    else:
+        # Ablated diagnosis
+        return ablated_diagnosis_engine.run_ablated_diagnosis(
+            exec_detail, request.baseline_type
+        )

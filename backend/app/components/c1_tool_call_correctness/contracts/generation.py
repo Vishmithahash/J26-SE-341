@@ -105,6 +105,10 @@ class ExpectedToolCallSpec(BaseModel):
         default_factory=list,
         description="Evidence channels required to verify this tool call",
     )
+    requirement_refs: list[str] = Field(
+        default_factory=list,
+        description="Requirement identifiers justifying this expectation",
+    )
 
 
 class GeneratedCandidateCase(BaseModel):

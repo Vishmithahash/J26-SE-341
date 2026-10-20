@@ -41,6 +41,15 @@ from app.components.c1_tool_call_correctness.services.diagnosis_provider import 
 from app.components.c1_tool_call_correctness.services.diagnosis_service import (
     DiagnosisService,
 )
+from app.components.c1_tool_call_correctness.services.evaluator_baselines import (
+    AblatedDiagnosisEngine,
+    ModelArgumentEvaluatorBaseline,
+    ModelArgumentJudgeProvider,
+    SchemaAndCallBaselineEvaluator,
+    ablated_diagnosis_engine,
+    model_baseline_evaluator,
+    schema_baseline_evaluator,
+)
 from app.components.c1_tool_call_correctness.services.evaluator_rules import (
     evaluate_argument_presence,
     evaluate_operator,
@@ -65,6 +74,18 @@ from app.components.c1_tool_call_correctness.services.generator_engine import (
     DeterministicCandidateGenerator,
     compute_case_canonical_hash,
 )
+from app.components.c1_tool_call_correctness.services.metrics_engine import (
+    MetricsEngine,
+    metrics_engine,
+)
+from app.components.c1_tool_call_correctness.services.reporting_service import (
+    ReportingService,
+    reporting_service,
+)
+from app.components.c1_tool_call_correctness.services.research_service import (
+    ResearchService,
+    research_service,
+)
 from app.components.c1_tool_call_correctness.services.sandbox_interface import (
     ContainerSandbox,
     CorrectionSandbox,
@@ -88,6 +109,7 @@ from app.components.c1_tool_call_correctness.services.verification_engine import
 )
 
 __all__ = [
+    "AblatedDiagnosisEngine",
     "AgentExecutionAdapter",
     "ConfigConflictError",
     "ConfigNotFoundError",
@@ -110,14 +132,21 @@ __all__ = [
     "FakeAgentAdapter",
     "ImmutableConfigError",
     "LiveAgentAdapter",
+    "MetricsEngine",
+    "ModelArgumentEvaluatorBaseline",
+    "ModelArgumentJudgeProvider",
     "ModelAssistedDiagnosisProvider",
     "PatchGenerationProvider",
+    "ReportingService",
+    "ResearchService",
     "SandboxExecutionResult",
+    "SchemaAndCallBaselineEvaluator",
     "SourceInspectionError",
     "SourceInspector",
     "SuiteSelector",
     "SyntheticFixtureService",
     "VerificationEngine",
+    "ablated_diagnosis_engine",
     "compute_case_canonical_hash",
     "compute_suite_content_hash",
     "create_project_config",
@@ -132,7 +161,12 @@ __all__ = [
     "get_project_config",
     "list_generation_runs",
     "list_project_configs",
+    "metrics_engine",
+    "model_baseline_evaluator",
     "redact_sensitive_values",
+    "reporting_service",
+    "research_service",
+    "schema_baseline_evaluator",
     "update_project_config",
     "validate_candidate_case",
     "validate_project_config",

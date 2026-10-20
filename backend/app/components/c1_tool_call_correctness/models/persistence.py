@@ -379,3 +379,43 @@ class C1CorrectionModel(Base):
             name="uq_c1_correction_attempt",
         ),
     )
+
+
+class C1ReferenceLabelModel(Base):
+    """Independently reviewed ground truth labels and benchmark splits for research evaluation."""
+
+    __tablename__ = "c1_reference_labels"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    project_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    case_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    suite_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    task_family: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    dataset_split: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    ground_truth_verdict: Mapped[str] = mapped_column(String(50), nullable=False)
+    ground_truth_cause: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    ground_truth_code_locations: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    valid_evidence_refs: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    reviewer_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    label_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    disagreements: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    adjudication: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    is_held_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "case_id",
+            "label_version",
+            name="uq_c1_reference_label_version",
+        ),
+    )
