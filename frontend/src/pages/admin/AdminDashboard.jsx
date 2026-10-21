@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { getModelPreference } from '../../services/modelPreference';
+import { C2DashboardCard } from '../../features/c2/components/C2DashboardCard';
 import { C4DashboardCard } from '../../features/c4/components/dashboard/C4DashboardCard';
 import { C3DashboardCard } from '../../features/c3/components/C3DashboardCard';
 import { C1DashboardCard } from '../../components/c1/C1DashboardCard';
@@ -277,6 +278,15 @@ export const AdminDashboard = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {components.map((comp) => {
+            if (comp.name === 'State-Aware Multi-Step Workflow Testing') {
+              return (
+                <C2DashboardCard
+                  key={comp.name}
+                  role="ADMIN"
+                  basePath={comp.path}
+                />
+              );
+            }
             if (comp.name === 'Policy-Aware Safety and Prompt-Injection Testing') {
               return <C4DashboardCard key={comp.name} basePath="/admin" />;
             }
