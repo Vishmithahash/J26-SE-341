@@ -38,10 +38,67 @@ from app.components.c3_robustness_recovery.services.validation import (
 from app.main import app
 
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from app.database import Base, get_db
+from app.shared.auth.dependencies import require_active_user
+from app.shared.auth.models import User, UserRole
+from app.shared.projects.models import Project, ProjectConnectionState, ProjectLifecycle
+
+
 @pytest.fixture
 def client():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = TestingSessionLocal()
+
+    user = User(
+        id=999,
+        name="C3 Test User",
+        email="c3test@example.com",
+        canonical_email="c3test@example.com",
+        password_hash="fakehash",
+        role=UserRole.USER,
+        is_active=True,
+    )
+    session.add(user)
+    proj = Project(
+        project_id="proj-qa-001",
+        owner_user_id=999,
+        name="Project proj-qa-001",
+        domain="ecommerce",
+        environment="TEST",
+        backend_base_url="http://127.0.0.1:8000",
+        backend_health_url="http://127.0.0.1:8000/health",
+        configuration_version=1,
+        lifecycle=ProjectLifecycle.ACTIVE.value,
+        connection_state=ProjectConnectionState.CONNECTED.value,
+    )
+    session.add(proj)
+    session.commit()
+
+    def override_get_db():
+        try:
+            yield session
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_active_user] = lambda: user
+
     with TestClient(app) as test_client:
         yield test_client
+
+    app.dependency_overrides.clear()
+    session.close()
+    Base.metadata.drop_all(bind=engine)
+
 
 
 def make_valid_request() -> FaultValidationRequest:

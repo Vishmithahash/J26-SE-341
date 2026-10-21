@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ListChecks, RotateCcw, ShieldCheck } from 'lucide-react';
+import { ListChecks, RotateCcw, Workflow, ShieldCheck } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { ProjectProvider } from './context/ProjectContext';
@@ -23,6 +23,8 @@ import { EmptyComponentPage } from './pages/shared/EmptyComponentPage';
 import { ToolCallCorrectnessPage } from './pages/c1/ToolCallCorrectnessPage';
 import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { C3AdminWorkspace } from './features/c3/pages/C3AdminWorkspace';
+import { C3UserWorkspace } from './features/c3/pages/C3UserWorkspace';
 import { StateAwareWorkflowPage } from './features/c2/pages/StateAwareWorkflowPage';
 
 // Role-aware root redirect component
@@ -87,14 +89,10 @@ export const App = () => {
                   path="workflow-testing"
                   element={<StateAwareWorkflowPage />}
                 />
+                {/* Robustness and Failure Recovery Testing */}
                 <Route
                   path="robustness-recovery"
-                  element={
-                    <EmptyComponentPage
-                      title="Robustness and Failure Recovery Testing"
-                      icon={RotateCcw}
-                    />
-                  }
+                  element={<C3AdminWorkspace />}
                 />
                 <Route
                   path="policy-safety"
@@ -138,14 +136,10 @@ export const App = () => {
                   path="workflow-testing"
                   element={<StateAwareWorkflowPage />}
                 />
+                {/* Robustness and Failure Recovery Testing */}
                 <Route
                   path="robustness-recovery"
-                  element={
-                    <EmptyComponentPage
-                      title="Robustness and Failure Recovery Testing"
-                      icon={RotateCcw}
-                    />
-                  }
+                  element={<C3UserWorkspace />}
                 />
                 <Route
                   path="policy-safety"

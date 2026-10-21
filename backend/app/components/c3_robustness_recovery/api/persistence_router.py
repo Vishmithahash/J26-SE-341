@@ -10,6 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.components.c3_robustness_recovery.api.authorization import (
+    require_c3_active_user,
+    verify_c3_project_access,
+    verify_project_consistency,
+)
 from app.components.c3_robustness_recovery.contracts.persistence import (
     CaseRecordResponse,
     EvaluationComputeRequest,
@@ -69,6 +74,7 @@ from app.components.c3_robustness_recovery.services.storage import (
     list_suites as service_list_suites,
 )
 from app.database import get_db
+from app.shared.auth.models import User
 
 router = APIRouter()
 
@@ -87,8 +93,12 @@ router = APIRouter()
 )
 def import_suite_endpoint(
     request: SuiteImportRequest,
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> SuiteRecordResponse:
+    verify_c3_project_access(request.project_id, current_user, db)
+    for case in request.frozen_suite.selected_cases:
+        verify_project_consistency(request.project_id, getattr(case, "project_id", None))
     try:
         return store_frozen_suite(db, request.project_id, request.frozen_suite)
     except ConflictError as exc:
@@ -114,11 +124,13 @@ def import_suite_endpoint(
 )
 def list_suites_endpoint(
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
     domain: str | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> PaginatedResponse[SuiteRecordResponse]:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         return service_list_suites(
             db, project_id=project_id, domain=domain, limit=limit, offset=offset
@@ -139,8 +151,10 @@ def list_suites_endpoint(
 def get_suite_endpoint(
     suite_id_or_digest: str,
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> SuiteRecordResponse:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         suite = service_get_suite(db, project_id, suite_id_or_digest)
         if not suite:
@@ -171,6 +185,7 @@ def get_suite_endpoint(
 )
 def list_cases_endpoint(
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
     suite_digest: str | None = None,
     fault_family: str | None = None,
@@ -178,6 +193,7 @@ def list_cases_endpoint(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> PaginatedResponse[CaseRecordResponse]:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         return service_list_cases(
             db,
@@ -204,9 +220,11 @@ def list_cases_endpoint(
 def get_case_endpoint(
     case_id: str,
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
     suite_digest: str | None = None,
 ) -> CaseRecordResponse:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         case = service_get_case(
             db, project_id=project_id, case_id=case_id, suite_digest=suite_digest
@@ -240,8 +258,12 @@ def get_case_endpoint(
 )
 def import_execution_endpoint(
     request: ExecutionArtifactImportRequest,
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ExecutionRecordResponse:
+    verify_c3_project_access(request.project_id, current_user, db)
+    for ev in request.case_evidences:
+        verify_project_consistency(request.project_id, getattr(ev, "project_id", None))
     try:
         return import_execution_artifact(db, request)
     except EntityNotFoundError as exc:
@@ -271,6 +293,7 @@ def import_execution_endpoint(
 )
 def list_executions_endpoint(
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
     suite_digest: str | None = None,
     status_filter: str | None = Query(None, alias="status"),
@@ -278,6 +301,7 @@ def list_executions_endpoint(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> PaginatedResponse[ExecutionRecordResponse]:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         return service_list_executions(
             db,
@@ -304,8 +328,10 @@ def list_executions_endpoint(
 def get_execution_endpoint(
     execution_id: str,
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ExecutionRecordResponse:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         exec_record = service_get_execution(db, project_id, execution_id)
         if not exec_record:
@@ -337,8 +363,11 @@ def get_execution_endpoint(
 )
 def import_pair_endpoint(
     request: MatchedPairImportRequest,
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> MatchedPairRecordResponse:
+    verify_project_consistency(request.project_id, request.evidence.project_id)
+    verify_c3_project_access(request.project_id, current_user, db)
     try:
         return store_matched_pair(
             db,
@@ -369,6 +398,7 @@ def import_pair_endpoint(
 )
 def list_pairs_endpoint(
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
     execution_id: str | None = None,
     case_id: str | None = None,
@@ -379,6 +409,7 @@ def list_pairs_endpoint(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> PaginatedResponse[MatchedPairRecordResponse]:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         return service_list_matched_pairs(
             db,
@@ -408,8 +439,10 @@ def list_pairs_endpoint(
 def get_pair_endpoint(
     pair_id: str,
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> MatchedPairRecordResponse:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         pair = service_get_matched_pair(db, project_id, pair_id)
         if not pair:
@@ -441,8 +474,10 @@ def get_pair_endpoint(
 )
 def compute_evaluation_endpoint(
     request: EvaluationComputeRequest,
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> EvaluationRecordResponse:
+    verify_c3_project_access(request.project_id, current_user, db)
     try:
         return compute_and_store_evaluation(db, request)
     except EntityNotFoundError as exc:
@@ -472,6 +507,7 @@ def compute_evaluation_endpoint(
 )
 def list_evaluations_endpoint(
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
     pair_id: str | None = None,
     case_id: str | None = None,
@@ -481,6 +517,7 @@ def list_evaluations_endpoint(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> PaginatedResponse[EvaluationRecordResponse]:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         return service_list_evaluations(
             db,
@@ -509,8 +546,10 @@ def list_evaluations_endpoint(
 def get_evaluation_endpoint(
     evaluation_id: str,
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> EvaluationRecordResponse:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         res = service_get_evaluation(db, project_id, evaluation_id)
         if not res:
@@ -542,8 +581,10 @@ def get_evaluation_endpoint(
 def get_execution_report_endpoint(
     execution_id: str,
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
+    verify_c3_project_access(project_id, current_user, db)
     try:
         return build_execution_report(db, project_id, execution_id)
     except EntityNotFoundError as exc:
@@ -566,8 +607,10 @@ def get_execution_report_endpoint(
 def export_execution_report_csv_endpoint(
     execution_id: str,
     project_id: Annotated[str, Query(..., min_length=1)],
+    current_user: Annotated[User, Depends(require_c3_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
+    verify_c3_project_access(project_id, current_user, db)
     try:
         report = build_execution_report(db, project_id, execution_id)
         csv_data = export_report_to_csv(report)
