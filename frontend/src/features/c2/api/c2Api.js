@@ -345,12 +345,20 @@ export const c2Api = {
    * List evaluation results for a project.
    * GET /api/v1/c2/projects/{project_id}/evaluations
    */
-  async listEvaluations(projectId, { suiteId, testId, verdict } = {}) {
+  async listEvaluations(projectId, { suiteId, suite_id, testId, test_id, verdict, origin, modelVersion, model_version, limit, offset } = {}) {
     if (!projectId) throw new Error('projectId is required to list evaluations');
     const params = new URLSearchParams();
-    if (suiteId) params.append('suite_id', suiteId);
-    if (testId) params.append('test_id', testId);
+    const sid = suiteId || suite_id;
+    const tid = testId || test_id;
+    const orig = origin;
+    const mver = modelVersion || model_version;
+    if (sid) params.append('suite_id', sid);
+    if (tid) params.append('test_id', tid);
     if (verdict) params.append('verdict', verdict);
+    if (orig) params.append('origin', orig);
+    if (mver) params.append('model_version', mver);
+    if (limit) params.append('limit', limit);
+    if (offset) params.append('offset', offset);
     const qs = params.toString() ? `?${params.toString()}` : '';
     return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/evaluations${qs}`, {
       method: 'GET',
@@ -422,5 +430,243 @@ export const c2Api = {
       { method: 'POST' }
     );
   },
+
+  // -------------------------------------------------------------------------
+  // Phase 3: Coverage, Reports & Research Endpoints
+  // -------------------------------------------------------------------------
+
+  /**
+   * Retrieve detailed observed coverage for a single evaluation run.
+   * GET /api/v1/c2/projects/{project_id}/evaluations/{evaluation_id}/coverage
+   */
+  async getEvaluationCoverage(projectId, evaluationId) {
+    if (!projectId || !evaluationId) {
+      throw new Error('projectId and evaluationId are required to fetch coverage');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/evaluations/${encodeURIComponent(
+        evaluationId
+      )}/coverage`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Retrieve aggregate observed coverage for a suite across evaluated runs.
+   * GET /api/v1/c2/projects/{project_id}/suites/{suite_id}/coverage
+   */
+  async getSuiteCoverage(projectId, suiteId) {
+    if (!projectId || !suiteId) {
+      throw new Error('projectId and suiteId are required to fetch suite coverage');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(
+        suiteId
+      )}/coverage`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Retrieve structured C2 report contribution for a single evaluation run.
+   * GET /api/v1/c2/projects/{project_id}/evaluations/{evaluation_id}/report
+   */
+  async getRunReport(projectId, evaluationId) {
+    if (!projectId || !evaluationId) {
+      throw new Error('projectId and evaluationId are required to fetch run report');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/evaluations/${encodeURIComponent(
+        evaluationId
+      )}/report`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Retrieve aggregated C2 report for an entire test suite.
+   * GET /api/v1/c2/projects/{project_id}/suites/{suite_id}/report
+   */
+  async getSuiteReport(projectId, suiteId) {
+    if (!projectId || !suiteId) {
+      throw new Error('projectId and suiteId are required to fetch suite report');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(
+        suiteId
+      )}/report`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Export versioned C2 report contribution JSON and check shared aggregator publishing status.
+   * POST /api/v1/c2/projects/{project_id}/evaluations/{evaluation_id}/export-report
+   */
+  async exportC2ReportContribution(projectId, evaluationId) {
+    if (!projectId || !evaluationId) {
+      throw new Error('projectId and evaluationId are required to export report contribution');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/evaluations/${encodeURIComponent(
+        evaluationId
+      )}/export-report`,
+      { method: 'POST' }
+    );
+  },
+
+  /**
+   * Import and validate an experiment dataset manifest.
+   * POST /api/v1/c2/projects/{project_id}/datasets
+   */
+  async importExperimentDataset(projectId, manifest) {
+    if (!projectId) throw new Error('projectId is required to import experiment dataset');
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/datasets`, {
+      method: 'POST',
+      body: JSON.stringify(manifest),
+    });
+  },
+
+  /**
+   * List all versioned experiment datasets for a project.
+   * GET /api/v1/c2/projects/{project_id}/datasets
+   */
+  async listExperimentDatasets(projectId) {
+    if (!projectId) throw new Error('projectId is required to list experiment datasets');
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/datasets`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Retrieve full experiment dataset manifest.
+   * GET /api/v1/c2/projects/{project_id}/datasets/{dataset_id}/versions/{version}
+   */
+  async getExperimentDataset(projectId, datasetId, version) {
+    if (!projectId || !datasetId || !version) {
+      throw new Error('projectId, datasetId, and version are required to fetch dataset');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(
+        datasetId
+      )}/versions/${encodeURIComponent(version)}`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Freeze an experiment dataset manifest to lock partitions and labels.
+   * POST /api/v1/c2/projects/{project_id}/datasets/{dataset_id}/versions/{version}/freeze
+   */
+  async freezeExperimentDataset(projectId, datasetId, version) {
+    if (!projectId || !datasetId || !version) {
+      throw new Error('projectId, datasetId, and version are required to freeze dataset');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(
+        datasetId
+      )}/versions/${encodeURIComponent(version)}/freeze`,
+      { method: 'POST' }
+    );
+  },
+
+  /**
+   * Configure and execute comparative baseline experiment (B1-B4).
+   * POST /api/v1/c2/projects/{project_id}/experiments
+   */
+  async createAndRunExperiment(projectId, requestData) {
+    if (!projectId) throw new Error('projectId is required to run an experiment');
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/experiments`, {
+      method: 'POST',
+      body: JSON.stringify(requestData),
+    });
+  },
+
+  /**
+   * List comparative baseline experiments for a project.
+   * GET /api/v1/c2/projects/{project_id}/experiments
+   */
+  async listExperiments(projectId, datasetId = null) {
+    if (!projectId) throw new Error('projectId is required to list experiments');
+    const qs = datasetId ? `?dataset_id=${encodeURIComponent(datasetId)}` : '';
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/experiments${qs}`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Retrieve full comparative research metrics report across B1, B2, B3, and B4.
+   * GET /api/v1/c2/projects/{project_id}/experiments/{experiment_id}/baselines
+   */
+  async getExperimentBaselines(projectId, experimentId) {
+    if (!projectId || !experimentId) {
+      throw new Error('projectId and experimentId are required to fetch baselines');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/experiments/${encodeURIComponent(
+        experimentId
+      )}/baselines`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Retrieve fine-grained case prediction contracts and diagnostic records.
+   * GET /api/v1/c2/projects/{project_id}/experiments/{experiment_id}/cases
+   */
+  async getExperimentCaseResults(projectId, experimentId, methodId = null) {
+    if (!projectId || !experimentId) {
+      throw new Error('projectId and experimentId are required to fetch case results');
+    }
+    const qs = methodId ? `?method_id=${encodeURIComponent(methodId)}` : '';
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/experiments/${encodeURIComponent(
+        experimentId
+      )}/cases${qs}`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Export benchmark comparison metrics in JSON or summary CSV format.
+   * GET /api/v1/c2/projects/{project_id}/experiments/{experiment_id}/export?format={format}
+   */
+  async exportExperimentMetrics(projectId, experimentId, format = 'json') {
+    if (!projectId || !experimentId) {
+      throw new Error('projectId and experimentId are required to export experiment metrics');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/experiments/${encodeURIComponent(
+        experimentId
+      )}/export?format=${encodeURIComponent(format)}`,
+      { method: 'GET' }
+    );
+  },
+
+  // Ergonomic aliases for evaluation reports, replay reproduction and datasets
+  async getEvaluationReport(projectId, evaluationId) {
+    return this.getRunReport(projectId, evaluationId);
+  },
+
+  async exportReport(projectId, evaluationId, _format = 'json') {
+    return this.exportC2ReportContribution(projectId, evaluationId);
+  },
+
+  async replayEvaluation(projectId, evaluationId, options = {}) {
+    return this.reEvaluateExecution(projectId, evaluationId, options);
+  },
+
+  async listDatasets(projectId) {
+    return this.listExperimentDatasets(projectId);
+  },
+
+  async getDataset(projectId, datasetId, version) {
+    return this.getExperimentDataset(projectId, datasetId, version);
+  },
+
+  async freezeDataset(projectId, datasetId, version) {
+    return this.freezeExperimentDataset(projectId, datasetId, version);
+  },
 };
+
 

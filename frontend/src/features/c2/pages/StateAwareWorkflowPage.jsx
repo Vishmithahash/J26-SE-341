@@ -9,14 +9,18 @@ import {
   Check,
   Sparkles,
   Play,
+  Activity,
+  FlaskConical,
 } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { useProject } from '../../../context/ProjectContext';
 import { projectsApi } from '../../../services/projects';
-import { c2Api } from '../api/c2Api';
+import { c2Api } from '../api/c2Api.js';
 import { useC2Models } from '../hooks/useC2Models';
 import { useC2Suites } from '../hooks/useC2Suites';
 import { useC2Execution } from '../hooks/useC2Execution';
+import { useC2Results } from '../hooks/useC2Results';
+import { useC2Research } from '../hooks/useC2Research';
 
 import { ModelListView } from '../components/ModelListView';
 import { ModelDetailView } from '../components/ModelDetailView';
@@ -32,6 +36,8 @@ import { TestCaseDetailModal } from '../components/TestCaseDetailModal';
 import { AgentPayloadModal } from '../components/AgentPayloadModal';
 import { ExecutionPanel } from '../components/ExecutionPanel';
 import { DemonstrationRunnerModal } from '../components/DemonstrationRunnerModal';
+import { ResultsWorkspace } from '../components/ResultsWorkspace';
+import { ResearchWorkspace } from '../components/ResearchWorkspace';
 
 export const StateAwareWorkflowPage = () => {
   const { user } = useAuth();
@@ -167,6 +173,12 @@ export const StateAwareWorkflowPage = () => {
 
   // Phase 2 Hook: Execution Controls
   const executionState = useC2Execution(activeProjectId, user?.id);
+
+  // Phase 3 Hook: Results & Evidence
+  const resultsState = useC2Results(activeProjectId, user?.id);
+
+  // Phase 3 Hook: Research & Baselines
+  const researchState = useC2Research(activeProjectId, user?.id);
 
   // Filter approved models for test suite generation gating
   const approvedModels = models.filter((m) => m.lifecycle_status === 'APPROVED');
@@ -324,7 +336,15 @@ export const StateAwareWorkflowPage = () => {
     (m) => m.model_id === selectedModelSummary?.model_id
   );
 
-  const activeErrors = modelsError || modelsActionError || suitesError || suitesActionError;
+  const activeErrors =
+    modelsError ||
+    modelsActionError ||
+    suitesError ||
+    suitesActionError ||
+    resultsState.error ||
+    resultsState.actionError ||
+    researchState.error ||
+    researchState.actionError;
 
   return (
     <div className="space-y-6">
@@ -379,6 +399,8 @@ export const StateAwareWorkflowPage = () => {
             onClick={() => {
               clearModelsActionError();
               clearSuitesActionError();
+              resultsState.clearActionError();
+              researchState.clearActionError();
             }}
             className="text-xs font-semibold text-rose-700 dark:text-rose-300 hover:underline shrink-0"
           >
@@ -431,36 +453,37 @@ export const StateAwareWorkflowPage = () => {
           <span>Execution & Runs</span>
         </button>
 
-        {/* Roadmap Indicators */}
-        <span
-          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed shrink-0"
-          title="Runtime Traces and Evidence Inspection available in Phase 3"
+        <button
+          type="button"
+          onClick={() => setActiveWorkspaceTab('results')}
+          className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors shrink-0 ${
+            activeWorkspaceTab === 'results'
+              ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+          }`}
         >
-          <span>Runtime Traces</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-400">
-            Phase 3
+          <Activity className="w-4 h-4" />
+          <span>Results & Evidence</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400">
+            {resultsState.evaluations?.length || 0}
           </span>
-        </span>
+        </button>
 
-        <span
-          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed shrink-0"
-          title="Conformance Evaluations & Differential Analysis available in Phase 4"
+        <button
+          type="button"
+          onClick={() => setActiveWorkspaceTab('research')}
+          className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors shrink-0 ${
+            activeWorkspaceTab === 'research'
+              ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+          }`}
         >
-          <span>Evaluations</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-400">
-            Phase 4
+          <FlaskConical className="w-4 h-4" />
+          <span>Research & Baselines</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950 text-purple-600 dark:text-purple-400">
+            {researchState.experiments?.length || 0}
           </span>
-        </span>
-
-        <span
-          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed shrink-0"
-          title="Baselines & Benchmarks available in Phase 5"
-        >
-          <span>Baselines</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-400">
-            Phase 5
-          </span>
-        </span>
+        </button>
       </div>
 
       {/* TAB 1: WORKFLOW MODELS (Phase 1) */}
@@ -577,6 +600,22 @@ export const StateAwareWorkflowPage = () => {
           approvedModels={approvedModels}
           executionState={executionState}
           onOpenDemoModal={() => setShowDemoModal(true)}
+        />
+      )}
+
+      {/* TAB 4: RESULTS & EVIDENCE WORKSPACE (Phase 3) */}
+      {activeWorkspaceTab === 'results' && (
+        <ResultsWorkspace
+          projectId={activeProjectId}
+          resultsState={resultsState}
+        />
+      )}
+
+      {/* TAB 5: RESEARCH & BASELINES WORKSPACE (Phase 3) */}
+      {activeWorkspaceTab === 'research' && (
+        <ResearchWorkspace
+          projectId={activeProjectId}
+          researchState={researchState}
         />
       )}
 
