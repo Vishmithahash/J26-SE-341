@@ -569,29 +569,96 @@ async def test_suite_runner_uncertain_cleanup_halts_dependent_cases():
 # 7. API Endpoint: POST /api/v1/c3/cases/generate
 # ---------------------------------------------------------------------------
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from app.database import Base, get_db
+from app.shared.auth.dependencies import require_active_user
+from app.shared.auth.models import User, UserRole
+from app.shared.projects.models import Project, ProjectConnectionState, ProjectLifecycle
+
+
+def _setup_c3_phase3_test_client():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = TestingSessionLocal()
+
+    user = User(
+        id=999,
+        name="C3 Test User",
+        email="c3test@example.com",
+        canonical_email="c3test@example.com",
+        password_hash="fakehash",
+        role=UserRole.USER,
+        is_active=True,
+    )
+    session.add(user)
+    proj = Project(
+        project_id="proj-demo-qa",
+        owner_user_id=999,
+        name="Project proj-demo-qa",
+        domain="ecommerce",
+        environment="TEST",
+        backend_base_url="http://127.0.0.1:8000",
+        backend_health_url="http://127.0.0.1:8000/health",
+        configuration_version=1,
+        lifecycle=ProjectLifecycle.ACTIVE.value,
+        connection_state=ProjectConnectionState.CONNECTED.value,
+    )
+    session.add(proj)
+    session.commit()
+
+    def override_get_db():
+        try:
+            yield session
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_active_user] = lambda: user
+    return session, engine
+
 
 def test_api_generate_cases_endpoint_valid():
     """POST /api/v1/c3/cases/generate returns HTTP 200 with pure deterministic frozen suite."""
-    gen_req = build_demonstration_generation_request()
-    payload = gen_req.model_dump(mode="json")
+    session, engine = _setup_c3_phase3_test_client()
+    try:
+        gen_req = build_demonstration_generation_request()
+        payload = gen_req.model_dump(mode="json")
 
-    response = client.post("/api/v1/c3/cases/generate", json=payload)
-    assert response.status_code == 200
-    data = response.json()
+        response = client.post("/api/v1/c3/cases/generate", json=payload)
+        assert response.status_code == 200
+        data = response.json()
 
-    assert data["validation_scope"] == "STATIC_ONLY"
-    assert data["generation_status"] == "GENERATED"
-    assert data["runtime_verified"] is False
-    assert data["execution_ready"] is False
-    assert data["recovery_verdict"] is None
+        assert data["validation_scope"] == "STATIC_ONLY"
+        assert data["generation_status"] == "GENERATED"
+        assert data["runtime_verified"] is False
+        assert data["execution_ready"] is False
+        assert data["recovery_verdict"] is None
 
-    assert data["frozen_suite"] is not None
-    assert "suite_digest" in data["frozen_suite"]
+        assert data["frozen_suite"] is not None
+        assert "suite_digest" in data["frozen_suite"]
+    finally:
+        app.dependency_overrides.clear()
+        session.close()
+        Base.metadata.drop_all(bind=engine)
 
 
 def test_api_generate_cases_endpoint_sanitizes_errors():
     """POST /api/v1/c3/cases/generate returns HTTP 422 for invalid types without echoing forbidden text."""
-    bad_payload = {"policy": {"max_cases": "invalid_string_not_int"}}
-    response = client.post("/api/v1/c3/cases/generate", json=bad_payload)
-    assert response.status_code == 422
-    assert "detail" in response.json()
+    session, engine = _setup_c3_phase3_test_client()
+    try:
+        bad_payload = {"policy": {"max_cases": "invalid_string_not_int"}}
+        response = client.post("/api/v1/c3/cases/generate", json=bad_payload)
+        assert response.status_code == 422
+        assert "detail" in response.json()
+    finally:
+        app.dependency_overrides.clear()
+        session.close()
+        Base.metadata.drop_all(bind=engine)
+
