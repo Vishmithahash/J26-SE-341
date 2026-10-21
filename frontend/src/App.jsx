@@ -20,7 +20,6 @@ import { ModelSelectionPage } from './pages/shared/ModelSelectionPage';
 import { ProfilePage } from './pages/shared/ProfilePage';
 import { SettingsPage } from './pages/shared/SettingsPage';
 import { EmptyComponentPage } from './pages/shared/EmptyComponentPage';
-import { PolicySafetyWorkspace } from './features/c4/pages/PolicySafetyWorkspace';
 import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
@@ -107,7 +106,7 @@ export const App = () => {
                 <Route
                   path="policy-safety"
                   element={
-                    <PolicySafetyWorkspace
+                    <EmptyComponentPage
                       title="Policy-Aware Safety and Prompt-Injection Testing"
                       icon={ShieldCheck}
                     />
@@ -167,7 +166,7 @@ export const App = () => {
                 <Route
                   path="policy-safety"
                   element={
-                    <PolicySafetyWorkspace
+                    <EmptyComponentPage
                       title="Policy-Aware Safety and Prompt-Injection Testing"
                       icon={ShieldCheck}
                     />
