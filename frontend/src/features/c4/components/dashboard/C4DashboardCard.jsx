@@ -2,21 +2,22 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ShieldCheck,
-  ArrowRight,
   ExternalLink,
   Cpu,
   Layers,
-  FileCheck,
   AlertCircle,
   FolderOpen,
+  Activity,
 } from 'lucide-react';
 import { useProject } from '../../../../context/ProjectContext';
 import { c4Api } from '../../api/c4Api';
+import { POLICY_VERDICTS } from '../../api/types';
 
 export const C4DashboardCard = ({ basePath = '/app' }) => {
   const { activeProject } = useProject();
   const [readiness, setReadiness] = useState(null);
   const [bindings, setBindings] = useState([]);
+  const [latestRun, setLatestRun] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -26,6 +27,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
     if (!projectId) {
       setReadiness(null);
       setBindings([]);
+      setLatestRun(null);
       setError(null);
       return;
     }
@@ -37,7 +39,8 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
     Promise.allSettled([
       c4Api.getExtractionReadiness(projectId),
       c4Api.getBindings(projectId),
-    ]).then(([readinessRes, bindingsRes]) => {
+      c4Api.listExecutionRuns(projectId, { limit: 1 }),
+    ]).then(([readinessRes, bindingsRes, runsRes]) => {
       if (!isMounted) return;
 
       if (readinessRes.status === 'fulfilled') {
@@ -50,6 +53,12 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
         setBindings(bindingsRes.value);
       } else {
         setBindings([]);
+      }
+
+      if (runsRes.status === 'fulfilled' && Array.isArray(runsRes.value) && runsRes.value.length > 0) {
+        setLatestRun(runsRes.value[0]);
+      } else {
+        setLatestRun(null);
       }
 
       setIsLoading(false);
@@ -103,13 +112,27 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
           >
             <span>Select Project</span>
-            <ArrowRight className="w-3.5 h-3.5" />
+            <ExternalLink className="w-3.5 h-3.5" />
           </Link>
           <span className="text-[11px] text-slate-400">Scoped per project</span>
         </div>
       </div>
     );
   }
+
+  // Helper for latest verdict color
+  const getVerdictStyle = (verdict) => {
+    switch (verdict) {
+      case POLICY_VERDICTS.PASS:
+        return 'text-emerald-600 dark:text-emerald-400 font-bold';
+      case POLICY_VERDICTS.FAIL:
+        return 'text-rose-600 dark:text-rose-400 font-bold';
+      case POLICY_VERDICTS.INCONCLUSIVE:
+        return 'text-amber-600 dark:text-amber-400 font-bold';
+      default:
+        return 'text-slate-600 dark:text-slate-300 font-medium';
+    }
+  };
 
   // 2. Active Project Selected
   return (
@@ -120,7 +143,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
             <ShieldCheck className="w-5 h-5" />
           </div>
           <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-200/50 dark:border-emerald-900/50">
-            Phase 1 Active
+            Phase 1 & 2 Active
           </span>
         </div>
 
@@ -175,15 +198,27 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
                 </span>
               </div>
 
-              <div className="flex items-center justify-between text-xs">
+              {/* Latest Run Provenance */}
+              <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/50 dark:border-slate-700/50">
                 <span className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
-                  <FileCheck className="w-3.5 h-3.5 text-emerald-500" />
-                  Contract Lifecycle:
+                  <Activity className="w-3.5 h-3.5 text-emerald-500" />
+                  Latest Run Verdict:
                 </span>
-                <span className="font-medium text-slate-700 dark:text-slate-200">
-                  Acceptance Gated
-                </span>
+                {latestRun ? (
+                  <span className={`font-mono text-xs ${getVerdictStyle(latestRun.policy_verdict)}`}>
+                    {latestRun.policy_verdict} ({latestRun.execution_mode})
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-400 italic">No trials executed yet</span>
+                )}
               </div>
+
+              {latestRun && (
+                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                  <span>Exposure: {latestRun.exposure_status}</span>
+                  <span>{new Date(latestRun.created_at).toLocaleDateString()}</span>
+                </div>
+              )}
             </div>
           )}
         </div>

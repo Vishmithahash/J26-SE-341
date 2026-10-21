@@ -187,6 +187,152 @@ export const c4Api = {
     const url = buildUrl(projectId, `/onboarding/jobs/${encodeURIComponent(jobId)}`);
     return request(url, { method: 'GET' });
   },
+
+  // -------------------------------------------------------------
+  // Phase 2: Automatic Policy Test Generation & Freezing
+  // -------------------------------------------------------------
+
+  /**
+   * Automatically generate bounded policy test cases from accepted contract and domain binding.
+   */
+  async generateTestCases(projectId, payload) {
+    const url = buildUrl(projectId, '/generate');
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * Retrieve a generation batch report by batch ID.
+   */
+  async getGenerationBatch(projectId, batchId) {
+    const url = buildUrl(projectId, `/batches/${encodeURIComponent(batchId)}`);
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * List generated policy test cases with optional filters.
+   */
+  async listTestCases(projectId, params = {}) {
+    const query = new URLSearchParams();
+    if (params.batch_id) query.append('batch_id', params.batch_id);
+    if (params.rule_id) query.append('rule_id', params.rule_id);
+    if (params.category) query.append('category', params.category);
+    if (params.lifecycle_state) query.append('lifecycle_state', params.lifecycle_state);
+
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const url = `${buildUrl(projectId, '/cases')}${qs}`;
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Retrieve a policy test case by ID and version.
+   */
+  async getTestCase(projectId, caseId, version) {
+    const url = buildUrl(projectId, `/cases/${encodeURIComponent(caseId)}/versions/${version}`);
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Independently validate a generated test case against contract and domain binding.
+   */
+  async validateTestCase(projectId, caseId, version) {
+    const url = buildUrl(projectId, `/cases/${encodeURIComponent(caseId)}/versions/${version}/validate`);
+    return request(url, { method: 'POST' });
+  },
+
+  /**
+   * Freeze a validated test case to ensure immutable snapshot and canonical content hash.
+   */
+  async freezeTestCase(projectId, caseId, version) {
+    const url = buildUrl(projectId, `/cases/${encodeURIComponent(caseId)}/versions/${version}/freeze`);
+    return request(url, { method: 'POST' });
+  },
+
+  // -------------------------------------------------------------
+  // Phase 2: Three Payload Boundaries Exports
+  // -------------------------------------------------------------
+
+  /**
+   * Export strictly agent-visible task payload (no hidden goals or oracle assertions).
+   */
+  async exportAgentPayload(projectId, caseId, version) {
+    const url = buildUrl(projectId, `/cases/${encodeURIComponent(caseId)}/versions/${version}/export/agent`);
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Export test harness orchestration payload (injection placement and fixture requirements).
+   */
+  async exportHarnessPayload(projectId, caseId, version) {
+    const url = buildUrl(projectId, `/cases/${encodeURIComponent(caseId)}/versions/${version}/export/harness`);
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Export evaluator oracle assertions and hidden validation ground truth.
+   */
+  async exportEvaluatorPayload(projectId, caseId, version) {
+    const url = buildUrl(projectId, `/cases/${encodeURIComponent(caseId)}/versions/${version}/export/evaluator`);
+    return request(url, { method: 'GET' });
+  },
+
+  // -------------------------------------------------------------
+  // Phase 2: Runtime Readiness & Controlled Execution
+  // -------------------------------------------------------------
+
+  /**
+   * Check runtime readiness of a case, domain binding, and execution adapter.
+   */
+  async checkExecutionReadiness(projectId, payload) {
+    const url = buildUrl(projectId, '/runs/readiness');
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * Execute a frozen policy test case through registered adapter.
+   */
+  async executeTestCase(projectId, payload) {
+    const url = buildUrl(projectId, '/runs/execute');
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * Retrieve a C4 execution run record by run ID.
+   */
+  async getExecutionRun(projectId, runId) {
+    const url = buildUrl(projectId, `/runs/${encodeURIComponent(runId)}`);
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * List execution runs for a project.
+   */
+  async listExecutionRuns(projectId, params = {}) {
+    const query = new URLSearchParams();
+    if (params.case_id) query.append('case_id', params.case_id);
+    if (params.limit !== undefined) query.append('limit', String(params.limit));
+    if (params.offset !== undefined) query.append('offset', String(params.offset));
+
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const url = `${buildUrl(projectId, '/runs')}${qs}`;
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Export explainable findings and report for an execution run.
+   */
+  async exportRunReport(projectId, runId) {
+    const url = buildUrl(projectId, `/runs/${encodeURIComponent(runId)}/report`);
+    return request(url, { method: 'GET' });
+  },
 };
 
 export { ApiError };

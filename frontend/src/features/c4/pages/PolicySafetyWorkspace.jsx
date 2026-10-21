@@ -1,9 +1,9 @@
 /**
  * Component 4 (C4) - Policy-Aware Safety and Prompt-Injection Testing Workspace
- * Root page for both Admin and User roles, adhering to strict ownership boundaries.
+ * Root page for both Admin and User roles, covering Phase 1 and Phase 2 lifecycle workflows.
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   ShieldCheck,
   Shield,
@@ -15,6 +15,10 @@ import { useArtifactIntake } from '../hooks/useArtifactIntake';
 import { usePolicyExtraction } from '../hooks/usePolicyExtraction';
 import { usePolicyContracts } from '../hooks/usePolicyContracts';
 import { useDomainBindings } from '../hooks/useDomainBindings';
+import { useTestCaseGeneration } from '../hooks/useTestCaseGeneration';
+import { useTestCaseInspection } from '../hooks/useTestCaseInspection';
+import { useControlledExecution } from '../hooks/useControlledExecution';
+
 import { ProjectHeader } from '../components/ProjectHeader';
 import { C4Navigation } from '../components/C4Navigation';
 import { ArtifactIntakeSection } from '../components/intake/ArtifactIntakeSection';
@@ -22,6 +26,11 @@ import { ExtractionSection } from '../components/extraction/ExtractionSection';
 import { CandidateRulesList } from '../components/candidates/CandidateRulesList';
 import { ContractSection } from '../components/contracts/ContractSection';
 import { DomainBindingsSection } from '../components/domains/DomainBindingsSection';
+import { TestGenerationSection } from '../components/generation/TestGenerationSection';
+import { TestCaseList } from '../components/cases/TestCaseList';
+import { CasePayloadsModal } from '../components/cases/CasePayloadsModal';
+import { ExecutionModal } from '../components/execution/ExecutionModal';
+import { ExecutionRunsSection } from '../components/execution/ExecutionRunsSection';
 import { PendingPhasePlaceholder } from '../components/PendingPhasePlaceholder';
 import { C4_WORKSPACE_TABS } from '../api/types';
 
@@ -32,24 +41,35 @@ export const PolicySafetyWorkspace = ({
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
 
-  // Active sub-tab state
+  // Active lifecycle tab state
   const [activeTab, setActiveTab] = useState(C4_WORKSPACE_TABS.POLICY_PREPARATION);
 
   // Selected candidate rule IDs for contract creation
   const [selectedRuleIds, setSelectedRuleIds] = useState([]);
 
-  // DOM ref to scroll directly to sections
+  // Modal inspection states for Phase 2
+  const [isPayloadModalOpen, setIsPayloadModalOpen] = useState(false);
+  const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false);
+  const [modalTargetCase, setModalTargetCase] = useState(null);
+
+  // DOM refs to scroll directly to sections
   const extractionSectionRef = useRef(null);
   const contractsSectionRef = useRef(null);
+  const testCasesListRef = useRef(null);
 
   // 1. Scoped project management with generation tracking to invalidate stale async responses
   const handleProjectReset = useCallback(() => {
     setSelectedRuleIds([]);
+    setIsPayloadModalOpen(false);
+    setIsExecutionModalOpen(false);
+    setModalTargetCase(null);
   }, []);
 
   const {
     activeProject,
     activeProjectId,
+    availableProjects,
+    switchProject,
     isLoadingActive,
     isProjectReady,
     getGeneration,
@@ -61,6 +81,17 @@ export const PolicySafetyWorkspace = ({
   const extraction = usePolicyExtraction(activeProjectId, isCurrentGeneration, getGeneration);
   const contracts = usePolicyContracts(activeProjectId, isCurrentGeneration, getGeneration);
   const bindings = useDomainBindings(activeProjectId, isCurrentGeneration, getGeneration);
+  const generation = useTestCaseGeneration(activeProjectId, isCurrentGeneration, getGeneration);
+  const cases = useTestCaseInspection(activeProjectId, isCurrentGeneration, getGeneration);
+  const execution = useControlledExecution(activeProjectId, isCurrentGeneration, getGeneration);
+
+  // Load test cases when project is ready or tab switches to TEST_CASES
+  const { loadTestCases } = cases;
+  useEffect(() => {
+    if (activeProjectId && activeTab === C4_WORKSPACE_TABS.TEST_CASES) {
+      loadTestCases();
+    }
+  }, [activeProjectId, activeTab, loadTestCases]);
 
   // Candidate selection helpers
   const handleToggleSelectRule = useCallback((ruleId) => {
@@ -90,6 +121,44 @@ export const PolicySafetyWorkspace = ({
     }
   }, []);
 
+  const handleViewGeneratedCases = useCallback(() => {
+    if (testCasesListRef.current) {
+      testCasesListRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, []);
+
+  // Modal triggers
+  const handleOpenPayloadModal = useCallback((tc) => {
+    setModalTargetCase(tc);
+    setIsPayloadModalOpen(true);
+  }, []);
+
+  const handleClosePayloadModal = useCallback(() => {
+    setIsPayloadModalOpen(false);
+    setModalTargetCase(null);
+  }, []);
+
+  const handleOpenExecutionModal = useCallback((tc) => {
+    setModalTargetCase(tc);
+    setIsExecutionModalOpen(true);
+  }, []);
+
+  const handleCloseExecutionModal = useCallback(() => {
+    setIsExecutionModalOpen(false);
+    setModalTargetCase(null);
+  }, []);
+
+  const handleGenerateCasesWrapper = useCallback(
+    async (params) => {
+      const report = await generation.generateCases(params);
+      if (report) {
+        cases.loadTestCases();
+      }
+      return report;
+    },
+    [generation, cases]
+  );
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-2 sm:px-4 lg:px-6 py-4">
       {/* Workspace Banner */}
@@ -98,7 +167,7 @@ export const PolicySafetyWorkspace = ({
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold uppercase tracking-wider">
               <TitleIcon className="w-3.5 h-3.5" />
-              Component 4 • Phase 1
+              Component 4 • Phase 1 & 2 Active
             </div>
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 text-xs font-medium">
               <Shield className="w-3 h-3 text-slate-400" />
@@ -112,7 +181,7 @@ export const PolicySafetyWorkspace = ({
 
           <p className="mt-2 text-sm text-slate-300 leading-relaxed">
             Policy-aware safety, authorization boundaries, and prompt-injection testing for tool-using LLM applications.
-            Derive candidate rules from versioned policy artifacts, bind domain capabilities, and gate accepted contracts through human review.
+            Derive candidate rules, bind domain capabilities, gate accepted contracts, synthesize policy-specific test cases, and execute controlled trials with disentangled outcome dimensions.
           </p>
 
           <div className="mt-4 p-3 rounded-xl bg-slate-800/60 border border-slate-700/80 flex items-start gap-2.5 text-xs text-slate-300 max-w-2xl">
@@ -129,6 +198,8 @@ export const PolicySafetyWorkspace = ({
       <ProjectHeader
         activeProject={activeProject}
         isLoadingActive={isLoadingActive}
+        availableProjects={availableProjects}
+        onSelectProject={switchProject}
       />
 
       {/* Main Workspace Navigation */}
@@ -243,13 +314,99 @@ export const PolicySafetyWorkspace = ({
             </div>
           )}
 
+          {/* TAB 3: Test Cases (Phase 2 Implemented: Generation, Validation, Freezing, Payload Boundaries) */}
+          {activeTab === C4_WORKSPACE_TABS.TEST_CASES && (
+            <div className="space-y-8">
+              <section aria-labelledby="stage-generation-heading">
+                <TestGenerationSection
+                  acceptedContract={contracts.currentContract}
+                  domainBinding={bindings.selectedBinding || bindings.domainProfiles[0]?.binding}
+                  onGenerateCases={handleGenerateCasesWrapper}
+                  isGenerating={generation.isGenerating}
+                  generationReport={generation.latestReport}
+                  error={generation.error}
+                  successMessage={generation.successMessage}
+                  isProjectReady={isProjectReady}
+                  onViewGeneratedCases={handleViewGeneratedCases}
+                />
+              </section>
+
+              <section ref={testCasesListRef} aria-labelledby="stage-cases-heading">
+                <TestCaseList
+                  testCases={cases.testCases}
+                  onValidateCase={cases.validateCase}
+                  onFreezeCase={cases.freezeCase}
+                  onInspectPayloads={handleOpenPayloadModal}
+                  onOpenExecution={handleOpenExecutionModal}
+                  onRefresh={() => cases.loadTestCases()}
+                  isLoadingCases={cases.isLoadingCases}
+                  isValidatingCase={cases.isValidatingCase}
+                  isFreezingCase={cases.isFreezingCase}
+                />
+              </section>
+            </div>
+          )}
+
+          {/* TAB 4: Runs & Findings (Phase 2 Implemented: Controlled Execution & 6 Outcome Dimensions) */}
+          {activeTab === C4_WORKSPACE_TABS.RUNS_AND_FINDINGS && (
+            <div className="space-y-6">
+              <ExecutionRunsSection
+                runsList={execution.runsList}
+                activeRun={execution.activeRun}
+                onSelectRun={execution.setActiveRun}
+                onRefreshRuns={() => execution.loadRuns()}
+                isLoadingRuns={execution.isLoadingRuns}
+              />
+            </div>
+          )}
+
           {/* FUTURE PHASES: Clear roadmap placeholders without fake data */}
-          {activeTab !== C4_WORKSPACE_TABS.POLICY_PREPARATION &&
-            activeTab !== C4_WORKSPACE_TABS.DOMAIN_BINDINGS && (
-              <PendingPhasePlaceholder tabId={activeTab} />
-            )}
+          {activeTab === C4_WORKSPACE_TABS.POLICY_CHANGES && (
+            <PendingPhasePlaceholder tabId={activeTab} />
+          )}
+          {activeTab === C4_WORKSPACE_TABS.EVALUATION_AND_REPORTS && (
+            <PendingPhasePlaceholder tabId={activeTab} />
+          )}
         </div>
       )}
+
+      {/* Payloads Inspector Modal */}
+      <CasePayloadsModal
+        isOpen={isPayloadModalOpen}
+        testCase={modalTargetCase}
+        payloads={cases.activePayloads}
+        isLoading={cases.isLoadingPayloads}
+        onClose={handleClosePayloadModal}
+        onLoadPayloads={cases.loadAllPayloads}
+      />
+
+      {/* Controlled Execution Modal */}
+      <ExecutionModal
+        isOpen={isExecutionModalOpen}
+        testCase={modalTargetCase}
+        domainBinding={bindings.selectedBinding || bindings.domainProfiles[0]?.binding}
+        acceptedContract={contracts.currentContract}
+        readinessReport={execution.readinessReport}
+        isCheckingReadiness={execution.isCheckingReadiness}
+        isExecuting={execution.isExecuting}
+        executionMode={execution.executionMode}
+        setExecutionMode={execution.setExecutionMode}
+        simulatedBehavior={execution.simulatedBehavior}
+        setSimulatedBehavior={execution.setSimulatedBehavior}
+        idempotencyKey={execution.idempotencyKey}
+        onRegenerateIdempotencyKey={execution.regenerateIdempotencyKey}
+        onCheckReadiness={execution.checkReadiness}
+        onExecuteCase={async (payload) => {
+          const run = await execution.executeCase(payload);
+          if (run) {
+            handleCloseExecutionModal();
+            setActiveTab(C4_WORKSPACE_TABS.RUNS_AND_FINDINGS);
+          }
+        }}
+        onClose={handleCloseExecutionModal}
+        error={execution.error}
+        successMessage={execution.successMessage}
+      />
     </div>
   );
 };
