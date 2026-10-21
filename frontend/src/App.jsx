@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ListChecks, Workflow, RotateCcw, ShieldCheck } from 'lucide-react';
+import { ListChecks, Workflow, ShieldCheck } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { ProjectProvider } from './context/ProjectContext';
@@ -22,6 +22,8 @@ import { SettingsPage } from './pages/shared/SettingsPage';
 import { EmptyComponentPage } from './pages/shared/EmptyComponentPage';
 import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { C3AdminWorkspace } from './features/c3/pages/C3AdminWorkspace';
+import { C3UserWorkspace } from './features/c3/pages/C3UserWorkspace';
 
 // Role-aware root redirect component
 const RootRedirect = () => {
@@ -94,14 +96,10 @@ export const App = () => {
                     />
                   }
                 />
+                {/* Robustness and Failure Recovery Testing */}
                 <Route
                   path="robustness-recovery"
-                  element={
-                    <EmptyComponentPage
-                      title="Robustness and Failure Recovery Testing"
-                      icon={RotateCcw}
-                    />
-                  }
+                  element={<C3AdminWorkspace />}
                 />
                 <Route
                   path="policy-safety"
@@ -154,14 +152,10 @@ export const App = () => {
                     />
                   }
                 />
+                {/* Robustness and Failure Recovery Testing */}
                 <Route
                   path="robustness-recovery"
-                  element={
-                    <EmptyComponentPage
-                      title="Robustness and Failure Recovery Testing"
-                      icon={RotateCcw}
-                    />
-                  }
+                  element={<C3UserWorkspace />}
                 />
                 <Route
                   path="policy-safety"

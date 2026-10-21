@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getModelPreference } from '../../services/modelPreference';
+import { C3DashboardCard } from '../../features/c3/components/C3DashboardCard';
 
 export const UserDashboard = () => {
   const { user } = useAuth();
@@ -179,6 +180,9 @@ export const UserDashboard = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {components.map((comp) => {
+            if (comp.name === 'Robustness and Failure Recovery Testing') {
+              return <C3DashboardCard key={comp.name} role="USER" />;
+            }
             const Icon = comp.icon;
             return (
               <div
