@@ -318,27 +318,51 @@ export const CorrectionReviewPanel = ({
                 <div>Reason: <em>{correction.review.reason || 'None specified'}</em></div>
               </div>
             ) : (
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setReviewDecision(REVIEW_DECISIONS.REJECTED);
-                    setShowReviewModal(true);
-                  }}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
-                >
-                  Reject Candidate
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setReviewDecision(REVIEW_DECISIONS.ACCEPTED);
-                    setShowReviewModal(true);
-                  }}
-                  className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
-                >
-                  Accept Candidate
-                </button>
+              <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                {!correction.is_verified && (
+                  <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    <span>
+                      <strong>Acceptance Ineligible:</strong> Only candidates where every mandatory sandbox verification check passed can be accepted. Rejecting the candidate is permitted.
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between text-[10px] text-slate-400">
+                  <span>Bound to patch hash: <code className="font-mono font-bold text-slate-600 dark:text-slate-300">{correction.candidate_patch?.patch_hash?.slice(0, 10)}...</code></span>
+                  <span>Audit Logging Only</span>
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReviewDecision(REVIEW_DECISIONS.REJECTED);
+                      setShowReviewModal(true);
+                    }}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+                  >
+                    Reject Candidate
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!correction.is_verified}
+                    onClick={() => {
+                      if (correction.is_verified) {
+                        setReviewDecision(REVIEW_DECISIONS.ACCEPTED);
+                        setShowReviewModal(true);
+                      }
+                    }}
+                    title={
+                      !correction.is_verified
+                        ? 'Candidate must pass all mandatory sandbox checks before acceptance'
+                        : 'Record developer acceptance decision'
+                    }
+                    className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Accept Candidate
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -363,9 +387,14 @@ export const CorrectionReviewPanel = ({
               </button>
             </div>
 
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Your decision binds to candidate patch hash <code className="font-mono font-bold">{correction?.candidate_patch?.patch_hash?.slice(0, 10)}...</code>. This decision prepares the patch for standard review without executing direct source merges.
-            </p>
+            <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
+              <p>
+                Decision binds strictly to patch hash: <code className="font-mono font-bold text-slate-800 dark:text-slate-200">{correction?.candidate_patch?.patch_hash?.slice(0, 10)}...</code>.
+              </p>
+              <p className="text-[10px] text-amber-700 dark:text-amber-400">
+                <strong>Authorization Notice:</strong> Reviewer ID is recorded for audit tracking only. The backend does not enforce role-based reviewer authority server-side. Recorded acceptance does not execute direct repository merges or deployments.
+              </p>
+            </div>
 
             <form onSubmit={handleSubmitReview} className="space-y-3 text-xs">
               <div>
@@ -404,8 +433,8 @@ export const CorrectionReviewPanel = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingReview}
-                  className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg text-white ${
+                  disabled={isSubmittingReview || (reviewDecision === REVIEW_DECISIONS.ACCEPTED && !correction.is_verified)}
+                  className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed ${
                     reviewDecision === 'ACCEPTED'
                       ? 'bg-emerald-600 hover:bg-emerald-700'
                       : 'bg-red-600 hover:bg-red-700'

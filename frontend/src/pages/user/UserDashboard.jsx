@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getModelPreference } from '../../services/modelPreference';
+import { C1DashboardCard } from '../../components/c1/C1DashboardCard';
 
 export const UserDashboard = () => {
   const { user } = useAuth();
@@ -179,6 +180,9 @@ export const UserDashboard = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {components.map((comp) => {
+            if (comp.name === 'Explainable Tool-Call Correctness Testing') {
+              return <C1DashboardCard key={comp.name} role="USER" />;
+            }
             const Icon = comp.icon;
             return (
               <div

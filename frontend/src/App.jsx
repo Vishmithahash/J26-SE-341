@@ -20,6 +20,7 @@ import { ModelSelectionPage } from './pages/shared/ModelSelectionPage';
 import { ProfilePage } from './pages/shared/ProfilePage';
 import { SettingsPage } from './pages/shared/SettingsPage';
 import { EmptyComponentPage } from './pages/shared/EmptyComponentPage';
+import { ToolCallCorrectnessPage } from './pages/c1/ToolCallCorrectnessPage';
 import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
@@ -75,15 +76,10 @@ export const App = () => {
                 <Route path="projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="projects/:projectId/edit" element={<ProjectFormPage />} />
 
-                {/* Preserved Empty Research Component Shells */}
+                {/* Component 1: Explainable Tool-Call Correctness Testing */}
                 <Route
                   path="tool-call-correctness"
-                  element={
-                    <EmptyComponentPage
-                      title="Explainable Tool-Call Correctness Testing"
-                      icon={ListChecks}
-                    />
-                  }
+                  element={<ToolCallCorrectnessPage />}
                 />
                 <Route
                   path="workflow-testing"
@@ -135,15 +131,10 @@ export const App = () => {
                 <Route path="projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="projects/:projectId/edit" element={<ProjectFormPage />} />
 
-                {/* Preserved Empty Research Component Shells */}
+                {/* Component 1: Explainable Tool-Call Correctness Testing */}
                 <Route
                   path="tool-call-correctness"
-                  element={
-                    <EmptyComponentPage
-                      title="Explainable Tool-Call Correctness Testing"
-                      icon={ListChecks}
-                    />
-                  }
+                  element={<ToolCallCorrectnessPage />}
                 />
                 <Route
                   path="workflow-testing"

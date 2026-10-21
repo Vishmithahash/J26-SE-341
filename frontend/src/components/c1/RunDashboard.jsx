@@ -16,6 +16,7 @@ import {
   Cpu,
 } from 'lucide-react';
 import { c1Api, RUN_STATUSES } from './c1Api';
+import { ExecutionProvenanceBadge } from './ExecutionProvenanceBadge';
 
 export const RunDashboard = ({
   projectId,
@@ -431,6 +432,10 @@ export const RunDashboard = ({
                 </span>
               </div>
 
+              <div className="pt-0.5 pb-1">
+                <ExecutionProvenanceBadge runOrCase={activeRun} compact showDescription />
+              </div>
+
               {/* Progress Counters */}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/60">
@@ -493,6 +498,7 @@ export const RunDashboard = ({
                 <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                   <th className="py-2 px-3">Run ID</th>
                   <th className="py-2 px-3">Suite</th>
+                  <th className="py-2 px-3">Provenance</th>
                   <th className="py-2 px-3">Status</th>
                   <th className="py-2 px-3">Cases</th>
                   <th className="py-2 px-3">Outcomes</th>
@@ -508,6 +514,9 @@ export const RunDashboard = ({
                     </td>
                     <td className="py-2 px-3 font-mono text-slate-600 dark:text-slate-400">
                       {r.suite_id} (v{r.suite_version})
+                    </td>
+                    <td className="py-2 px-3">
+                      <ExecutionProvenanceBadge runOrCase={r} compact />
                     </td>
                     <td className="py-2 px-3">
                       <span

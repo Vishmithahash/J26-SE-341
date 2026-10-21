@@ -28,6 +28,11 @@ import {
   formatValue,
   escapeText,
 } from '../components/c1/c1Api.js';
+import {
+  PROVENANCE_TYPES,
+  PROVENANCE_METADATA,
+  getExecutionProvenance,
+} from '../components/c1/provenanceUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -354,4 +359,216 @@ describe('Component 1 Tool-Call Correctness Frontend Tests (Phases 1, 2, and 3)'
       assert.equal(fs.existsSync(c1PagePath), true);
     });
   });
+
+  describe('Explicit Execution Provenance Classification and Invariants', () => {
+    it('correctly classifies Synthetic / Demonstration execution from adapter override or mock connection', () => {
+      const mockRun = {
+        effective_config: {
+          adapter_override: 'SIMULATED:WRONG_TOOL',
+          agent_connection_ref: 'urn:conn:mock',
+        },
+        case_executions: [
+          {
+            execution_status: 'EXECUTED',
+            raw_trace: { adapter: 'SIMULATED_FAKE_ADAPTER', simulated: true },
+          },
+        ],
+      };
+
+      const provenance = getExecutionProvenance(mockRun);
+      assert.equal(provenance, PROVENANCE_TYPES.SYNTHETIC_DEMO);
+      assert.equal(PROVENANCE_METADATA[provenance].isSynthetic, true);
+      assert.equal(PROVENANCE_METADATA[provenance].isLive, false);
+    });
+
+    it('correctly classifies Live Application execution when live adapter executed real events without simulation', () => {
+      const liveRun = {
+        effective_config: {
+          agent_connection_ref: 'https://live-agent.internal/api',
+        },
+        case_executions: [
+          {
+            execution_status: 'EXECUTED',
+            captured_events: [{ event_id: 'evt_1', tool_name: 'process_refund' }],
+            raw_trace: {
+              adapter: 'LIVE_AGENT_ADAPTER',
+              calls: [{ tool_name: 'process_refund' }],
+            },
+          },
+        ],
+      };
+
+      const provenance = getExecutionProvenance(liveRun);
+      assert.equal(provenance, PROVENANCE_TYPES.LIVE_EXECUTION);
+      assert.equal(PROVENANCE_METADATA[provenance].isLive, true);
+      assert.equal(PROVENANCE_METADATA[provenance].isSynthetic, false);
+    });
+
+    it('never infers live execution when live adapter failed readiness check or has no verified execution trace', () => {
+      const failedLiveRun = {
+        effective_config: {
+          agent_connection_ref: 'https://live-agent.internal/api',
+        },
+        case_executions: [
+          {
+            execution_status: 'EXECUTION_ERROR',
+            raw_trace: {
+              adapter: 'LIVE_AGENT_ADAPTER',
+              error: 'Live agent endpoint unreachable: no container deployed',
+            },
+          },
+        ],
+      };
+
+      const provenance = getExecutionProvenance(failedLiveRun);
+      assert.equal(
+        provenance,
+        PROVENANCE_TYPES.UNKNOWN_ORIGIN,
+        'Failed live adapter must not be classified as verified LIVE_EXECUTION'
+      );
+    });
+
+    it('correctly classifies Imported or Replayed evidence channels', () => {
+      const replayedRun = {
+        case_executions: [
+          {
+            execution_status: 'EXECUTED',
+            evidence_records: [
+              {
+                channel: 'REPLAYED',
+                uri_or_pointer: 'replay://benchmarks/run_42/trace_0',
+              },
+            ],
+            raw_trace: {},
+          },
+        ],
+      };
+
+      const provenance = getExecutionProvenance(replayedRun);
+      assert.equal(provenance, PROVENANCE_TYPES.IMPORTED_REPLAY);
+    });
+
+    it('falls back safely to UNKNOWN_ORIGIN for unverified, missing, or corrupt records', () => {
+      assert.equal(getExecutionProvenance(null), PROVENANCE_TYPES.UNKNOWN_ORIGIN);
+      assert.equal(getExecutionProvenance({}), PROVENANCE_TYPES.UNKNOWN_ORIGIN);
+      assert.equal(
+        getExecutionProvenance({ status: 'PENDING' }),
+        PROVENANCE_TYPES.UNKNOWN_ORIGIN
+      );
+    });
+  });
+
+  describe('Role-Correct Links and Dashboard Integration', () => {
+    it('verifies both /admin and /app C1 routes are registered in App.jsx', () => {
+      const appPath = path.resolve(__dirname, '../App.jsx');
+      const appContent = fs.readFileSync(appPath, 'utf8');
+
+      assert.equal(
+        appContent.includes("import { ToolCallCorrectnessPage } from './pages/c1/ToolCallCorrectnessPage'"),
+        true
+      );
+      assert.equal(
+        appContent.includes('path="tool-call-correctness"'),
+        true
+      );
+      // Both admin and app route sections contain ToolCallCorrectnessPage
+      const occurrences = (appContent.match(/<ToolCallCorrectnessPage \/>/g) || []).length;
+      assert.equal(occurrences, 2, 'Expected ToolCallCorrectnessPage to be mounted under both /admin and /app');
+    });
+
+    it('verifies UserDashboard and AdminDashboard replace ONLY Component 1 card, preserving C2, C3, and C4', () => {
+      const userDashPath = path.resolve(__dirname, '../pages/user/UserDashboard.jsx');
+      const userContent = fs.readFileSync(userDashPath, 'utf8');
+
+      const adminDashPath = path.resolve(__dirname, '../pages/admin/AdminDashboard.jsx');
+      const adminContent = fs.readFileSync(adminDashPath, 'utf8');
+
+      // Both must import C1DashboardCard
+      assert.equal(userContent.includes('C1DashboardCard'), true);
+      assert.equal(adminContent.includes('C1DashboardCard'), true);
+
+      // C2, C3, and C4 titles must remain fully preserved in both dashboards
+      const protectedComponents = [
+        'State-Aware Multi-Step Workflow Testing',
+        'Robustness and Failure Recovery Testing',
+        'Policy-Aware Safety and Prompt-Injection Testing',
+      ];
+
+      for (const comp of protectedComponents) {
+        assert.equal(userContent.includes(comp), true, `UserDashboard must preserve ${comp}`);
+        assert.equal(adminContent.includes(comp), true, `AdminDashboard must preserve ${comp}`);
+      }
+    });
+
+    it('verifies role-correct project links in ToolCallCorrectnessPage', () => {
+      const c1PagePath = path.resolve(
+        __dirname,
+        '../pages/c1/ToolCallCorrectnessPage.jsx'
+      );
+      const pageContent = fs.readFileSync(c1PagePath, 'utf8');
+
+      assert.equal(
+        pageContent.includes("user?.role === 'ADMIN' ? '/admin/projects' : '/app/projects'"),
+        true,
+        'ToolCallCorrectnessPage must dynamically resolve role-correct project links'
+      );
+    });
+
+    it('verifies operational execution errors are tracked distinctly from correctness verdicts in dashboard', () => {
+      const cardPath = path.resolve(__dirname, '../components/c1/C1DashboardCard.jsx');
+      const cardContent = fs.readFileSync(cardPath, 'utf8');
+
+      assert.equal(
+        cardContent.includes('Operational Execution Errors'),
+        true,
+        'Dashboard card must keep execution errors distinct from correctness verdicts'
+      );
+      assert.equal(
+        cardContent.includes('Excluded from Verdicts'),
+        true,
+        'Dashboard card must clearly indicate errors are excluded from correctness verdicts'
+      );
+    });
+  });
+
+  describe('Developer Review Permissions and Authorization Clarity', () => {
+    it('guarantees unverified candidate corrections cannot be accepted', () => {
+      const reviewPanelPath = path.resolve(
+        __dirname,
+        '../components/c1/CorrectionReviewPanel.jsx'
+      );
+      const panelContent = fs.readFileSync(reviewPanelPath, 'utf8');
+
+      assert.equal(
+        panelContent.includes('disabled={!correction.is_verified}'),
+        true,
+        'Accept Candidate button must be disabled when correction is not verified'
+      );
+      assert.equal(
+        panelContent.includes('Acceptance Ineligible'),
+        true,
+        'Panel must show clear warning that acceptance is ineligible when unverified'
+      );
+    });
+
+    it('documents server-side authorization limitation and audit logging in developer review modal', () => {
+      const reviewPanelPath = path.resolve(
+        __dirname,
+        '../components/c1/CorrectionReviewPanel.jsx'
+      );
+      const panelContent = fs.readFileSync(reviewPanelPath, 'utf8');
+
+      assert.equal(
+        panelContent.includes('Authorization Notice'),
+        true,
+        'Modal must clearly document that reviewer ID is for audit tracking only'
+      );
+      assert.equal(
+        panelContent.includes('The backend does not enforce role-based reviewer authority server-side'),
+        true,
+        'Modal must state backend authorization limitation explicitly'
+      );
+    });
+  });
 });
+

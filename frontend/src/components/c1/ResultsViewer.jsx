@@ -30,6 +30,7 @@ import {
 import { DiagnosisPanel } from './DiagnosisPanel';
 import { CorrectionReviewPanel } from './CorrectionReviewPanel';
 import { ReportingModal } from './ReportingModal';
+import { ExecutionProvenanceBadge } from './ExecutionProvenanceBadge';
 
 export const ResultsViewer = ({
   projectId,
@@ -192,6 +193,7 @@ export const ResultsViewer = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {runDetail && <ExecutionProvenanceBadge runOrCase={runDetail} compact />}
           {runsList.length > 0 && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-500 dark:text-slate-400">Run:</span>
@@ -443,8 +445,9 @@ export const ResultsViewer = ({
                         (Session: {caseExecutionDetail.session_id?.slice(0, 8)}...)
                       </span>
                     </div>
-                    <div className="text-xs text-slate-500 mt-0.5">
-                      Execution Status: <strong className="text-slate-700 dark:text-slate-300">{caseExecutionDetail.execution_status}</strong>
+                    <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
+                      <span>Execution Status: <strong className="text-slate-700 dark:text-slate-300">{caseExecutionDetail.execution_status}</strong></span>
+                      <ExecutionProvenanceBadge runOrCase={caseExecutionDetail} compact />
                     </div>
                   </div>
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ListChecks,
   Settings,
@@ -43,7 +44,10 @@ export const ToolCallCorrectnessPage = () => {
   // Counter to guard against stale responses from previous project
   const requestCounter = useRef(0);
 
-  // Clear component-local selections when active project changes
+  // Role-correct project navigation path
+  const projectsPath = user?.role === 'ADMIN' ? '/admin/projects' : '/app/projects';
+
+  // Clear component-local selections when active project or user account changes
   useEffect(() => {
     requestCounter.current += 1;
     const currentToken = requestCounter.current;
@@ -95,7 +99,7 @@ export const ToolCallCorrectnessPage = () => {
     };
 
     loadInitialData();
-  }, [activeProjectId]);
+  }, [activeProjectId, user?.id]);
 
   // Handle configuration saved/updated
   const handleConfigSaved = (newConfig) => {
@@ -157,6 +161,15 @@ export const ToolCallCorrectnessPage = () => {
             <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm">
               Please select a project from the top navigation dropdown or create a project in the Projects workspace before accessing tool-call correctness testing.
             </p>
+          </div>
+          <div className="pt-2">
+            <Link
+              to={projectsPath}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span>Go to Projects</span>
+            </Link>
           </div>
         </div>
       </div>
