@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getModelPreference } from '../../services/modelPreference';
+import { C2DashboardCard } from '../../features/c2/components/C2DashboardCard';
 
 export const UserDashboard = () => {
   const { user } = useAuth();
@@ -179,6 +180,15 @@ export const UserDashboard = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {components.map((comp) => {
+            if (comp.name === 'State-Aware Multi-Step Workflow Testing') {
+              return (
+                <C2DashboardCard
+                  key={comp.name}
+                  role="USER"
+                  basePath={comp.path}
+                />
+              );
+            }
             const Icon = comp.icon;
             return (
               <div

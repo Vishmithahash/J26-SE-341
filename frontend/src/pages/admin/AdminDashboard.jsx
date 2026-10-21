@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { getModelPreference } from '../../services/modelPreference';
+import { C2DashboardCard } from '../../features/c2/components/C2DashboardCard';
 
 export const AdminDashboard = () => {
   const { user } = useAuth();
@@ -274,6 +275,15 @@ export const AdminDashboard = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {components.map((comp) => {
+            if (comp.name === 'State-Aware Multi-Step Workflow Testing') {
+              return (
+                <C2DashboardCard
+                  key={comp.name}
+                  role="ADMIN"
+                  basePath={comp.path}
+                />
+              );
+            }
             const Icon = comp.icon;
             return (
               <div
