@@ -22,6 +22,85 @@ export const INTERCEPTION_HOOKS = {
   APPLICATION_AWARE_HOOK: 'APPLICATION_AWARE_HOOK',
 };
 
+// ---------------------------------------------------------------------------
+// Phase 2 Distinct Status Dimensions
+// ---------------------------------------------------------------------------
+
+export const READINESS_STATUS = {
+  READY: 'READY',
+  NOT_READY: 'NOT_READY',
+  BLOCKED: 'BLOCKED',
+  TEST_NOT_READY: 'TEST_NOT_READY',
+};
+
+export const EXECUTION_TRACKING_STATUS = {
+  PLANNED: 'PLANNED',
+  RUNNING: 'RUNNING',
+  COMPLETED: 'COMPLETED',
+  CANCELLED: 'CANCELLED',
+  INTERRUPTED: 'INTERRUPTED',
+  ERROR: 'ERROR',
+};
+
+export const TRIAL_EXECUTION_STATUS = {
+  COMPLETED: 'COMPLETED',
+  EXECUTION_ERROR: 'EXECUTION_ERROR',
+  CANCELLED: 'CANCELLED',
+  TIMEOUT: 'TIMEOUT',
+};
+
+export const EXPOSURE_STATUS = {
+  CONFIRMED: 'CONFIRMED',
+  NOT_TRIGGERED: 'NOT_TRIGGERED',
+  EXPOSURE_UNKNOWN: 'EXPOSURE_UNKNOWN',
+};
+
+export const CLEAN_QUALIFICATION = {
+  QUALIFIED: 'QUALIFIED',
+  DISQUALIFIED: 'DISQUALIFIED',
+  UNKNOWN: 'UNKNOWN',
+};
+
+export const FIXTURE_COMPARABILITY = {
+  EQUIVALENT_LOGICAL_STATE: 'EQUIVALENT_LOGICAL_STATE',
+  NON_EQUIVALENT: 'NON_EQUIVALENT',
+  UNKNOWN: 'UNKNOWN',
+};
+
+export const RECOVERY_VERDICT = {
+  PASS_COMPLETED: 'PASS_COMPLETED',
+  PASS_GRACEFUL: 'PASS_GRACEFUL',
+  FAIL: 'FAIL',
+  INCONCLUSIVE: 'INCONCLUSIVE',
+};
+
+export const RECOVERY_ACTOR = {
+  SCRIPTED_CALLER: 'SCRIPTED_CALLER',
+  AGENT: 'AGENT',
+  SDK: 'SDK',
+  ADAPTER: 'ADAPTER',
+  MIDDLEWARE: 'MIDDLEWARE',
+  UNKNOWN: 'UNKNOWN',
+};
+
+export const TARGET_MODE = {
+  DEMONSTRATION: 'DEMONSTRATION',
+  AUT: 'AUT',
+  LIVE_AUT: 'LIVE_AUT',
+};
+
+export const CALLER_IDENTITY = {
+  SCRIPTED_CALLER: 'SCRIPTED_CALLER',
+  AGENT: 'AGENT',
+};
+
+export const TIMEOUT_BOUNDARY_TYPE = {
+  CALLER_TIMEOUT_EXCEEDED: 'CALLER_TIMEOUT_EXCEEDED',
+  ELAPSED_TOOL_CALL_DEADLINE: 'ELAPSED_TOOL_CALL_DEADLINE',
+  ACTUAL_TRANSPORT_TIMEOUT: 'ACTUAL_TRANSPORT_TIMEOUT',
+  IMMEDIATE_SYNTHETIC_EXCEPTION: 'IMMEDIATE_SYNTHETIC_EXCEPTION',
+};
+
 export const c3Api = {
   /**
    * Retrieve authoritative operational fault families catalogue.
@@ -159,5 +238,193 @@ export const c3Api = {
       body: JSON.stringify(payload),
       signal,
     });
+  },
+
+  // -------------------------------------------------------------------------
+  // Phase 2: Executions, Matched Pairs, Evidence Import, and Reporting
+  // -------------------------------------------------------------------------
+
+  /**
+   * List tracked suite executions for an authorized project.
+   */
+  async listExecutions(
+    projectId,
+    { suiteDigest, status, targetMode, limit = 50, offset = 0 } = {},
+    signal
+  ) {
+    if (!projectId) {
+      throw new Error('Project ID is required to list executions.');
+    }
+    const params = new URLSearchParams();
+    params.set('project_id', projectId);
+    params.set('limit', String(limit));
+    params.set('offset', String(offset));
+    if (suiteDigest) params.set('suite_digest', suiteDigest);
+    if (status) params.set('status', status);
+    if (targetMode) params.set('target_mode', targetMode);
+
+    return request(`/api/v1/c3/executions?${params.toString()}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  /**
+   * Retrieve a single tracked execution status by ID.
+   */
+  async getExecution(projectId, executionId, signal) {
+    if (!projectId) {
+      throw new Error('Project ID is required to retrieve an execution.');
+    }
+    return request(
+      `/api/v1/c3/executions/${encodeURIComponent(executionId)}?project_id=${encodeURIComponent(projectId)}`,
+      {
+        method: 'GET',
+        signal,
+      }
+    );
+  },
+
+  /**
+   * Import an execution artifact without executing it.
+   */
+  async importExecution(payload, signal) {
+    if (!payload?.project_id) {
+      throw new Error('Project ID is required to import an execution artifact.');
+    }
+    return request('/api/v1/c3/executions/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    });
+  },
+
+  /**
+   * List matched trial pairs for an authorized project.
+   */
+  async listPairs(
+    projectId,
+    {
+      executionId,
+      caseId,
+      runId,
+      exposureStatus,
+      cleanQualification,
+      faultExecutionStatus,
+      limit = 50,
+      offset = 0,
+    } = {},
+    signal
+  ) {
+    if (!projectId) {
+      throw new Error('Project ID is required to list matched pairs.');
+    }
+    const params = new URLSearchParams();
+    params.set('project_id', projectId);
+    params.set('limit', String(limit));
+    params.set('offset', String(offset));
+    if (executionId) params.set('execution_id', executionId);
+    if (caseId) params.set('case_id', caseId);
+    if (runId) params.set('run_id', runId);
+    if (exposureStatus) params.set('exposure_status', exposureStatus);
+    if (cleanQualification) params.set('clean_qualification', cleanQualification);
+    if (faultExecutionStatus) params.set('fault_execution_status', faultExecutionStatus);
+
+    return request(`/api/v1/c3/pairs?${params.toString()}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  /**
+   * Retrieve an individual matched trial pair record and linked evidence.
+   */
+  async getPair(projectId, pairId, signal) {
+    if (!projectId) {
+      throw new Error('Project ID is required to retrieve a matched pair.');
+    }
+    return request(
+      `/api/v1/c3/pairs/${encodeURIComponent(pairId)}?project_id=${encodeURIComponent(projectId)}`,
+      {
+        method: 'GET',
+        signal,
+      }
+    );
+  },
+
+  /**
+   * Import matched trial pair evidence.
+   */
+  async importPair(payload, signal) {
+    if (!payload?.project_id) {
+      throw new Error('Project ID is required to import matched pair evidence.');
+    }
+    return request('/api/v1/c3/pairs/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    });
+  },
+
+  /**
+   * Compute and persist recovery evaluation from stored evidence.
+   */
+  async computeEvaluation(payload, signal) {
+    if (!payload?.project_id) {
+      throw new Error('Project ID is required to compute evaluation.');
+    }
+    return request('/api/v1/c3/evaluations/compute', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    });
+  },
+
+  /**
+   * List stored recovery evaluations.
+   */
+  async listEvaluations(
+    projectId,
+    { pairId, caseId, recoveryVerdict, limit = 50, offset = 0 } = {},
+    signal
+  ) {
+    if (!projectId) {
+      throw new Error('Project ID is required to list evaluations.');
+    }
+    const params = new URLSearchParams();
+    params.set('project_id', projectId);
+    params.set('limit', String(limit));
+    params.set('offset', String(offset));
+    if (pairId) params.set('pair_id', pairId);
+    if (caseId) params.set('case_id', caseId);
+    if (recoveryVerdict) params.set('recovery_verdict', recoveryVerdict);
+
+    return request(`/api/v1/c3/evaluations?${params.toString()}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  /**
+   * Retrieve comprehensive structured execution report.
+   */
+  async getExecutionReport(projectId, executionId, signal) {
+    if (!projectId) {
+      throw new Error('Project ID is required to retrieve an execution report.');
+    }
+    return request(
+      `/api/v1/c3/reports/executions/${encodeURIComponent(executionId)}?project_id=${encodeURIComponent(projectId)}`,
+      {
+        method: 'GET',
+        signal,
+      }
+    );
+  },
+
+  /**
+   * Helper to build export CSV URL for an execution report.
+   */
+  getExecutionReportCsvUrl(projectId, executionId) {
+    return `/api/v1/c3/reports/executions/${encodeURIComponent(executionId)}/export?project_id=${encodeURIComponent(projectId)}`;
   },
 };

@@ -6,15 +6,36 @@ import {
   FolderGit2,
   AlertTriangle,
   Sparkles,
+  GitCompare,
 } from 'lucide-react';
 import { useProject } from '../../../context/ProjectContext';
 import { useC3ProjectSuites } from '../hooks/useC3ProjectSuites';
+import { useC3Executions } from '../hooks/useC3Executions';
+import { useC3MatchedPairs } from '../hooks/useC3MatchedPairs';
 import { C3Badge } from './C3Badge';
 
 export const C3DashboardCard = ({ role = 'USER' }) => {
   const { activeProject, activeProjectId, isLoadingActive } = useProject();
-  const { totalSuites, isLoading: isLoadingSuites, error: suiteError, isDbUnavailable } =
-    useC3ProjectSuites(activeProjectId);
+  const {
+    totalSuites,
+    isLoading: isLoadingSuites,
+    error: suiteError,
+    isDbUnavailable: isSuiteDbUnavailable,
+  } = useC3ProjectSuites(activeProjectId);
+
+  const {
+    latestExecution,
+    isLoading: isLoadingExec,
+    isDbUnavailable: isExecDbUnavailable,
+  } = useC3Executions(activeProjectId);
+
+  const {
+    totalPairs,
+    exposureCounts,
+    isDbUnavailable: isPairsDbUnavailable,
+  } = useC3MatchedPairs(activeProjectId);
+
+  const isDbOffline = isSuiteDbUnavailable || isExecDbUnavailable || isPairsDbUnavailable;
 
   const isAdmin = role === 'ADMIN';
   const basePath = isAdmin ? '/admin/robustness-recovery' : '/app/robustness-recovery';
@@ -28,7 +49,7 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
             <RotateCcw className="w-5 h-5" />
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
-            <C3Badge status="STATIC_ONLY" label="Phase 1 Active" />
+            <C3Badge status="DEMONSTRATION" label="Phase 2 Active" />
             {isAdmin && (
               <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
                 Admin View
@@ -62,7 +83,7 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
               </code>
               {isAdmin && (
                 <p className="text-[10px] text-slate-400 mt-1 italic leading-tight">
-                  Scope: Authorized project records. System-wide multi-project C3 aggregation is pending backend server-side authorization integration.
+                  Scope: Authorized project records. Cross-project aggregation is pending backend server-side authorization integration.
                 </p>
               )}
             </div>
@@ -72,14 +93,14 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
               <div>
                 <span className="font-semibold">No project selected</span>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  Link an authorized project to prepare inputs and inspect suites.
+                  Link an authorized project to inspect suites, matched trials, and exposure.
                 </p>
               </div>
             </div>
           )}
         </div>
 
-        {/* Available Suite / Case Totals */}
+        {/* Primary Metrics: Suites and Latest Execution */}
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
           <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-800">
             <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
@@ -90,7 +111,7 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
                 <span className="text-xs font-normal text-slate-400">Project required</span>
               ) : isLoadingSuites ? (
                 <div className="h-5 w-8 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
-              ) : isDbUnavailable ? (
+              ) : isDbOffline ? (
                 <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
                   Unavailable (DB Offline)
                 </span>
@@ -106,33 +127,79 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
 
           <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-800">
             <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
-              Fault Families
+              Latest Execution
             </span>
-            <div className="text-base font-bold text-slate-900 dark:text-white mt-0.5">
-              5 Operational
+            <div className="mt-0.5">
+              {!activeProjectId ? (
+                <span className="text-xs font-normal text-slate-400">Project required</span>
+              ) : isLoadingExec ? (
+                <div className="h-5 w-16 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+              ) : latestExecution ? (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <C3Badge status={latestExecution.status} />
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {latestExecution.target_mode === 'LIVE_AUT' ? 'Live' : 'Demo'}
+                  </span>
+                </div>
+              ) : (
+                <span className="text-xs font-normal text-slate-400">None tracked</span>
+              )}
             </div>
           </div>
         </div>
 
+        {/* Phase 2 Exposure Breakdown for Active Project */}
+        {activeProjectId && !isDbOffline && (
+          <div className="mt-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-800 text-xs space-y-1">
+            <div className="flex items-center justify-between text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+              <span>Fault Exposure Outcomes</span>
+              <span>{totalPairs !== null ? `${totalPairs} Pairs` : ''}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-1 pt-0.5 text-center">
+              <div className="p-1 rounded bg-emerald-50/60 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300">
+                <span className="text-[9px] block">Confirmed</span>
+                <span className="font-bold text-xs">{exposureCounts.confirmed}</span>
+              </div>
+              <div className="p-1 rounded bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300">
+                <span className="text-[9px] block">Unreached</span>
+                <span className="font-bold text-xs">{exposureCounts.notTriggered}</span>
+              </div>
+              <div className="p-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                <span className="text-[9px] block">Unknown</span>
+                <span className="font-bold text-xs">{exposureCounts.unknown}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Concise Readiness Message */}
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-3 leading-relaxed">
-          Static validation & deterministic suite generation ready. Live target runner execution blocked (Phase 1 platform status).
+          Matched clean/fault trials & exposure evidence active. Live trial runner executed via developer CLI; evidence imported and tracked.
         </p>
       </div>
 
       {/* Action Links */}
-      <div className="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
-        <Link
-          to={`${basePath}#prepare`}
-          className="inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>Prepare Cases</span>
-        </Link>
+      <div className="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs flex-wrap gap-2">
+        <div className="flex items-center gap-3">
+          <Link
+            to={`${basePath}#prepare`}
+            className="inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Prepare Cases</span>
+          </Link>
+          <Link
+            to={`${basePath}#trials`}
+            className="inline-flex items-center gap-1 font-semibold text-teal-600 dark:text-teal-400 hover:underline"
+          >
+            <GitCompare className="w-3.5 h-3.5" />
+            <span>Inspect Trials</span>
+          </Link>
+        </div>
 
         <Link
           to={basePath}
-          className="inline-flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400"
+          className="inline-flex items-center gap-1 font-semibold text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400"
         >
           <span>Open Workspace</span>
           <ExternalLink className="w-3.5 h-3.5" />
@@ -141,3 +208,4 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
     </div>
   );
 };
+

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   RotateCcw,
   Compass,
@@ -6,6 +6,7 @@ import {
   Sparkles,
   ShieldCheck,
   Archive,
+  GitCompare,
   Info,
 } from 'lucide-react';
 import { useProject } from '../../../context/ProjectContext';
@@ -16,6 +17,7 @@ import { C3InputPreparation } from '../components/C3InputPreparation';
 import { C3ValidationPanel } from '../components/C3ValidationPanel';
 import { C3GenerationPanel } from '../components/C3GenerationPanel';
 import { C3StoredSuitesViewer } from '../components/C3StoredSuitesViewer';
+import { C3TrialsWorkspace } from '../components/C3TrialsWorkspace';
 import { useC3ValidationGeneration } from '../hooks/useC3ValidationGeneration';
 import {
   DEMO_CANDIDATE_CASE_VALID,
@@ -38,7 +40,19 @@ export const C3UserWorkspace = () => {
   const [recoveryContract, setRecoveryContract] = useState(DEMO_RECOVERY_CONTRACT);
   const [generationPolicy, setGenerationPolicy] = useState(DEMO_GENERATION_POLICY);
 
-  const [activeSection, setActiveSection] = useState('prepare'); // 'prepare' | 'catalog' | 'validate' | 'generate' | 'suites'
+  const [activeSection, setActiveSection] = useState('prepare'); // 'prepare' | 'catalog' | 'validate' | 'generate' | 'suites' | 'trials'
+
+  useEffect(() => {
+    const handleHash = () => {
+      const h = window.location.hash.replace('#', '');
+      if (['prepare', 'validate', 'generate', 'suites', 'trials', 'catalog'].includes(h)) {
+        setActiveSection(h);
+      }
+    };
+    handleHash();
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
 
   const {
     isValidating,
@@ -137,6 +151,19 @@ export const C3UserWorkspace = () => {
 
         <button
           type="button"
+          onClick={() => setActiveSection('trials')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap ${
+            activeSection === 'trials'
+              ? 'bg-teal-600 text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <GitCompare className="w-3.5 h-3.5" />
+          <span>5. Matched Trials & Evidence</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveSection('catalog')}
           className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap ${
             activeSection === 'catalog'
@@ -206,6 +233,18 @@ export const C3UserWorkspace = () => {
       {activeSection === 'suites' && (
         <div className="space-y-6">
           <C3StoredSuitesViewer projectId={activeProjectId} />
+        </div>
+      )}
+
+      {activeSection === 'trials' && (
+        <div className="space-y-6">
+          <C3TrialsWorkspace
+            projectId={activeProjectId}
+            candidateCase={candidateCase}
+            adapterManifest={adapterManifest}
+            taskFixtureMetadata={taskFixtureMetadata}
+            recoveryContract={recoveryContract}
+          />
         </div>
       )}
 

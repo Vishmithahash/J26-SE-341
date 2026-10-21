@@ -1,20 +1,30 @@
 # Component 3: Robustness and Failure Recovery Testing
-## Frontend Phase 1 Architecture & Implementation
+## Frontend Architecture & Implementation (Phase 1 & Phase 2)
 
-This directory contains the complete Phase 1 frontend implementation for **Component 3: Robustness and Failure Recovery Testing**.
+This directory contains the complete Phase 1 and Phase 2 frontend implementation for **Component 3: Robustness and Failure Recovery Testing**.
 
-### 1. Component Scope & Boundaries
+---
 
-Component 3 evaluates agent and tool robustness under operational failures and verifies failure recovery behaviors against declarative recovery contracts.
-In Phase 1, the frontend provides:
-- Inspection of the 5 operational fault families from the authoritative backend fault catalogue.
-- Structured input preparation for tasks, tool adapters, fixture metadata, recovery contracts, and generation policies.
-- Interactive deterministic static validation (`POST /api/v1/c3/cases/validate`) with clear distinction between `STATIC_VALID` and live execution readiness.
-- Pure deterministic feasible fault case generation (`POST /api/v1/c3/cases/generate`) with comprehensive candidate counter accounting.
-- Inspection and verification of frozen test suites (`FrozenSuite`), cryptographic SHA-256 digests (`suite_digest`), and semantic case fingerprints.
-- Project-scoped persistence integration (`POST /api/v1/c3/suites/import`, `GET /api/v1/c3/suites`, `GET /api/v1/c3/cases`).
-- Role-separated User (`/app/robustness-recovery`) and Admin (`/admin/robustness-recovery`) workspaces.
-- Seamless dashboard cards for User and Admin dashboards respecting existing layout, themes, and density settings.
+### 1. Component Scope & Execution Capabilities
+
+Component 3 evaluates AI agent and tool robustness under operational failures and verifies failure recovery behaviors against declarative recovery contracts.
+
+#### HTTP vs. CLI Execution Capabilities Analysis
+
+| Capability | Exposure Type | Description / Mechanism |
+|---|---|---|
+| **Single Matched Trial Execution** | **CLI-Only (No HTTP Endpoint)** | Executed via `python -m app.components.c3_robustness_recovery.runtime.runner --synthetic`. No backend HTTP run endpoint is exposed. |
+| **Bounded Suite Execution** | **CLI-Only (No HTTP Endpoint)** | Executed via `python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic`. No backend HTTP suite run endpoint is exposed. |
+| **Runtime Readiness Checks** | **CLI / Static HTTP** | Static metadata validation is exposed over HTTP (`POST /cases/validate`). Live adapter and in-memory runtime checks are performed within runner processes. |
+| **Server-Side Cancellation** | **Unsupported** | No server-side HTTP cancellation endpoint exists in the current backend API. |
+| **Tracked Execution Retrieval** | **HTTP Available** | `GET /api/v1/c3/executions` & `GET /api/v1/c3/executions/{execution_id}` for authorized project. |
+| **Matched Pair Retrieval** | **HTTP Available** | `GET /api/v1/c3/pairs` & `GET /api/v1/c3/pairs/{pair_id}` with exposure & clean qualification filters. |
+| **Execution Artifact Import** | **HTTP Available** | `POST /api/v1/c3/executions/import` to persist execution records without live target execution. |
+| **Matched Pair Evidence Import** | **HTTP Available** | `POST /api/v1/c3/pairs/import` to persist verified clean/fault trial paired evidence records. |
+| **Deterministic Recovery Evaluation**| **HTTP Available** | `POST /api/v1/c3/recovery/evaluate` & `POST /api/v1/c3/evaluations/compute`. |
+| **Structured Execution Reports** | **HTTP Available** | `GET /api/v1/c3/reports/executions/{id}` & CSV export at `/reports/executions/{id}/export`. |
+
+> **Key Rule**: A Python runner function does not establish an HTTP execution endpoint. An execution-import endpoint stores supplied evidence; it does not start a live trial. The frontend clearly labels import actions as **"Import Evidence"** and presents honest live-execution blockers without fabricating execution progress or synthetic runs.
 
 ---
 
@@ -22,53 +32,74 @@ In Phase 1, the frontend provides:
 
 | Method | Endpoint Path | Backend Router & Function | Description & Payload Requirements | Auth Status |
 |---|---|---|---|---|
-| `GET` | `/api/v1/c3/fault-catalog` | `router.py:fault_catalog()` | Returns catalogue of the 5 operational fault families (`TIMEOUT_DISCONNECTION`, `TRANSIENT_5XX`, `RATE_LIMIT_429`, `TOOL_UNAVAILABILITY`, `MALFORMED_RESPONSE`). All injection capabilities marked not implemented. | Unauthenticated (Platform research phase) |
-| `POST` | `/api/v1/c3/cases/validate` | `router.py:validate_case()` | Pure deterministic static validation of declared candidate case against adapter manifest, fixture metadata, and recovery contract. Body: `FaultValidationRequest`. Returns `STATIC_VALID` or `TEST_NOT_READY`. | Unauthenticated |
-| `POST` | `/api/v1/c3/cases/generate` | `router.py:generate_cases()` | Deterministic candidate expansion, static filtering, deduplication, and suite freezing. Body: `FaultGenerationRequest`. Returns `FaultGenerationResponse` with `counters` and `frozen_suite`. | Unauthenticated |
-| `POST` | `/api/v1/c3/suites/import` | `persistence_router.py:import_suite_endpoint()` | Idempotently persists a verified frozen suite and its candidate cases. Body: `SuiteImportRequest { project_id, frozen_suite }`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/suites` | `persistence_router.py:list_suites_endpoint()` | Lists stored frozen suites for a project with bounded pagination. Query: `project_id` (required), `domain`, `limit`, `offset`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/suites/{suite_id_or_digest}` | `persistence_router.py:get_suite_endpoint()` | Retrieves stored frozen suite by ID or SHA-256 digest. Query: `project_id` (required). | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/cases` | `persistence_router.py:list_cases_endpoint()` | Lists stored candidate cases with filters. Query: `project_id` (required), `suite_digest`, `fault_family`, `effect_phase`, `limit`, `offset`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/cases/{case_id}` | `persistence_router.py:get_case_endpoint()` | Retrieves single stored candidate case snapshot. Query: `project_id` (required), `suite_digest`. | Unauthenticated (project_id param only) |
-| `POST` | `/api/v1/c3/recovery/evaluate` | `router.py:evaluate_recovery_endpoint()` | Deterministic evaluation of recovery rules against evidence and C2 facts. Body: `RecoveryEvaluationRequest`. | Unauthenticated |
+| `GET` | `/api/v1/c3/fault-catalog` | `router.py:fault_catalog()` | Returns catalogue of the 5 operational fault families (`TIMEOUT_DISCONNECTION`, `TRANSIENT_5XX`, `RATE_LIMIT_429`, `TOOL_UNAVAILABILITY`, `MALFORMED_RESPONSE`). | Unauthenticated (Platform research phase) |
+| `POST` | `/api/v1/c3/cases/validate` | `router.py:validate_case()` | Pure deterministic static validation of candidate case against adapter manifest, fixture metadata, and recovery contract. Body: `FaultValidationRequest`. | Unauthenticated |
+| `POST` | `/api/v1/c3/cases/generate` | `router.py:generate_cases()` | Deterministic candidate expansion, static filtering, deduplication, and suite freezing. Body: `FaultGenerationRequest`. | Unauthenticated |
+| `POST` | `/api/v1/c3/suites/import` | `persistence_router.py:import_suite_endpoint()` | Idempotently persists a verified frozen suite and candidate cases. Body: `SuiteImportRequest { project_id, frozen_suite }`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/suites` | `persistence_router.py:list_suites_endpoint()` | Lists stored frozen suites for an authorized project. Query: `project_id`, `domain`, `limit`, `offset`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/suites/{id}` | `persistence_router.py:get_suite_endpoint()` | Retrieves stored frozen suite by ID or SHA-256 digest. Query: `project_id`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/cases` | `persistence_router.py:list_cases_endpoint()` | Lists stored candidate cases with filters. Query: `project_id`, `suite_digest`, `fault_family`, `effect_phase`, `limit`, `offset`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/cases/{case_id}` | `persistence_router.py:get_case_endpoint()` | Retrieves single stored candidate case snapshot. Query: `project_id`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/executions` | `persistence_router.py:list_executions_endpoint()` | Lists tracked executions with bounded pagination and status filters. Query: `project_id`, `status`, `target_mode`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/executions/{id}` | `persistence_router.py:get_execution_endpoint()` | Retrieves tracked suite execution record. Query: `project_id`. | Unauthenticated (project_id param only) |
+| `POST` | `/api/v1/c3/executions/import` | `persistence_router.py:import_execution_endpoint()` | Imports execution artifact transactionally without target execution. Body: `ExecutionArtifactImportRequest`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/pairs` | `persistence_router.py:list_pairs_endpoint()` | Lists matched trial pairs with exposure and clean-qualification filters. Query: `project_id`, `exposure_status`, `clean_qualification`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/pairs/{pair_id}` | `persistence_router.py:get_pair_endpoint()` | Retrieves matched pair evidence record including clean and fault trials. Query: `project_id`. | Unauthenticated (project_id param only) |
+| `POST` | `/api/v1/c3/pairs/import` | `persistence_router.py:import_pair_endpoint()` | Validates and persists matched clean/fault pair evidence. Body: `MatchedPairImportRequest`. | Unauthenticated (project_id param only) |
+| `POST` | `/api/v1/c3/evaluations/compute`| `persistence_router.py:compute_evaluation_endpoint()` | Executes authoritative evaluation engine and stores evaluation result. Body: `EvaluationComputeRequest`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/evaluations` | `persistence_router.py:list_evaluations_endpoint()`| Lists stored recovery evaluations. Query: `project_id`, `pair_id`, `recovery_verdict`. | Unauthenticated (project_id param only) |
+| `POST` | `/api/v1/c3/recovery/evaluate` | `router.py:evaluate_recovery_endpoint()` | Pure deterministic evaluation of recovery rules against evidence and C2 facts. Body: `RecoveryEvaluationRequest`. | Unauthenticated |
+| `GET` | `/api/v1/c3/reports/executions/{id}` | `persistence_router.py:get_execution_report_endpoint()` | Comprehensive execution summary and recovery evaluation metrics with explicit denominators. Query: `project_id`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/reports/executions/{id}/export` | `persistence_router.py:export_execution_report_csv_endpoint()` | Downloads execution report formatted as CSV attachment. Query: `project_id`. | Unauthenticated (project_id param only) |
 
 ---
 
-### 3. Server-Side Authentication & Authorization Gap Analysis
+### 3. Distinct Status Dimensions
 
-**Identified Architectural Gap:**
-1. **Unauthenticated Endpoints**: As documented in `backend/README.md` (line 391), C3 endpoints under `/api/v1/c3/*` remain unauthenticated at the backend routing level (`C3SafeRoute` does not depend on `require_active_user` or `require_admin`).
-2. **Project Ownership Enforcement**: The `project_id` parameter accepted by persistence endpoints (`/suites`, `/cases`, etc.) is used solely for logical database table filtering; it does **not** verify that the authenticated caller owns or has member access to the referenced project.
-3. **Admin Operation Scope**: The backend currently exposes no dedicated role-based C3 administrator endpoints. Administrative actions must not assume server-enforced privileged global access.
+To ensure research validity and eliminate confounding factors, the frontend strictly distinguishes five independent status dimensions:
 
-**Frontend Safeguards & Policies Applied:**
-- **Advisory Banners**: The frontend transparently displays an authorization status callout (`C3AuthGapNotice`) detailing that server-side auth integration is pending for C3.
-- **Client-Side Role Enforcement**: Role-based access control is enforced via React Router and `useAuth()`. The Admin workspace displays project and owner information only when retrieved via authorized endpoints (`/api/v1/projects/{projectId}`).
-- **Strict Project Scoping**: The frontend binds all C3 queries and submissions strictly to `activeProject.project_id`. The backend demonstration fallback (`proj-demo-qa`) is never silently substituted.
-- **Honest State Handling**: If database persistence is unreachable (HTTP 503) or unconfigured, the UI presents an explicit "Unavailable" state rather than fabricating zero counts. Offline and hermetic test fixtures are provided for demonstration without falsifying backend state.
-
----
-
-### 4. Fault Families vs. Effect Phases vs. Defects
-
-- **Operational Fault Families (Exactly 5)**:
-  1. `TIMEOUT_DISCONNECTION`
-  2. `TRANSIENT_5XX`
-  3. `RATE_LIMIT_429`
-  4. `TOOL_UNAVAILABILITY`
-  5. `MALFORMED_RESPONSE`
-- **Effect Phases**:
-  - `BEFORE_EFFECT`: Injected before side effect occurs on target.
-  - `AFTER_COMMIT`: Injected after side effect commits on target, with network reply lost.
-  - `PARTIAL_EFFECT`: Injected mid-operation if supported by target capabilities.
-  - `NOT_APPLICABLE`: For read-only tools or faults where effect phase does not apply.
-- **Important Conceptual Distinction**:
-  - **Duplicate Effects are NOT a fault family**. Duplicate side effects (e.g., placing two orders or charging a card twice) are a severe **recovery defect** evaluated under `RULE_DUPLICATE_EFFECTS`, not an injected fault.
+1. **Readiness Status**:
+   - `READY`: All pre-execution prerequisites, adapter identity, and fixture capabilities verified.
+   - `NOT_READY`: Environment or adapter prerequisites missing.
+   - `BLOCKED`: Target AUT unreachable or execution blocked.
+   - `TEST_NOT_READY`: Static metadata validation identified unsupported parameters.
+2. **Execution Tracking Status**:
+   - `PLANNED`, `RUNNING`, `COMPLETED`, `CANCELLED`, `INTERRUPTED`, `ERROR`, `EXECUTION_ERROR`.
+   - *Note*: An `EXECUTION_ERROR` in the harness or baseline is not an agent failure.
+3. **Exposure Status**:
+   - `CONFIRMED`: Injected operational fault matched target tool, hook, and occurrence, and was verifiably delivered.
+   - `NOT_TRIGGERED`: Target tool or occurrence was never called during trial execution (e.g. caller exited early).
+   - `EXPOSURE_UNKNOWN`: Indeterminate exposure receipt.
+   - *Note*: `NOT_TRIGGERED` is **not** a successful recovery test.
+4. **Clean Baseline Control Qualification**:
+   - `QUALIFIED`: Baseline clean trial ran without fault injection and completed successfully.
+   - `DISQUALIFIED`: Clean control failed (e.g. crashed or produced an unhandled exception).
+   - *Note*: Failed clean controls are **retained** honestly in the paired results and are never retried until passing or hidden.
+5. **Recovery Verdict**:
+   - `PASS_COMPLETED`: Task successfully completed following fault recovery.
+   - `PASS_GRACEFUL`: Task aborted gracefully without state corruption and notified caller/user.
+   - `FAIL`: Violated recovery contract rules (e.g., duplicate side effects or unverified retries).
+   - `INCONCLUSIVE`: Trial did not qualify for recovery evaluation or evidence was insufficient.
+   - *Note*: A harness deadline or timeout is not graceful recovery. Recovery verdicts are never inferred client-side.
 
 ---
 
-### 5. Readiness and Validation Semantics
+### 4. Matched Clean and Fault Trials
 
-- `STATIC_VALID`: Indicates metadata consistency, parameter type safety, schema validity, and capability match.
-- `STATIC_VALID != Execution Readiness`: Static validation does **not** prove that a live adapter, fault injector, or AUT environment is reachable or installed (`runtime_verified: false`, `execution_ready: false`).
-- Mandatory pending checks (e.g., fixture reset reachability, observation access, injector installation) are explicitly highlighted to users.
+Each matched trial pair evaluates:
+- **Clean Trial**: Injected fault disabled. Baseline control ensuring the task is executable under normal circumstances.
+- **Fault Trial**: Exactly one declared operational fault injected at a verified hook and effect phase.
+- **Comparability**: Both trials must originate from equivalent logical starting state (`EQUIVALENT_LOGICAL_STATE`) via resettable fixtures.
+- **Provenance Transparency**: Clearly marks records as `LIVE_AUT`, `DEMONSTRATION`, or `IMPORTED`.
+
+---
+
+### 5. Server-Side Authentication & Authorization Gap Analysis
+
+- **Unauthenticated Endpoints**: C3 backend routes (`/api/v1/c3/*`) are unauthenticated at the routing layer (`C3SafeRoute`).
+- **Logical Scoping vs. Authorization**: `project_id` query and body parameters scope data logically in PostgreSQL/SQLite but do not enforce tenant ownership or membership.
+- **Frontend Safeguards**:
+  - Transparent advisory banner (`C3AuthGapNotice`).
+  - Queries strictly bound to `activeProject.project_id`.
+  - Rejection of default demonstration fallback (`proj-demo-qa`) when an authorized project is active.
+  - Safe error handling: DB offline (HTTP 503) produces explicit unavailable badges rather than fabricated zeroes.
