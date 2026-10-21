@@ -23,6 +23,7 @@ import { EmptyComponentPage } from './pages/shared/EmptyComponentPage';
 import { ToolCallCorrectnessPage } from './pages/c1/ToolCallCorrectnessPage';
 import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { PolicySafetyWorkspace } from './features/c4/pages/PolicySafetyWorkspace';
 import { C3AdminWorkspace } from './features/c3/pages/C3AdminWorkspace';
 import { C3UserWorkspace } from './features/c3/pages/C3UserWorkspace';
 import { StateAwareWorkflowPage } from './features/c2/pages/StateAwareWorkflowPage';
@@ -97,7 +98,7 @@ export const App = () => {
                 <Route
                   path="policy-safety"
                   element={
-                    <EmptyComponentPage
+                    <PolicySafetyWorkspace
                       title="Policy-Aware Safety and Prompt-Injection Testing"
                       icon={ShieldCheck}
                     />
@@ -144,7 +145,7 @@ export const App = () => {
                 <Route
                   path="policy-safety"
                   element={
-                    <EmptyComponentPage
+                    <PolicySafetyWorkspace
                       title="Policy-Aware Safety and Prompt-Injection Testing"
                       icon={ShieldCheck}
                     />
