@@ -18,6 +18,8 @@ import { ConfigurationEditor } from '../../components/c1/ConfigurationEditor';
 import { GenerationPanel } from '../../components/c1/GenerationPanel';
 import { CandidateInspector } from '../../components/c1/CandidateInspector';
 import { SuiteViewer } from '../../components/c1/SuiteViewer';
+import { RunDashboard } from '../../components/c1/RunDashboard';
+import { ResultsViewer } from '../../components/c1/ResultsViewer';
 
 export const ToolCallCorrectnessPage = () => {
   const { user } = useAuth();
@@ -33,6 +35,7 @@ export const ToolCallCorrectnessPage = () => {
   const [activeJob, setActiveJob] = useState(null);
   const [activeSuite, setActiveSuite] = useState(null);
   const [suitesList, setSuitesList] = useState([]);
+  const [activeRunId, setActiveRunId] = useState(null);
 
   const [isLoadingConfigs, setIsLoadingConfigs] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
@@ -51,6 +54,7 @@ export const ToolCallCorrectnessPage = () => {
     setActiveJob(null);
     setActiveSuite(null);
     setSuitesList([]);
+    setActiveRunId(null);
     setErrorMsg(null);
     setActiveSection('setup');
 
@@ -242,21 +246,15 @@ export const ToolCallCorrectnessPage = () => {
 
           <button
             type="button"
-            onClick={() => {
-              if (hasSuites) setActiveSection('results');
-            }}
-            disabled={!hasSuites}
+            onClick={() => setActiveSection('results')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all ${
               activeSection === 'results'
                 ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                : !hasSuites
-                ? 'opacity-40 cursor-not-allowed text-slate-400'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
             <BarChart3 className="w-3.5 h-3.5" />
             <span>Results</span>
-            {!hasSuites && <Lock className="w-2.5 h-2.5" />}
           </button>
         </div>
       </div>
@@ -366,38 +364,30 @@ export const ToolCallCorrectnessPage = () => {
         </div>
       )}
 
-      {/* SECTION 3: RUNS (Execution) */}
+      {/* SECTION 3: RUNS (Execution Sandbox) */}
       {activeSection === 'runs' && (
-        <div className="p-8 text-center rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
-          <div className="flex items-center justify-center w-12 h-12 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 mx-auto">
-            <PlayCircle className="w-6 h-6" />
-          </div>
-          <div className="space-y-1">
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-              Suite Execution Sandbox
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-              Test execution runs require an accepted frozen suite ({suitesList.length} suite(s) available). In Phase 1, test generation and suite locking are verified. Live agent execution and trace capture will execute in Phase 2.
-            </p>
-          </div>
-        </div>
+        <RunDashboard
+          projectId={activeProjectId}
+          suitesList={suitesList}
+          onRunSelected={(runDetail) => {
+            if (runDetail?.summary?.run_id) {
+              setActiveRunId(runDetail.summary.run_id);
+            }
+          }}
+          onViewResults={(runId) => {
+            setActiveRunId(runId);
+            setActiveSection('results');
+          }}
+        />
       )}
 
-      {/* SECTION 4: RESULTS (Correctness Evaluation) */}
+      {/* SECTION 4: RESULTS (Correctness Evaluation & Evidence) */}
       {activeSection === 'results' && (
-        <div className="p-8 text-center rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
-          <div className="flex items-center justify-center w-12 h-12 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 mx-auto">
-            <BarChart3 className="w-6 h-6" />
-          </div>
-          <div className="space-y-1">
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-              Tool-Call Correctness Results &amp; Explanations
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-              Correctness evaluation results, evidence-linked explanations, and diagnosis reports will be populated after executing test suites in the Runs section.
-            </p>
-          </div>
-        </div>
+        <ResultsViewer
+          projectId={activeProjectId}
+          initialRunId={activeRunId}
+          onSelectRun={(runId) => setActiveRunId(runId)}
+        />
       )}
     </div>
   );

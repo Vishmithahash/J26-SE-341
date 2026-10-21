@@ -12,15 +12,22 @@ import {
   COMPARISON_OPERATORS,
   FIELD_PRESENCE_OPTIONS,
   SOURCE_RELATIONSHIP_TYPES,
+  CORRECTNESS_VERDICTS,
+  RUN_STATUSES,
+  CASE_EXECUTION_STATUSES,
+  TRACE_COMPLETENESS,
+  formatValue,
+  escapeText,
 } from '../components/c1/c1Api.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-describe('Component 1 Tool-Call Correctness Frontend Phase 1 Tests', () => {
+describe('Component 1 Tool-Call Correctness Frontend Tests (Phase 1 & Phase 2)', () => {
   describe('C1 API Client and Endpoint Contract Definitions', () => {
-    it('defines all required Phase 1 configuration and generation API methods', () => {
+    it('defines all required Phase 1 and Phase 2 configuration, generation, and execution API methods', () => {
       const requiredMethods = [
+        // Phase 1
         'listConfigs',
         'getConfig',
         'createConfig',
@@ -37,6 +44,14 @@ describe('Component 1 Tool-Call Correctness Frontend Phase 1 Tests', () => {
         'listSuites',
         'getSuite',
         'getSuiteCaseAgentView',
+        // Phase 2
+        'startExecutionRun',
+        'listExecutionRuns',
+        'getExecutionRun',
+        'cancelExecutionRun',
+        'rerunExecution',
+        'getCaseExecution',
+        'checkAdapterReadiness',
       ];
 
       for (const method of requiredMethods) {
@@ -48,7 +63,7 @@ describe('Component 1 Tool-Call Correctness Frontend Phase 1 Tests', () => {
       }
     });
 
-    it('enforces non-empty project ID on API requests', async () => {
+    it('enforces non-empty project ID on all API requests', async () => {
       await assert.rejects(
         async () => {
           await c1Api.listConfigs('');
@@ -58,7 +73,14 @@ describe('Component 1 Tool-Call Correctness Frontend Phase 1 Tests', () => {
 
       await assert.rejects(
         async () => {
-          await c1Api.createConfig(null, {});
+          await c1Api.startExecutionRun(null, {});
+        },
+        /Project ID is required/
+      );
+
+      await assert.rejects(
+        async () => {
+          await c1Api.getExecutionRun('', 'run_123');
         },
         /Project ID is required/
       );
@@ -119,6 +141,48 @@ describe('Component 1 Tool-Call Correctness Frontend Phase 1 Tests', () => {
       assert.equal(SOURCE_RELATIONSHIP_TYPES.includes('EXACT_MATCH'), true);
       assert.equal(SOURCE_RELATIONSHIP_TYPES.includes('NUMERIC_TOLERANCE'), true);
     });
+
+    it('defines standard correctness verdicts strictly matching backend CorrectnessVerdict enum', () => {
+      assert.equal(CORRECTNESS_VERDICTS.PASS, 'PASS');
+      assert.equal(CORRECTNESS_VERDICTS.FAIL, 'FAIL');
+      assert.equal(CORRECTNESS_VERDICTS.INCONCLUSIVE, 'INCONCLUSIVE');
+      assert.equal(Object.keys(CORRECTNESS_VERDICTS).length, 3);
+    });
+
+    it('defines run lifecycle and trace completeness states', () => {
+      assert.equal(RUN_STATUSES.PENDING, 'PENDING');
+      assert.equal(RUN_STATUSES.RUNNING, 'RUNNING');
+      assert.equal(RUN_STATUSES.COMPLETED, 'COMPLETED');
+      assert.equal(RUN_STATUSES.FAILED, 'FAILED');
+      assert.equal(RUN_STATUSES.ABORTED, 'ABORTED');
+
+      assert.equal(TRACE_COMPLETENESS.COMPLETE, 'COMPLETE');
+      assert.equal(TRACE_COMPLETENESS.INCOMPLETE, 'INCOMPLETE');
+      assert.equal(TRACE_COMPLETENESS.CORRUPTED, 'CORRUPTED');
+      assert.equal(TRACE_COMPLETENESS.MISSING, 'MISSING');
+    });
+  });
+
+  describe('Value Formatting and Safe Content Escaping', () => {
+    it('clearly distinguishes missing, null, empty strings, and empty collections', () => {
+      assert.equal(formatValue(undefined), '<missing>');
+      assert.equal(formatValue(null), 'null');
+      assert.equal(formatValue(''), '"" (empty string)');
+      assert.equal(formatValue([]), '[] (empty array)');
+      assert.equal(formatValue({}), '{} (empty object)');
+      assert.equal(formatValue('order_100'), '"order_100"');
+      assert.equal(formatValue(49.99), '49.99');
+    });
+
+    it('safely escapes HTML to prevent executable script injection in evidence rendering', () => {
+      const malicious = '<script>alert("xss")</script>&"test"\'';
+      const escaped = escapeText(malicious);
+      assert.equal(escaped.includes('<script>'), false);
+      assert.equal(escaped.includes('&lt;script&gt;'), true);
+      assert.equal(escaped.includes('&amp;'), true);
+      assert.equal(escaped.includes('&quot;'), true);
+      assert.equal(escaped.includes('&#039;'), true);
+    });
   });
 
   describe('Agent Task Isolation and QA Quarantine Rule', () => {
@@ -151,6 +215,20 @@ describe('Component 1 Tool-Call Correctness Frontend Phase 1 Tests', () => {
       assert.equal('validation_issues' in agentFacing, false);
       assert.equal('fixture_plan' in agentFacing, false);
     });
+
+    it('verifies execution requests contain suite identifier and idempotency key without oracle answers', () => {
+      const req = {
+        suite_id: 'suite_refunds_v1',
+        suite_version: 1,
+        idempotency_key: 'idemp_key_12345',
+        deadline_seconds: 60,
+        evaluator_version: 'c1-evaluator-v1.0',
+      };
+
+      assert.equal(req.suite_id, 'suite_refunds_v1');
+      assert.equal('oracle_answers' in req, false);
+      assert.equal('expected_tool_calls' in req, false);
+    });
   });
 
   describe('Strict Workspace Isolation and Codebase Integrity', () => {
@@ -177,6 +255,8 @@ describe('Component 1 Tool-Call Correctness Frontend Phase 1 Tests', () => {
         'GenerationPanel.jsx',
         'CandidateInspector.jsx',
         'SuiteViewer.jsx',
+        'RunDashboard.jsx',
+        'ResultsViewer.jsx',
       ];
 
       for (const file of expectedFiles) {

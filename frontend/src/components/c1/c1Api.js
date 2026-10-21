@@ -3,7 +3,7 @@ import { request, ApiError } from '../../services/api.js';
 /**
  * Component 1: Explainable Tool-Call Correctness Testing API Client.
  * Communicates with backend endpoints under /api/v1/projects/{projectId}/c1.
- * strictly scopes calls to the active project ID and attaches the X-Project-ID header.
+ * Strictly scopes calls to the active project ID and attaches the X-Project-ID header.
  */
 
 export const CASE_CATEGORIES = [
@@ -54,6 +54,72 @@ export const SOURCE_RELATIONSHIP_TYPES = [
   'CASE_INSENSITIVE_MATCH',
   'NUMERIC_TOLERANCE',
 ];
+
+export const CORRECTNESS_VERDICTS = {
+  PASS: 'PASS',
+  FAIL: 'FAIL',
+  INCONCLUSIVE: 'INCONCLUSIVE',
+};
+
+export const RUN_STATUSES = {
+  PENDING: 'PENDING',
+  INITIALIZING: 'INITIALIZING',
+  RUNNING: 'RUNNING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  ABORTED: 'ABORTED',
+};
+
+export const CASE_EXECUTION_STATUSES = {
+  NOT_EXECUTED: 'NOT_EXECUTED',
+  INITIALIZING: 'INITIALIZING',
+  RUNNING: 'RUNNING',
+  EXECUTED: 'EXECUTED',
+  EXECUTION_ERROR: 'EXECUTION_ERROR',
+  ABORTED: 'ABORTED',
+};
+
+export const TRACE_COMPLETENESS = {
+  COMPLETE: 'COMPLETE',
+  INCOMPLETE: 'INCOMPLETE',
+  CORRUPTED: 'CORRUPTED',
+  MISSING: 'MISSING',
+};
+
+/**
+ * Format arbitrary expectation or evidence value distinctly preserving types:
+ * missing vs explicit null vs empty strings vs empty collections.
+ */
+export function formatValue(val) {
+  if (val === undefined) return '<missing>';
+  if (val === null) return 'null';
+  if (typeof val === 'string') {
+    if (val === '') return '"" (empty string)';
+    return `"${val}"`;
+  }
+  if (Array.isArray(val)) {
+    if (val.length === 0) return '[] (empty array)';
+    return JSON.stringify(val);
+  }
+  if (typeof val === 'object') {
+    if (Object.keys(val).length === 0) return '{} (empty object)';
+    return JSON.stringify(val);
+  }
+  return String(val);
+}
+
+/**
+ * Escape text for safe rendering in DOM, preventing executable HTML or script injection.
+ */
+export function escapeText(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
 function buildBaseUrl(projectId) {
   if (!projectId || typeof projectId !== 'string') {
@@ -210,6 +276,71 @@ export const c1Api = {
         headers: getC1Headers(projectId),
       }
     );
+  },
+
+  // Phase 2: Execution Runs and Results Endpoints
+  async startExecutionRun(projectId, payload) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/runs`, {
+      method: 'POST',
+      headers: getC1Headers(projectId),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listExecutionRuns(projectId, { verdict = null, limit = 50, offset = 0 } = {}) {
+    const base = buildBaseUrl(projectId);
+    const params = new URLSearchParams();
+    if (verdict) params.set('verdict', verdict);
+    params.set('limit', String(limit));
+    params.set('offset', String(offset));
+    return request(`${base}/runs?${params.toString()}`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async getExecutionRun(projectId, runId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/runs/${encodeURIComponent(runId)}`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async cancelExecutionRun(projectId, runId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: 'POST',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async rerunExecution(projectId, runId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/runs/${encodeURIComponent(runId)}/rerun`, {
+      method: 'POST',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async getCaseExecution(projectId, runId, caseId) {
+    const base = buildBaseUrl(projectId);
+    return request(
+      `${base}/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}`,
+      {
+        method: 'GET',
+        headers: getC1Headers(projectId),
+      }
+    );
+  },
+
+  async checkAdapterReadiness(projectId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/adapter/readiness`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
   },
 };
 
