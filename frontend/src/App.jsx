@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ListChecks, Workflow, RotateCcw, ShieldCheck } from 'lucide-react';
+import { ListChecks, RotateCcw, Workflow, ShieldCheck } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { ProjectProvider } from './context/ProjectContext';
@@ -20,9 +20,13 @@ import { ModelSelectionPage } from './pages/shared/ModelSelectionPage';
 import { ProfilePage } from './pages/shared/ProfilePage';
 import { SettingsPage } from './pages/shared/SettingsPage';
 import { EmptyComponentPage } from './pages/shared/EmptyComponentPage';
+import { ToolCallCorrectnessPage } from './pages/c1/ToolCallCorrectnessPage';
 import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { PolicySafetyWorkspace } from './features/c4/pages/PolicySafetyWorkspace';
+import { C3AdminWorkspace } from './features/c3/pages/C3AdminWorkspace';
+import { C3UserWorkspace } from './features/c3/pages/C3UserWorkspace';
+import { StateAwareWorkflowPage } from './features/c2/pages/StateAwareWorkflowPage';
 
 // Role-aware root redirect component
 const RootRedirect = () => {
@@ -76,33 +80,20 @@ export const App = () => {
                 <Route path="projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="projects/:projectId/edit" element={<ProjectFormPage />} />
 
-                {/* Preserved Empty Research Component Shells */}
+                {/* Component 1: Explainable Tool-Call Correctness Testing */}
                 <Route
                   path="tool-call-correctness"
-                  element={
-                    <EmptyComponentPage
-                      title="Explainable Tool-Call Correctness Testing"
-                      icon={ListChecks}
-                    />
-                  }
+                  element={<ToolCallCorrectnessPage />}
                 />
+                {/* State-Aware Multi-Step Workflow Testing */}
                 <Route
                   path="workflow-testing"
-                  element={
-                    <EmptyComponentPage
-                      title="State-Aware Multi-Step Workflow Testing"
-                      icon={Workflow}
-                    />
-                  }
+                  element={<StateAwareWorkflowPage />}
                 />
+                {/* Robustness and Failure Recovery Testing */}
                 <Route
                   path="robustness-recovery"
-                  element={
-                    <EmptyComponentPage
-                      title="Robustness and Failure Recovery Testing"
-                      icon={RotateCcw}
-                    />
-                  }
+                  element={<C3AdminWorkspace />}
                 />
                 <Route
                   path="policy-safety"
@@ -136,33 +127,20 @@ export const App = () => {
                 <Route path="projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="projects/:projectId/edit" element={<ProjectFormPage />} />
 
-                {/* Preserved Empty Research Component Shells */}
+                {/* Component 1: Explainable Tool-Call Correctness Testing */}
                 <Route
                   path="tool-call-correctness"
-                  element={
-                    <EmptyComponentPage
-                      title="Explainable Tool-Call Correctness Testing"
-                      icon={ListChecks}
-                    />
-                  }
+                  element={<ToolCallCorrectnessPage />}
                 />
+                {/* State-Aware Multi-Step Workflow Testing */}
                 <Route
                   path="workflow-testing"
-                  element={
-                    <EmptyComponentPage
-                      title="State-Aware Multi-Step Workflow Testing"
-                      icon={Workflow}
-                    />
-                  }
+                  element={<StateAwareWorkflowPage />}
                 />
+                {/* Robustness and Failure Recovery Testing */}
                 <Route
                   path="robustness-recovery"
-                  element={
-                    <EmptyComponentPage
-                      title="Robustness and Failure Recovery Testing"
-                      icon={RotateCcw}
-                    />
-                  }
+                  element={<C3UserWorkspace />}
                 />
                 <Route
                   path="policy-safety"

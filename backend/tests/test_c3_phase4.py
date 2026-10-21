@@ -645,128 +645,249 @@ async def test_gap_d_suite_runner_consumes_frozen_artifact_file():
 # 5. Stateless API & Offline CLI Verification
 # ---------------------------------------------------------------------------
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from app.database import Base, get_db
+from app.shared.auth.dependencies import require_active_user
+from app.shared.auth.models import User, UserRole
+from app.shared.projects.models import Project, ProjectConnectionState, ProjectLifecycle
+
+
+def _setup_c3_phase4_test_client():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = TestingSessionLocal()
+
+    user = User(
+        id=999,
+        name="C3 Test User",
+        email="c3test@example.com",
+        canonical_email="c3test@example.com",
+        password_hash="fakehash",
+        role=UserRole.USER,
+        is_active=True,
+    )
+    session.add(user)
+    for pid in ["proj-qa-001", "proj-demo-qa"]:
+        proj = Project(
+            project_id=pid,
+            owner_user_id=999,
+            name=f"Project {pid}",
+            domain="ecommerce",
+            environment="TEST",
+            backend_base_url="http://127.0.0.1:8000",
+            backend_health_url="http://127.0.0.1:8000/health",
+            configuration_version=1,
+            lifecycle=ProjectLifecycle.ACTIVE.value,
+            connection_state=ProjectConnectionState.CONNECTED.value,
+        )
+        session.add(proj)
+    session.commit()
+
+    def override_get_db():
+        try:
+            yield session
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_active_user] = lambda: user
+    return session, engine, user
+
 
 def test_api_evaluate_endpoint_happy_path():
     """POST /api/v1/c3/recovery/evaluate returns HTTP 200 with PASS_COMPLETED."""
-    evidence = make_synthetic_matched_evidence(caller_outcome="SUCCESS_AFTER_RETRY")
-    c2_facts = [
-        {
-            "assertion_id": "state_order_created",
-            "value": "TRUE",
-            "provenance": "C2_DEMO_FIXTURE",
+    session, engine, user = _setup_c3_phase4_test_client()
+    try:
+        evidence = make_synthetic_matched_evidence(caller_outcome="SUCCESS_AFTER_RETRY")
+        cand_case = make_demonstration_candidate_case()
+        cand_case.project_id = "proj-qa-001"
+        c2_facts = [
+            {
+                "assertion_id": "state_order_created",
+                "value": "TRUE",
+                "provenance": "C2_DEMO_FIXTURE",
+            }
+        ]
+        payload = {
+            "project_id": "proj-qa-001",
+            "case_id": "case-c3-demo-001",
+            "evaluator_version": "1.0.0",
+            "rule_set_version": "1.0.0",
+            "candidate_case": cand_case.model_dump(mode="json"),
+            "recovery_contract": make_demonstration_recovery_contract().model_dump(
+                mode="json"
+            ),
+            "matched_evidence": evidence.model_dump(mode="json"),
+            "c2_facts": c2_facts,
         }
-    ]
-    payload = {
-        "project_id": "proj-qa-001",
-        "case_id": "case-c3-demo-001",
-        "evaluator_version": "1.0.0",
-        "rule_set_version": "1.0.0",
-        "candidate_case": make_demonstration_candidate_case().model_dump(mode="json"),
-        "recovery_contract": make_demonstration_recovery_contract().model_dump(
-            mode="json"
-        ),
-        "matched_evidence": evidence.model_dump(mode="json"),
-        "c2_facts": c2_facts,
-    }
 
-    resp = client.post("/api/v1/c3/recovery/evaluate", json=payload)
-    assert resp.status_code == 200
-    data = resp.json()
+        resp = client.post("/api/v1/c3/recovery/evaluate", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
 
-    assert data["evaluation_status"] == "EVALUATED"
-    assert data["recovery_verdict"] == "PASS_COMPLETED"
-    assert len(data["rule_results"]) == 6
-    assert data["first_violated_rule"] is None
+        assert data["evaluation_status"] == "EVALUATED"
+        assert data["recovery_verdict"] == "PASS_COMPLETED"
+        assert len(data["rule_results"]) == 6
+        assert data["first_violated_rule"] is None
+    finally:
+        app.dependency_overrides.clear()
+        session.close()
+        Base.metadata.drop_all(bind=engine)
 
 
 def test_api_evaluate_endpoint_structural_validation_error():
     """POST /api/v1/c3/recovery/evaluate returns HTTP 422 on malformed body."""
-    resp = client.post("/api/v1/c3/recovery/evaluate", json={"bad_field": 123})
-    assert resp.status_code == 422
-    data = resp.json()
-    assert "detail" in data
+    session, engine, user = _setup_c3_phase4_test_client()
+    try:
+        resp = client.post("/api/v1/c3/recovery/evaluate", json={"bad_field": 123})
+        assert resp.status_code == 422
+        data = resp.json()
+        assert "detail" in data
+    finally:
+        app.dependency_overrides.clear()
+        session.close()
+        Base.metadata.drop_all(bind=engine)
 
 
 def test_api_and_cli_evaluation_parity():
     """Offline evaluate CLI and API produce exact identical evaluation verdicts."""
-    evidence = make_synthetic_matched_evidence(caller_outcome="SUCCESS_AFTER_RETRY")
+    session, engine, user = _setup_c3_phase4_test_client()
+    try:
+        evidence = make_synthetic_matched_evidence(caller_outcome="SUCCESS_AFTER_RETRY")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        ev_file = Path(tmpdir) / "evidence.json"
-        with open(ev_file, "w", encoding="utf-8") as f:
-            f.write(evidence.model_dump_json(indent=2))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ev_file = Path(tmpdir) / "evidence.json"
+            with open(ev_file, "w", encoding="utf-8") as f:
+                f.write(evidence.model_dump_json(indent=2))
 
-        # Run CLI with --synthetic-facts
-        exit_code = run_evaluation_cli(
-            [
-                "--evidence-file",
-                str(ev_file),
-                "--synthetic-facts",
-                "--export-dir",
-                tmpdir,
-            ]
-        )
-        assert exit_code == 0
+            # Run CLI with --synthetic-facts
+            exit_code = run_evaluation_cli(
+                [
+                    "--evidence-file",
+                    str(ev_file),
+                    "--synthetic-facts",
+                    "--export-dir",
+                    tmpdir,
+                ]
+            )
+            assert exit_code == 0
 
-        # Find exported eval artifact
-        eval_files = list(Path(tmpdir).glob("eval_*.json"))
-        assert len(eval_files) == 1
-        with open(eval_files[0], encoding="utf-8") as f:
-            cli_res = json.load(f)
+            # Find exported eval artifact
+            eval_files = list(Path(tmpdir).glob("eval_*.json"))
+            assert len(eval_files) == 1
+            with open(eval_files[0], encoding="utf-8") as f:
+                cli_res = json.load(f)
 
-    # Now run API with exact same inputs
-    c2_facts = [
-        {
-            "assertion_id": "state_order_created",
-            "value": "TRUE",
-            "provenance": "C2_DEMO_FIXTURE",
+        # Now run API with exact same inputs
+        cand_case = make_demonstration_candidate_case()
+        cand_case.project_id = evidence.project_id
+        c2_facts = [
+            {
+                "assertion_id": "state_order_created",
+                "value": "TRUE",
+                "provenance": "C2_DEMO_FIXTURE",
+            }
+        ]
+        payload = {
+            "project_id": evidence.project_id,
+            "case_id": evidence.case_id,
+            "candidate_case": cand_case.model_dump(mode="json"),
+            "recovery_contract": make_demonstration_recovery_contract().model_dump(
+                mode="json"
+            ),
+            "matched_evidence": evidence.model_dump(mode="json"),
+            "c2_facts": c2_facts,
         }
-    ]
-    payload = {
-        "project_id": evidence.project_id,
-        "case_id": evidence.case_id,
-        "candidate_case": make_demonstration_candidate_case().model_dump(mode="json"),
-        "recovery_contract": make_demonstration_recovery_contract().model_dump(
-            mode="json"
-        ),
-        "matched_evidence": evidence.model_dump(mode="json"),
-        "c2_facts": c2_facts,
-    }
-    api_resp = client.post("/api/v1/c3/recovery/evaluate", json=payload)
-    assert api_resp.status_code == 200
-    api_res = api_resp.json()
+        api_resp = client.post("/api/v1/c3/recovery/evaluate", json=payload)
+        assert api_resp.status_code == 200
+        api_res = api_resp.json()
 
-    assert (
-        cli_res["recovery_verdict"] == api_res["recovery_verdict"] == "PASS_COMPLETED"
-    )
-    assert cli_res["evaluation_status"] == api_res["evaluation_status"] == "EVALUATED"
+        assert (
+            cli_res["recovery_verdict"] == api_res["recovery_verdict"] == "PASS_COMPLETED"
+        )
+        assert cli_res["evaluation_status"] == api_res["evaluation_status"] == "EVALUATED"
+    finally:
+        app.dependency_overrides.clear()
+        session.close()
+        Base.metadata.drop_all(bind=engine)
 
 
 def test_static_endpoints_preserve_null_recovery_verdict():
-    from app.components.c3_robustness_recovery.contracts.schemas import (
-        FaultValidationRequest,
-    )
+    session, engine, user = _setup_c3_phase4_test_client()
+    try:
+        from app.components.c3_robustness_recovery.contracts.schemas import (
+            FaultValidationRequest,
+        )
 
-    val_req = FaultValidationRequest(
-        candidate_case=make_demonstration_candidate_case(),
-        adapter_manifest=DemonstrationToolAdapter(
-            fixture_manager=DemonstrationFixtureManager()
-        ).get_manifest(),
-        task_fixture_metadata=make_demonstration_task_fixture_metadata(),
-        recovery_contract=make_demonstration_recovery_contract(),
-    )
-    val_resp = client.post(
-        "/api/v1/c3/cases/validate", json=val_req.model_dump(mode="json")
-    )
-    assert val_resp.status_code == 200
-    assert val_resp.json()["recovery_verdict"] is None
+        cand_case = make_demonstration_candidate_case()
+        cand_case.project_id = "proj-demo-qa"
+        val_req = FaultValidationRequest(
+            candidate_case=cand_case,
+            adapter_manifest=DemonstrationToolAdapter(
+                fixture_manager=DemonstrationFixtureManager()
+            ).get_manifest(),
+            task_fixture_metadata=make_demonstration_task_fixture_metadata(),
+            recovery_contract=make_demonstration_recovery_contract(),
+        )
+        val_resp = client.post(
+            "/api/v1/c3/cases/validate", json=val_req.model_dump(mode="json")
+        )
+        assert val_resp.status_code == 200
+        assert val_resp.json()["recovery_verdict"] is None
 
-    gen_req = build_demonstration_generation_request()
-    gen_resp = client.post(
-        "/api/v1/c3/cases/generate", json=gen_req.model_dump(mode="json")
-    )
-    assert gen_resp.status_code == 200
-    assert gen_resp.json()["recovery_verdict"] is None
+        gen_req = build_demonstration_generation_request()
+        gen_req.project_id = "proj-demo-qa"
+        gen_resp = client.post(
+            "/api/v1/c3/cases/generate", json=gen_req.model_dump(mode="json")
+        )
+        assert gen_resp.status_code == 200
+        assert gen_resp.json()["recovery_verdict"] is None
+    finally:
+        app.dependency_overrides.clear()
+        session.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+def test_c3_server_side_authorization_rules():
+    """Verify C3 endpoints reject foreign projects (404), inconsistent project IDs (422), unauth (401)."""
+    # 1. Unauthenticated request to protected endpoint rejected with 401
+    resp_unauth = client.get("/api/v1/c3/suites?project_id=proj-qa-001")
+    assert resp_unauth.status_code == 401
+
+    session, engine, user = _setup_c3_phase4_test_client()
+    try:
+        # 2. Foreign project lookup rejected with 404 (prevent identifier enumeration)
+        resp_foreign = client.get("/api/v1/c3/suites?project_id=proj-foreign-999")
+        assert resp_foreign.status_code == 404
+
+        # 3. Inconsistent project identity across request payload rejected with 422
+        evidence = make_synthetic_matched_evidence(caller_outcome="SUCCESS_AFTER_RETRY")
+        cand_case = make_demonstration_candidate_case()
+        cand_case.project_id = "proj-demo-qa"  # mismatch with proj-qa-001
+        payload_mismatch = {
+            "project_id": "proj-qa-001",
+            "case_id": "case-c3-demo-001",
+            "evaluator_version": "1.0.0",
+            "rule_set_version": "1.0.0",
+            "candidate_case": cand_case.model_dump(mode="json"),
+            "recovery_contract": make_demonstration_recovery_contract().model_dump(mode="json"),
+            "matched_evidence": evidence.model_dump(mode="json"),
+            "c2_facts": [],
+        }
+        resp_mismatch = client.post("/api/v1/c3/recovery/evaluate", json=payload_mismatch)
+        assert "Inconsistent project identity" in resp_mismatch.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+        session.close()
+        Base.metadata.drop_all(bind=engine)
+
 
 
 # ---------------------------------------------------------------------------

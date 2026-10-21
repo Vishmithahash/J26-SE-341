@@ -747,3 +747,5 @@ def test_existing_application_routes_and_openapi_intact():
         paths = r_spec.json()["paths"]
         assert "/api/v1/c3/fault-catalog" in paths
         assert "/api/v1/c3/cases/validate" in paths
+
+

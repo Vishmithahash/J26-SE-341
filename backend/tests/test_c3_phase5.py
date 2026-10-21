@@ -116,9 +116,43 @@ def test_db():
         Base.metadata.drop_all(bind=engine)
 
 
+from app.shared.auth.dependencies import require_active_user
+from app.shared.auth.models import User, UserRole
+from app.shared.projects.models import (
+    Project,
+    ProjectConnectionState,
+    ProjectLifecycle,
+)
+
+
 @pytest.fixture
 def test_client(test_db):
-    """TestClient with get_db dependency overridden to the isolated in-memory DB."""
+    """TestClient with authenticated user, accessible test projects, and in-memory DB override."""
+    user = User(
+        id=999,
+        name="C3 Test User",
+        email="c3test@example.com",
+        canonical_email="c3test@example.com",
+        password_hash="fakehash",
+        role=UserRole.USER,
+        is_active=True,
+    )
+    test_db.add(user)
+    for pid in ["proj-http", "proj-qa-001", "proj-demo-qa", "proj-test-01"]:
+        proj = Project(
+            project_id=pid,
+            owner_user_id=999,
+            name=f"Project {pid}",
+            domain="ecommerce",
+            environment="TEST",
+            backend_base_url="http://127.0.0.1:8000",
+            backend_health_url="http://127.0.0.1:8000/health",
+            configuration_version=1,
+            lifecycle=ProjectLifecycle.ACTIVE.value,
+            connection_state=ProjectConnectionState.CONNECTED.value,
+        )
+        test_db.add(proj)
+    test_db.commit()
 
     def override_get_db():
         try:
@@ -127,9 +161,11 @@ def test_client(test_db):
             pass
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_active_user] = lambda: user
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+
 
 
 def make_test_frozen_suite(project_id: str = "proj-test-01") -> FrozenSuite:
