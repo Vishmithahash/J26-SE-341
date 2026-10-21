@@ -1,63 +1,59 @@
 /**
- * Component 4 (C4) - Active Project Hook
- * Handles project switching, state isolation, and stale async response prevention.
- * Provides fallback project discovery from projectsApi if context hasn't resolved an active project.
+ * Component 4 (C4) - Authoritative Active Project Hook
+ * Strictly consumes the shared activeProject and activeProjectId from ProjectContext.
+ * Selection delegates exclusively to the shared selectActiveProject service.
+ * Eliminates silent auto-discovery fallbacks and cross-account project leakage.
+ * Tracks generation counters to invalidate stale asynchronous responses on project/account changes.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import { useProject } from '../../../context/ProjectContext';
 import { useAuth } from '../../../context/AuthContext';
 import { projectsApi } from '../../../services/projects';
 
 export function useC4Project(onProjectReset) {
   const {
-    activeProject: contextProject,
-    activeProjectId: contextProjectId,
-    isLoadingActive: contextLoading,
+    activeProject,
+    activeProjectId,
+    isLoadingActive,
+    selectActiveProject,
   } = useProject();
   const { user, isAuthenticated } = useAuth();
 
-  const [fallbackProject, setFallbackProject] = useState(null);
-  const [isLoadingFallback, setIsLoadingFallback] = useState(false);
   const [availableProjects, setAvailableProjects] = useState([]);
+  const [isLoadingAvailable, setIsLoadingAvailable] = useState(false);
 
-  // Auto-resolve fallback project if context didn't resolve one
+  // Load authorized projects list purely for selection picker dropdown options (no auto-selection)
   useEffect(() => {
     let isCancelled = false;
-    async function loadFallback() {
-      if (contextProject || contextProjectId || !isAuthenticated || !user?.id) {
+    async function loadOptions() {
+      if (!isAuthenticated || !user?.id) {
+        setAvailableProjects([]);
         return;
       }
-      setIsLoadingFallback(true);
+      setIsLoadingAvailable(true);
       try {
-        const res = await projectsApi.listProjects({ limit: 20 });
+        const res = await projectsApi.listProjects({ limit: 50 });
         if (isCancelled) return;
         const items = res?.items || [];
-        setAvailableProjects(items);
-        const activeOne = items.find((p) => p.lifecycle !== 'archived') || items[0] || null;
-        if (activeOne) {
-          setFallbackProject(activeOne);
-        }
-      } catch (err) {
-        console.warn('Could not auto-resolve project for C4:', err);
+        setAvailableProjects(items.filter((p) => p.lifecycle !== 'archived'));
+      } catch {
+        if (!isCancelled) setAvailableProjects([]);
       } finally {
-        if (!isCancelled) setIsLoadingFallback(false);
+        if (!isCancelled) setIsLoadingAvailable(false);
       }
     }
-    loadFallback();
+    loadOptions();
     return () => {
       isCancelled = true;
     };
-  }, [contextProject, contextProjectId, isAuthenticated, user?.id]);
-
-  const activeProject = contextProject || fallbackProject;
-  const activeProjectId = contextProjectId || fallbackProject?.project_id || null;
-  const isLoadingActive = contextLoading || (isLoadingFallback && !activeProject);
+  }, [isAuthenticated, user?.id]);
 
   const previousProjectIdRef = useRef(activeProjectId);
   const previousUserIdRef = useRef(user?.id);
   const generationRef = useRef(0);
 
+  // Invalidate in-flight reads, clear modals and selection states on project or account transitions
   useEffect(() => {
     const projectChanged = previousProjectIdRef.current !== activeProjectId;
     const userChanged = previousUserIdRef.current !== user?.id;
@@ -73,19 +69,26 @@ export function useC4Project(onProjectReset) {
     }
   }, [activeProjectId, user?.id, onProjectReset]);
 
-  const switchProject = useCallback((project) => {
-    setFallbackProject(project);
-  }, []);
+  // Project selection delegates strictly to shared ProjectContext authority
+  const switchProject = useCallback(
+    async (projectOrId) => {
+      const pid = typeof projectOrId === 'string' ? projectOrId : projectOrId?.project_id;
+      if (!pid || typeof selectActiveProject !== 'function') return;
+      await selectActiveProject(pid);
+    },
+    [selectActiveProject]
+  );
 
   const getGeneration = () => generationRef.current;
   const isCurrentGeneration = (gen) => gen === generationRef.current;
 
   return {
-    activeProject,
-    activeProjectId,
+    activeProject: activeProject || null,
+    activeProjectId: activeProjectId || null,
     availableProjects,
+    isLoadingAvailable,
     switchProject,
-    isLoadingActive,
+    isLoadingActive: Boolean(isLoadingActive),
     isProjectReady: Boolean(activeProjectId && !isLoadingActive),
     getGeneration,
     isCurrentGeneration,

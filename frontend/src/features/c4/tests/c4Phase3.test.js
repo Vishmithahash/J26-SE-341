@@ -15,7 +15,6 @@ import {
   RULE_CHANGE_TYPES,
   CASE_IMPACT_LEVELS,
   CASE_DECISION_ACTIONS,
-  PLAN_LIFECYCLE_STATES,
   REGRESSION_EXECUTION_MODES,
   VERDICT_TRANSITION_TYPES,
   VIOLATION_STAGES,
@@ -105,6 +104,11 @@ describe('C4 Phase 3: Taxonomy & Enums', () => {
     assert.equal(DATASET_SPLITS.DEV, 'DEV');
     assert.equal(DATASET_SPLITS.PILOT, 'PILOT');
     assert.equal(DATASET_SPLITS.HELD_OUT, 'HELD_OUT');
+
+    assert.equal(EVIDENCE_ORIGINS.SIMULATED_TEST_RUN, 'SIMULATED_TEST_RUN');
+    assert.equal(LABEL_ORIGINS.HUMAN_REVIEWED, 'HUMAN_REVIEWED');
+    assert.equal(REVIEW_STATUSES.IN_AGREEMENT, 'IN_AGREEMENT');
+    assert.equal(EXPERIMENT_STATUSES.COMPLETED, 'COMPLETED');
   });
 });
 
@@ -216,7 +220,7 @@ describe('C4 Phase 3: Component Structure & UI Verification', () => {
     assert.ok(fs.existsSync(filePath), 'C4DashboardCard.jsx must exist');
     const content = fs.readFileSync(filePath, 'utf-8');
 
-    assert.ok(content.includes('Phases 1, 2 & 3 Complete'), 'Denotes full C4 phase completion');
+    assert.ok(content.includes('Policy Safety Active'), 'Denotes active C4 operational status');
     assert.ok(content.includes('Verdict Distribution'), 'Shows verdict distribution');
     assert.ok(content.includes('Latest Run Verdict:'), 'Shows latest run verdict');
     assert.ok(content.includes('Exposure:'), 'Shows exposure status');
@@ -233,6 +237,6 @@ describe('C4 Phase 3: Component Structure & UI Verification', () => {
     assert.ok(content.includes('ResearchEvaluationSection'), 'Mounts ResearchEvaluationSection');
     assert.ok(content.includes('FindingDetailsModal'), 'Mounts FindingDetailsModal');
     assert.ok(content.includes('ReportExportModal'), 'Mounts ReportExportModal');
-    assert.ok(content.includes('Component 4 • Complete (Phases 1, 2 & 3 Active)'), 'Banner denotes Phase 1, 2, and 3 active');
+    assert.ok(content.includes('Component 4 • Policy-Aware Safety & Injection Testing Workspace'), 'Banner denotes operational workspace status');
   });
 });

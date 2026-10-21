@@ -111,7 +111,7 @@ export function PolicyRegressionSection({ regression, contracts }) {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                PHASE 3 ACTIVE
+                Impact Analysis
               </span>
               <h2 className="text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">
                 Policy-Change Tracking, Impact Diffing & Selective Regression

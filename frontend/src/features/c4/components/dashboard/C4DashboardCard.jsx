@@ -157,7 +157,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
             <ShieldCheck className="w-5 h-5" />
           </div>
           <span className="text-[11px] font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 font-mono">
-            Phases 1, 2 & 3 Complete
+            Policy Safety Active
           </span>
         </div>
 
@@ -217,7 +217,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
                 <div className="pt-2 border-t border-slate-200/50 dark:border-slate-700/50">
                   <div className="flex items-center justify-between text-xs mb-1.5">
                     <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                      Verdict Distribution ({runsList.length} trials):
+                      Verdict Distribution (Recent {runsList.length} runs):
                     </span>
                   </div>
                   <div className="grid grid-cols-4 gap-1 text-center text-[10px] font-mono">

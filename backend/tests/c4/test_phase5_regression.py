@@ -174,15 +174,12 @@ def repo(db_session):
 
 @pytest.fixture
 def client(db_session):
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
+    from tests.c4.auth_test_utils import create_authenticated_c4_client
 
-    app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
-        yield test_client
+    test_client = create_authenticated_c4_client(
+        db_session, project_ids=["proj-p5-api"]
+    )
+    yield test_client
     app.dependency_overrides.clear()
 
 

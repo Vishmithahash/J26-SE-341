@@ -215,7 +215,7 @@ export const PolicySafetyWorkspace = ({
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold uppercase tracking-wider">
               <TitleIcon className="w-3.5 h-3.5" />
-              Component 4 • Complete (Phases 1, 2 & 3 Active)
+              Component 4 • Policy-Aware Safety & Injection Testing Workspace
             </div>
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 text-xs font-medium">
               <Shield className="w-3 h-3 text-slate-400" />

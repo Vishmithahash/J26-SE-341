@@ -117,9 +117,18 @@ from app.components.c4_policy_aware_safety.validation.case_validator import (
 from app.components.c4_policy_aware_safety.validation.validator import (
     PolicyContractValidator,
 )
+from app.components.c4_policy_aware_safety.api.dependencies import (
+    get_authorized_c4_project,
+)
 from app.database import get_db
+from app.shared.auth.dependencies import require_active_user
+from app.shared.auth.models import User
 
-router = APIRouter(prefix="/projects/{project_id}/c4", tags=["C4 Policy-Aware Safety"])
+router = APIRouter(
+    prefix="/projects/{project_id}/c4",
+    tags=["C4 Policy-Aware Safety"],
+    dependencies=[Depends(get_authorized_c4_project)],
+)
 
 
 class RuleDerivationRequest(BaseModel):
@@ -367,6 +376,7 @@ def accept_contract(
     contract_id: str,
     version: int,
     accept_req: ContractAcceptanceRequest,
+    current_user: Annotated[User, Depends(require_active_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
     repo = C4Repository(db)
@@ -1245,6 +1255,22 @@ def compare_policy_contracts(
             detail=f"Project ID mismatch: route '{project_id}' != payload '{request.project_id}'.",
         )
     repo = C4Repository(db)
+    baseline = repo.get_contract_version(
+        project_id, request.baseline_contract_id, request.baseline_contract_version
+    )
+    if not baseline:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Baseline contract '{request.baseline_contract_id}' v{request.baseline_contract_version} not found in project '{project_id}'.",
+        )
+    candidate = repo.get_contract_version(
+        project_id, request.candidate_contract_id, request.candidate_contract_version
+    )
+    if not candidate:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Candidate contract '{request.candidate_contract_id}' v{request.candidate_contract_version} not found in project '{project_id}'.",
+        )
     service = C4RegressionService(repository=repo)
     try:
         return service.compare_contracts(request)
@@ -1284,6 +1310,20 @@ def create_regression_plan(
     db: Annotated[Session, Depends(get_db)],
 ):
     repo = C4Repository(db)
+    comparison = repo.get_policy_comparison(project_id, request.comparison_id)
+    if not comparison:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Comparison '{request.comparison_id}' not found in project '{project_id}'.",
+        )
+    binding = repo.get_domain_binding(
+        project_id, request.binding_id, request.binding_version
+    )
+    if not binding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain binding '{request.binding_id}' v{request.binding_version} not found in project '{project_id}'.",
+        )
     service = C4RegressionService(repository=repo)
     try:
         return service.create_regression_plan(
@@ -1532,6 +1572,16 @@ def record_reviewer_decision(
     db: Annotated[Session, Depends(get_db)],
 ):
     repo = C4Repository(db)
+    cases = repo.list_test_cases(project_id)
+    case_ids = {c.case_id for c in cases}
+    if review.case_id not in case_ids:
+        datasets = repo.list_evaluation_datasets(project_id)
+        dataset_case_ids = {c.case_id for ds in datasets for c in ds.cases}
+        if review.case_id not in dataset_case_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Referenced test case '{review.case_id}' not found in project '{project_id}'.",
+            )
     return repo.save_evaluation_review(review, project_id)
 
 
@@ -1572,6 +1622,14 @@ def create_experiment(
             detail=f"Project ID mismatch: config declares '{config.project_id}', route has '{project_id}'.",
         )
     repo = C4Repository(db)
+    dataset = repo.get_evaluation_dataset(
+        project_id, config.dataset_id, config.dataset_version
+    )
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evaluation dataset '{config.dataset_id}' v{config.dataset_version} not found in project '{project_id}'.",
+        )
     service = ExperimentService(repository=repo)
     return service.create_experiment(config)
 
@@ -1587,6 +1645,12 @@ def execute_experiment(
     db: Annotated[Session, Depends(get_db)],
 ):
     repo = C4Repository(db)
+    config = repo.get_experiment_config(project_id, experiment_id)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found in project '{project_id}'.",
+        )
     service = ExperimentService(repository=repo)
     try:
         return service.execute_experiment(project_id, experiment_id)

@@ -63,7 +63,7 @@ export function ProjectHeader({ activeProject, isLoadingActive, availableProject
             className="inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs rounded-xl transition-colors shadow-sm shrink-0"
           >
             <FolderKanban className="w-4 h-4" />
-            <span>Register New Application</span>
+            <span>Select or Register Project</span>
             <ExternalLink className="w-3.5 h-3.5 ml-0.5" />
           </Link>
         </div>

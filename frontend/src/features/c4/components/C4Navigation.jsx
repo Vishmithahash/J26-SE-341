@@ -11,8 +11,6 @@ import {
   PlayCircle,
   GitCompare,
   BarChart3,
-  Clock,
-  CheckCircle2,
 } from 'lucide-react';
 import { C4_WORKSPACE_TABS } from '../api/types.js';
 
@@ -94,30 +92,6 @@ export function C4Navigation({ activeTab, onSelectTab }) {
                 }`}
               />
               <span>{tab.label}</span>
-
-              {tab.isImplemented ? (
-                <span
-                  className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                    isActive
-                      ? 'bg-indigo-700/80 text-indigo-100'
-                      : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
-                  }`}
-                >
-                  <CheckCircle2 className="w-2.5 h-2.5" />
-                  P1
-                </span>
-              ) : (
-                <span
-                  className={`inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                    isActive
-                      ? 'bg-indigo-700/80 text-indigo-200'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
-                  }`}
-                >
-                  <Clock className="w-2.5 h-2.5" />
-                  {tab.phase}
-                </span>
-              )}
             </button>
           );
         })}

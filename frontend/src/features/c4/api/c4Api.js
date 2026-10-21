@@ -5,13 +5,32 @@
 
 import { request, ApiError } from '../../../services/api.js';
 
-const C4_API_BASE =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_BACKEND_URL) ||
-  'http://127.0.0.1:8000';
+function getApiBase() {
+  const envBase =
+    (typeof import.meta !== 'undefined' &&
+      (import.meta.env?.VITE_BACKEND_URL ||
+        import.meta.env?.VITE_API_BASE ||
+        import.meta.env?.VITE_API_URL)) ||
+    (typeof window !== 'undefined' && (window.__BACKEND_URL__ || window.__API_BASE__)) ||
+    '';
+  if (envBase) {
+    // Strip trailing slashes and common API prefixes like /api/v1 or /api
+    // so we never blindly append /projects to an existing API prefix
+    return envBase.replace(/\/api(\/v\d+)?\/?$/, '').replace(/\/+$/, '');
+  }
+  // If running in development browser environment on default Vite ports without a /projects proxy,
+  // target the backend port 8000 using current location host dynamically without hardcoded origin
+  if (typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000')) {
+    return `${window.location.protocol}//${window.location.hostname}:8000`;
+  }
+  return '';
+}
 
 function buildUrl(projectId, path) {
+  const base = getApiBase();
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
-  return `${C4_API_BASE}/projects/${encodeURIComponent(projectId)}/c4${cleanPath}`;
+  const route = `/projects/${encodeURIComponent(projectId)}/c4${cleanPath}`;
+  return base ? `${base}${route}` : route;
 }
 
 export const c4Api = {

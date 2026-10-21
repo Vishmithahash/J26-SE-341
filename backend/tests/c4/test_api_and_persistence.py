@@ -57,8 +57,49 @@ def client(db_session):
     def override_get_db():
         yield db_session
 
+    from app.config import Settings, get_settings
+    from app.shared.auth.models import User, UserRole
+    from app.shared.auth.security import create_access_token
+    from app.shared.projects.models import (
+        Project,
+        ProjectConnectionState,
+        ProjectLifecycle,
+    )
+
+    test_settings = Settings(auth_secret_key="c4-test-secret-key-at-least-32-chars-long")
+    app.dependency_overrides[get_settings] = lambda: test_settings
     app.dependency_overrides[get_db] = override_get_db
+
+    user = User(
+        id=1,
+        name="C4 Test Admin",
+        email="admin@example.com",
+        canonical_email="admin@example.com",
+        password_hash="fake-hash",
+        role=UserRole.ADMIN,
+        is_active=True,
+    )
+    db_session.merge(user)
+
+    project = Project(
+        project_id="test-project-alpha",
+        owner_user_id=1,
+        name="Test Project Alpha",
+        domain="e-commerce",
+        environment="development",
+        backend_base_url="http://localhost:8000",
+        backend_health_url="http://localhost:8000/health",
+        configuration_version=1,
+        lifecycle=ProjectLifecycle.ACTIVE.value,
+        connection_state=ProjectConnectionState.NOT_CHECKED.value,
+    )
+    db_session.merge(project)
+    db_session.commit()
+
+    token, _ = create_access_token(1, test_settings)
+
     with TestClient(app) as test_client:
+        test_client.headers["Authorization"] = f"Bearer {token}"
         yield test_client
     app.dependency_overrides.clear()
 
