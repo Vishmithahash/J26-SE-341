@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ListChecks, Workflow, RotateCcw, ShieldCheck } from 'lucide-react';
+import { ListChecks, RotateCcw, ShieldCheck } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { ProjectProvider } from './context/ProjectContext';
@@ -23,6 +23,7 @@ import { EmptyComponentPage } from './pages/shared/EmptyComponentPage';
 import { ToolCallCorrectnessPage } from './pages/c1/ToolCallCorrectnessPage';
 import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { StateAwareWorkflowPage } from './features/c2/pages/StateAwareWorkflowPage';
 
 // Role-aware root redirect component
 const RootRedirect = () => {
@@ -81,14 +82,10 @@ export const App = () => {
                   path="tool-call-correctness"
                   element={<ToolCallCorrectnessPage />}
                 />
+                {/* State-Aware Multi-Step Workflow Testing */}
                 <Route
                   path="workflow-testing"
-                  element={
-                    <EmptyComponentPage
-                      title="State-Aware Multi-Step Workflow Testing"
-                      icon={Workflow}
-                    />
-                  }
+                  element={<StateAwareWorkflowPage />}
                 />
                 <Route
                   path="robustness-recovery"
@@ -136,14 +133,10 @@ export const App = () => {
                   path="tool-call-correctness"
                   element={<ToolCallCorrectnessPage />}
                 />
+                {/* State-Aware Multi-Step Workflow Testing */}
                 <Route
                   path="workflow-testing"
-                  element={
-                    <EmptyComponentPage
-                      title="State-Aware Multi-Step Workflow Testing"
-                      icon={Workflow}
-                    />
-                  }
+                  element={<StateAwareWorkflowPage />}
                 />
                 <Route
                   path="robustness-recovery"
