@@ -7,11 +7,13 @@ import {
   AlertTriangle,
   Sparkles,
   GitCompare,
+  Workflow,
 } from 'lucide-react';
 import { useProject } from '../../../context/ProjectContext';
 import { useC3ProjectSuites } from '../hooks/useC3ProjectSuites';
 import { useC3Executions } from '../hooks/useC3Executions';
 import { useC3MatchedPairs } from '../hooks/useC3MatchedPairs';
+import { useC3Evaluations } from '../hooks/useC3Evaluations';
 import { C3Badge } from './C3Badge';
 
 export const C3DashboardCard = ({ role = 'USER' }) => {
@@ -35,7 +37,13 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
     isDbUnavailable: isPairsDbUnavailable,
   } = useC3MatchedPairs(activeProjectId);
 
-  const isDbOffline = isSuiteDbUnavailable || isExecDbUnavailable || isPairsDbUnavailable;
+  const {
+    verdictCounts,
+    isDbUnavailable: isEvalDbUnavailable,
+  } = useC3Evaluations(activeProjectId);
+
+  const isDbOffline =
+    isSuiteDbUnavailable || isExecDbUnavailable || isPairsDbUnavailable || isEvalDbUnavailable;
 
   const isAdmin = role === 'ADMIN';
   const basePath = isAdmin ? '/admin/robustness-recovery' : '/app/robustness-recovery';
@@ -49,7 +57,7 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
             <RotateCcw className="w-5 h-5" />
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
-            <C3Badge status="DEMONSTRATION" label="Phase 2 Active" />
+            <C3Badge status="DEMONSTRATION" label="Phase 3 Active" />
             {isAdmin && (
               <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
                 Admin View
@@ -83,7 +91,7 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
               </code>
               {isAdmin && (
                 <p className="text-[10px] text-slate-400 mt-1 italic leading-tight">
-                  Scope: Authorized project records. Cross-project aggregation is pending backend server-side authorization integration.
+                  Scope: Authorized project records. Cross-project aggregate APIs absent; displaying scoped project summary.
                 </p>
               )}
             </div>
@@ -148,11 +156,44 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
           </div>
         </div>
 
+        {/* Phase 3 Recovery Verdict Breakdown for Active Project */}
+        {activeProjectId && !isDbOffline && (
+          <div className="mt-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-800 text-xs space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+              <span>Recovery Verdicts</span>
+              <span>{verdictCounts.eligibleEvaluatedCount} Evaluated</span>
+            </div>
+            <div className="grid grid-cols-4 gap-1 pt-0.5 text-center">
+              <div className="p-1 rounded bg-emerald-50/60 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300">
+                <span className="text-[9px] block">Completed</span>
+                <span className="font-bold text-xs">{verdictCounts.passCompleted}</span>
+              </div>
+              <div className="p-1 rounded bg-sky-50/60 dark:bg-sky-950/20 text-sky-700 dark:text-sky-300">
+                <span className="text-[9px] block">Graceful</span>
+                <span className="font-bold text-xs">{verdictCounts.passGraceful}</span>
+              </div>
+              <div className="p-1 rounded bg-rose-50/60 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300">
+                <span className="text-[9px] block">Fail</span>
+                <span className="font-bold text-xs">{verdictCounts.fail}</span>
+              </div>
+              <div className="p-1 rounded bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300">
+                <span className="text-[9px] block">Inconc.</span>
+                <span className="font-bold text-xs">{verdictCounts.inconclusive}</span>
+              </div>
+            </div>
+            {verdictCounts.notEvaluated > 0 && (
+              <span className="text-[10px] text-slate-400 block text-right">
+                ({verdictCounts.notEvaluated} not evaluated / ineligible)
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Phase 2 Exposure Breakdown for Active Project */}
         {activeProjectId && !isDbOffline && (
-          <div className="mt-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-800 text-xs space-y-1">
+          <div className="mt-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-800 text-xs space-y-1">
             <div className="flex items-center justify-between text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-              <span>Fault Exposure Outcomes</span>
+              <span>Exposure Outcomes</span>
               <span>{totalPairs !== null ? `${totalPairs} Pairs` : ''}</span>
             </div>
             <div className="grid grid-cols-3 gap-1 pt-0.5 text-center">
@@ -174,13 +215,13 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
 
         {/* Concise Readiness Message */}
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-3 leading-relaxed">
-          Matched clean/fault trials & exposure evidence active. Live trial runner executed via developer CLI; evidence imported and tracked.
+          Robustness & recovery testing active. Deterministic recovery evaluation, explainable causal findings, C2 facts and reports connected.
         </p>
       </div>
 
       {/* Action Links */}
       <div className="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs flex-wrap gap-2">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <Link
             to={`${basePath}#prepare`}
             className="inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
@@ -193,7 +234,14 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
             className="inline-flex items-center gap-1 font-semibold text-teal-600 dark:text-teal-400 hover:underline"
           >
             <GitCompare className="w-3.5 h-3.5" />
-            <span>Inspect Trials</span>
+            <span>Trials</span>
+          </Link>
+          <Link
+            to={`${basePath}#results`}
+            className="inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+          >
+            <Workflow className="w-3.5 h-3.5" />
+            <span>Results & Reports</span>
           </Link>
         </div>
 
@@ -208,4 +256,5 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
     </div>
   );
 };
+
 

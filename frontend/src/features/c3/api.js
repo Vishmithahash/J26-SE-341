@@ -74,6 +74,34 @@ export const RECOVERY_VERDICT = {
   INCONCLUSIVE: 'INCONCLUSIVE',
 };
 
+export const RULE_EVALUATION_STATUS = {
+  SATISFIED: 'SATISFIED',
+  VIOLATED: 'VIOLATED',
+  UNKNOWN: 'UNKNOWN',
+  NOT_APPLICABLE: 'NOT_APPLICABLE',
+};
+
+export const EVALUATION_STATUS = {
+  EVALUATED: 'EVALUATED',
+  NOT_EVALUATED: 'NOT_EVALUATED',
+  EVALUATION_ERROR: 'EVALUATION_ERROR',
+};
+
+export const C2_FACT_VALUE = {
+  TRUE: 'TRUE',
+  FALSE: 'FALSE',
+  UNKNOWN: 'UNKNOWN',
+};
+
+export const RECOVERY_RULE_ID = {
+  RULE_COMPLETION: 'RULE_COMPLETION',
+  RULE_GRACEFUL_STOPPING: 'RULE_GRACEFUL_STOPPING',
+  RULE_BUDGETS: 'RULE_BUDGETS',
+  RULE_DUPLICATE_EFFECTS: 'RULE_DUPLICATE_EFFECTS',
+  RULE_UNSAFE_RETRIES: 'RULE_UNSAFE_RETRIES',
+  RULE_TRUTHFUL_COMPLETION: 'RULE_TRUTHFUL_COMPLETION',
+};
+
 export const RECOVERY_ACTOR = {
   SCRIPTED_CALLER: 'SCRIPTED_CALLER',
   AGENT: 'AGENT',
@@ -385,7 +413,15 @@ export const c3Api = {
    */
   async listEvaluations(
     projectId,
-    { pairId, caseId, recoveryVerdict, limit = 50, offset = 0 } = {},
+    {
+      pairId,
+      caseId,
+      recoveryVerdict,
+      evaluatorVersion,
+      ruleSetVersion,
+      limit = 50,
+      offset = 0,
+    } = {},
     signal
   ) {
     if (!projectId) {
@@ -398,11 +434,29 @@ export const c3Api = {
     if (pairId) params.set('pair_id', pairId);
     if (caseId) params.set('case_id', caseId);
     if (recoveryVerdict) params.set('recovery_verdict', recoveryVerdict);
+    if (evaluatorVersion) params.set('evaluator_version', evaluatorVersion);
+    if (ruleSetVersion) params.set('rule_set_version', ruleSetVersion);
 
     return request(`/api/v1/c3/evaluations?${params.toString()}`, {
       method: 'GET',
       signal,
     });
+  },
+
+  /**
+   * Retrieve an individual stored recovery evaluation by ID.
+   */
+  async getEvaluation(projectId, evaluationId, signal) {
+    if (!projectId) {
+      throw new Error('Project ID is required to retrieve an evaluation.');
+    }
+    return request(
+      `/api/v1/c3/evaluations/${encodeURIComponent(evaluationId)}?project_id=${encodeURIComponent(projectId)}`,
+      {
+        method: 'GET',
+        signal,
+      }
+    );
   },
 
   /**

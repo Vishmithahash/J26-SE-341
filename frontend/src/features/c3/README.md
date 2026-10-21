@@ -1,7 +1,7 @@
 # Component 3: Robustness and Failure Recovery Testing
-## Frontend Architecture & Implementation (Phase 1 & Phase 2)
+## Frontend Architecture & Implementation (Phase 1, Phase 2 & Phase 3)
 
-This directory contains the complete Phase 1 and Phase 2 frontend implementation for **Component 3: Robustness and Failure Recovery Testing**.
+This directory contains the complete Phase 1, Phase 2, and Phase 3 frontend implementation for **Component 3: Robustness and Failure Recovery Testing**.
 
 ---
 
@@ -21,8 +21,10 @@ Component 3 evaluates AI agent and tool robustness under operational failures an
 | **Matched Pair Retrieval** | **HTTP Available** | `GET /api/v1/c3/pairs` & `GET /api/v1/c3/pairs/{pair_id}` with exposure & clean qualification filters. |
 | **Execution Artifact Import** | **HTTP Available** | `POST /api/v1/c3/executions/import` to persist execution records without live target execution. |
 | **Matched Pair Evidence Import** | **HTTP Available** | `POST /api/v1/c3/pairs/import` to persist verified clean/fault trial paired evidence records. |
-| **Deterministic Recovery Evaluation**| **HTTP Available** | `POST /api/v1/c3/recovery/evaluate` & `POST /api/v1/c3/evaluations/compute`. |
-| **Structured Execution Reports** | **HTTP Available** | `GET /api/v1/c3/reports/executions/{id}` & CSV export at `/reports/executions/{id}/export`. |
+| **Deterministic Recovery Evaluation**| **HTTP Available** | Pure evaluation preview at `POST /api/v1/c3/recovery/evaluate` & persisted evaluation at `POST /api/v1/c3/evaluations/compute`. |
+| **Recovery Evaluation Retrieval**| **HTTP Available** | `GET /api/v1/c3/evaluations` & `GET /api/v1/c3/evaluations/{id}` with verdict & version filters. |
+| **Structured Execution Reports** | **HTTP Available** | `GET /api/v1/c3/reports/executions/{id}` & CSV export at `GET /api/v1/c3/reports/executions/{id}/export`. |
+| **Research Validation & Splits** | **CLI-Only (No HTTP Endpoint)** | 40/20/40 splits, baselines B0-B3, and ablations A1-A3 executed via `python -m app.components.c3_robustness_recovery.runtime.research_runner`. |
 
 > **Key Rule**: A Python runner function does not establish an HTTP execution endpoint. An execution-import endpoint stores supplied evidence; it does not start a live trial. The frontend clearly labels import actions as **"Import Evidence"** and presents honest live-execution blockers without fabricating execution progress or synthetic runs.
 
@@ -48,15 +50,16 @@ Component 3 evaluates AI agent and tool robustness under operational failures an
 | `POST` | `/api/v1/c3/pairs/import` | `persistence_router.py:import_pair_endpoint()` | Validates and persists matched clean/fault pair evidence. Body: `MatchedPairImportRequest`. | Unauthenticated (project_id param only) |
 | `POST` | `/api/v1/c3/evaluations/compute`| `persistence_router.py:compute_evaluation_endpoint()` | Executes authoritative evaluation engine and stores evaluation result. Body: `EvaluationComputeRequest`. | Unauthenticated (project_id param only) |
 | `GET` | `/api/v1/c3/evaluations` | `persistence_router.py:list_evaluations_endpoint()`| Lists stored recovery evaluations. Query: `project_id`, `pair_id`, `recovery_verdict`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/evaluations/{id}` | `persistence_router.py:get_evaluation_endpoint()`| Retrieves stored recovery evaluation record. Query: `project_id`. | Unauthenticated (project_id param only) |
 | `POST` | `/api/v1/c3/recovery/evaluate` | `router.py:evaluate_recovery_endpoint()` | Pure deterministic evaluation of recovery rules against evidence and C2 facts. Body: `RecoveryEvaluationRequest`. | Unauthenticated |
 | `GET` | `/api/v1/c3/reports/executions/{id}` | `persistence_router.py:get_execution_report_endpoint()` | Comprehensive execution summary and recovery evaluation metrics with explicit denominators. Query: `project_id`. | Unauthenticated (project_id param only) |
 | `GET` | `/api/v1/c3/reports/executions/{id}/export` | `persistence_router.py:export_execution_report_csv_endpoint()` | Downloads execution report formatted as CSV attachment. Query: `project_id`. | Unauthenticated (project_id param only) |
 
 ---
 
-### 3. Distinct Status Dimensions
+### 3. Distinct Status Dimensions & Orthogonality
 
-To ensure research validity and eliminate confounding factors, the frontend strictly distinguishes five independent status dimensions:
+To ensure research validity and eliminate confounding factors, the frontend strictly distinguishes independent status dimensions:
 
 1. **Readiness Status**:
    - `READY`: All pre-execution prerequisites, adapter identity, and fixture capabilities verified.
@@ -75,31 +78,38 @@ To ensure research validity and eliminate confounding factors, the frontend stri
    - `QUALIFIED`: Baseline clean trial ran without fault injection and completed successfully.
    - `DISQUALIFIED`: Clean control failed (e.g. crashed or produced an unhandled exception).
    - *Note*: Failed clean controls are **retained** honestly in the paired results and are never retried until passing or hidden.
-5. **Recovery Verdict**:
-   - `PASS_COMPLETED`: Task successfully completed following fault recovery.
-   - `PASS_GRACEFUL`: Task aborted gracefully without state corruption and notified caller/user.
-   - `FAIL`: Violated recovery contract rules (e.g., duplicate side effects or unverified retries).
-   - `INCONCLUSIVE`: Trial did not qualify for recovery evaluation or evidence was insufficient.
-   - *Note*: A harness deadline or timeout is not graceful recovery. Recovery verdicts are never inferred client-side.
+5. **Recovery Verdict** (Eligible trials with confirmed exposure only):
+   - `PASS_COMPLETED`: Task successfully completed following fault recovery (`Pass: Completed`).
+   - `PASS_GRACEFUL`: Task aborted gracefully without state corruption and notified caller/user (`Pass: Graceful`).
+   - `FAIL`: Violated recovery contract rules (e.g., duplicate side effects or unverified retries) (`Fail`).
+   - `INCONCLUSIVE`: Trial did not qualify for recovery evaluation or evidence was insufficient (`Inconclusive`).
+   - *Note*: A harness deadline or timeout is not graceful recovery. Recovery verdicts are never inferred client-side. Ineligible trials return `null` verdict and `NOT_EVALUATED` status.
 
 ---
 
-### 4. Matched Clean and Fault Trials
+### 4. Component 2 Discrete Assertion Facts Integration
 
-Each matched trial pair evaluates:
-- **Clean Trial**: Injected fault disabled. Baseline control ensuring the task is executable under normal circumstances.
-- **Fault Trial**: Exactly one declared operational fault injected at a verified hook and effect phase.
-- **Comparability**: Both trials must originate from equivalent logical starting state (`EQUIVALENT_LOGICAL_STATE`) via resettable fixtures.
-- **Provenance Transparency**: Clearly marks records as `LIVE_AUT`, `DEMONSTRATION`, or `IMPORTED`.
+- **Strict Boundary**: Component 3 consumes discrete assertion facts from Component 2 fixtures/evaluations without re-evaluating domain state machines or redefining workflow rules.
+- **Truth Values**: Rendered verbatim as `TRUE`, `FALSE`, or `UNKNOWN`.
+- **Integrity**: Preserves assertion identifiers (`assertion_id`), versions, provenance (`C2_FIXTURE`), time scopes, snapshot IDs, and supporting evidence references.
 
 ---
 
-### 5. Server-Side Authentication & Authorization Gap Analysis
+### 5. Execution Reports & Explicit Denominators
 
-- **Unauthenticated Endpoints**: C3 backend routes (`/api/v1/c3/*`) are unauthenticated at the routing layer (`C3SafeRoute`).
-- **Logical Scoping vs. Authorization**: `project_id` query and body parameters scope data logically in PostgreSQL/SQLite but do not enforce tenant ownership or membership.
-- **Frontend Safeguards**:
-  - Transparent advisory banner (`C3AuthGapNotice`).
-  - Queries strictly bound to `activeProject.project_id`.
-  - Rejection of default demonstration fallback (`proj-demo-qa`) when an authorized project is active.
-  - Safe error handling: DB offline (HTTP 503) produces explicit unavailable badges rather than fabricated zeroes.
+Structured execution reports strictly specify explicit denominators for all counts:
+- `planned_cases`: Total candidate fault cases defined in the frozen suite manifest.
+- `executed_pairs`: Total matched trial pairs initiated by the runner.
+- `evaluated_trials`: Total fault trials evaluated by the recovery evaluation engine.
+- Breakdown: Clean qualification, exposure outcomes, recovery verdicts, and cleanup certainty.
+- Direct CSV export streamed via `/api/v1/c3/reports/executions/{id}/export`.
+
+---
+
+### 6. Three-Way Research Protocol & Ablation Governance (Phase 7)
+
+- **CLI-Only Tooling**: Evaluated via `python -m app.components.c3_robustness_recovery.runtime.research_runner`.
+- **Partitions**: 40% Development, 20% Validation, 40% Blinded Held-Out Test.
+- **Baselines**: B0 Clean Control, B1 Blind Retry, B2 Stateless Error Handling, B3 Idempotent Recovery Agent.
+- **Ablations**: A1 No Fixture Reset, A2 No Exposure Receipt, A3 No C2 Facts.
+- **Prerequisites**: Live research accuracy claims remain blocked until independent reviewed ground truth and inter-annotator agreement thresholds are certified.
