@@ -17,6 +17,8 @@ import {
   Eye,
   AlertCircle,
   RefreshCw,
+  FileDown,
+  Sparkles,
 } from 'lucide-react';
 import {
   c1Api,
@@ -25,11 +27,15 @@ import {
   CORRECTNESS_VERDICTS,
   TRACE_COMPLETENESS,
 } from './c1Api';
+import { DiagnosisPanel } from './DiagnosisPanel';
+import { CorrectionReviewPanel } from './CorrectionReviewPanel';
+import { ReportingModal } from './ReportingModal';
 
 export const ResultsViewer = ({
   projectId,
   initialRunId,
   onSelectRun,
+  currentUser,
 }) => {
   const [runsList, setRunsList] = useState([]);
   const [selectedRunId, setSelectedRunId] = useState(initialRunId || '');
@@ -45,6 +51,11 @@ export const ResultsViewer = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedCheckId, setExpandedCheckId] = useState(null);
   const [expandedEventId, setExpandedEventId] = useState(null);
+
+  // Phase 3 Modal / Panel State
+  const [showReportingModal, setShowReportingModal] = useState(false);
+  const [activeDiagnosis, setActiveDiagnosis] = useState(null);
+  const [showCorrectionPanel, setShowCorrectionPanel] = useState(false);
 
   // Load available runs
   useEffect(() => {
@@ -111,6 +122,8 @@ export const ResultsViewer = ({
     let isCancelled = false;
     if (!projectId || !selectedRunId || !selectedCaseId) {
       setCaseExecutionDetail(null);
+      setActiveDiagnosis(null);
+      setShowCorrectionPanel(false);
       return;
     }
 
@@ -178,7 +191,7 @@ export const ResultsViewer = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {runsList.length > 0 && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-500 dark:text-slate-400">Run:</span>
@@ -207,6 +220,16 @@ export const ResultsViewer = ({
             title="Refresh Run Detail"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoadingRun ? 'animate-spin' : ''}`} />
+          </button>
+
+          {/* Reporting & Research Metrics Action */}
+          <button
+            type="button"
+            onClick={() => setShowReportingModal(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950"
+          >
+            <FileDown className="w-3.5 h-3.5" />
+            <span>Reports &amp; Metrics</span>
           </button>
         </div>
       </div>
@@ -349,12 +372,16 @@ export const ResultsViewer = ({
                 return (
                   <div
                     key={c.case_id}
-                    onClick={() => setSelectedCaseId(c.case_id)}
+                    onClick={() => {
+                      setSelectedCaseId(c.case_id);
+                      setShowCorrectionPanel(false);
+                    }}
                     tabIndex={0}
                     role="button"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         setSelectedCaseId(c.case_id);
+                        setShowCorrectionPanel(false);
                       }
                     }}
                     className={`p-3 rounded-xl border cursor-pointer transition-all ${
@@ -391,7 +418,7 @@ export const ResultsViewer = ({
           )}
         </div>
 
-        {/* Right Column: Case Details & Timeline */}
+        {/* Right Column: Case Details, Diagnosis, and Correction */}
         <div className="md:col-span-2 space-y-4">
           {isLoadingCase ? (
             <div className="p-12 text-center text-slate-500 text-xs border border-slate-200 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900">
@@ -400,7 +427,7 @@ export const ResultsViewer = ({
             </div>
           ) : !caseExecutionDetail ? (
             <div className="p-12 text-center text-slate-400 text-xs border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-              Select a case from the left panel to inspect check results and evidence.
+              Select a case from the left panel to inspect check results, diagnosis, and evidence.
             </div>
           ) : (
             <div className="space-y-4">
@@ -461,6 +488,34 @@ export const ResultsViewer = ({
                   </div>
                 )}
               </div>
+
+              {/* Phase 3: Root Cause Diagnosis & Code Attribution Panel */}
+              <DiagnosisPanel
+                projectId={projectId}
+                runId={selectedRunId}
+                caseId={caseExecutionDetail.case_id}
+                caseVerdict={caseExecutionDetail.verdict}
+                existingDiagnosis={activeDiagnosis}
+                onRequestCorrection={(diag) => {
+                  setActiveDiagnosis(diag);
+                  setShowCorrectionPanel(true);
+                }}
+              />
+
+              {/* Phase 3: Sandbox Verification & Developer Review Panel */}
+              {showCorrectionPanel && activeDiagnosis && (
+                <CorrectionReviewPanel
+                  projectId={projectId}
+                  diagnosisId={activeDiagnosis.diagnosis_id}
+                  caseId={caseExecutionDetail.case_id}
+                  runId={selectedRunId}
+                  currentUser={currentUser}
+                  onReviewSubmitted={() => {
+                    // Refresh run detail on review
+                    loadRunDetail(selectedRunId);
+                  }}
+                />
+              )}
 
               {/* Check-Level Results */}
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
@@ -639,6 +694,15 @@ export const ResultsViewer = ({
           )}
         </div>
       </div>
+
+      {/* Phase 3 Reporting & Research Metrics Modal */}
+      {showReportingModal && (
+        <ReportingModal
+          projectId={projectId}
+          activeRunId={selectedRunId}
+          onClose={() => setShowReportingModal(false)}
+        />
+      )}
     </div>
   );
 };

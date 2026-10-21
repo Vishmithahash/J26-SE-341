@@ -387,6 +387,7 @@ export const ToolCallCorrectnessPage = () => {
           projectId={activeProjectId}
           initialRunId={activeRunId}
           onSelectRun={(runId) => setActiveRunId(runId)}
+          currentUser={user}
         />
       )}
     </div>

@@ -86,6 +86,71 @@ export const TRACE_COMPLETENESS = {
   MISSING: 'MISSING',
 };
 
+export const CAUSE_CATEGORIES = {
+  SUPPORTED_APPLICATION_CODE_DEFECT: 'SUPPORTED_APPLICATION_CODE_DEFECT',
+  AGENT_BEHAVIOUR: 'AGENT_BEHAVIOUR',
+  SPECIFICATION_OR_EXPECTATION_PROBLEM: 'SPECIFICATION_OR_EXPECTATION_PROBLEM',
+  UNKNOWN: 'UNKNOWN',
+};
+
+export const SOURCE_RELATIONSHIP_STATUS = {
+  OBSERVED: 'OBSERVED',
+  INFERRED: 'INFERRED',
+  UNKNOWN: 'UNKNOWN',
+};
+
+export const EVIDENCE_AVAILABILITY = {
+  COMPLETE: 'COMPLETE',
+  PARTIAL: 'PARTIAL',
+  MISSING: 'MISSING',
+  INSUFFICIENT: 'INSUFFICIENT',
+};
+
+export const DIAGNOSIS_STATUS = {
+  PENDING: 'PENDING',
+  COMPLETED: 'COMPLETED',
+  INSUFFICIENT_EVIDENCE: 'INSUFFICIENT_EVIDENCE',
+  FAILED: 'FAILED',
+};
+
+export const CORRECTION_STATUS = {
+  PENDING: 'PENDING',
+  GENERATED: 'GENERATED',
+  VERIFYING: 'VERIFYING',
+  VERIFIED: 'VERIFIED',
+  UNVERIFIED: 'UNVERIFIED',
+  INELIGIBLE: 'INELIGIBLE',
+  FAILED: 'FAILED',
+};
+
+export const VERIFICATION_STEP_TYPES = [
+  { id: 'REPRODUCE_ORIGINAL_FAILURE', label: '1. Reproduce Original Failure' },
+  { id: 'APPLY_PATCH', label: '2. Apply Candidate Patch' },
+  { id: 'BUILD_STATIC_CHECK', label: '3. Build / Static Syntax Check' },
+  { id: 'RERUN_ORIGINAL_CASE', label: '4. Rerun Original Test Case' },
+  { id: 'RUN_REGRESSION_CHECKS', label: '5. Run Regression Test Suite' },
+  { id: 'RUN_INDEPENDENT_ACCEPTANCE', label: '6. Independent Acceptance Checks' },
+];
+
+export const STEP_EXECUTION_STATUS = {
+  PASSED: 'PASSED',
+  FAILED: 'FAILED',
+  SKIPPED: 'SKIPPED',
+  BLOCKED: 'BLOCKED',
+  ERROR: 'ERROR',
+};
+
+export const REVIEW_DECISIONS = {
+  PENDING: 'PENDING',
+  ACCEPTED: 'ACCEPTED',
+  REJECTED: 'REJECTED',
+};
+
+export const EXPORT_FORMATS = {
+  JSON: 'JSON',
+  CSV: 'CSV',
+};
+
 /**
  * Format arbitrary expectation or evidence value distinctly preserving types:
  * missing vs explicit null vs empty strings vs empty collections.
@@ -135,7 +200,7 @@ function getC1Headers(projectId) {
 }
 
 export const c1Api = {
-  // Configuration Endpoints
+  // Phase 1: Configuration Endpoints
   async listConfigs(projectId) {
     const base = buildBaseUrl(projectId);
     return request(`${base}/configs`, {
@@ -195,7 +260,7 @@ export const c1Api = {
     });
   },
 
-  // Generation Endpoints
+  // Phase 1: Generation Endpoints
   async createGenerationJob(projectId, payload) {
     const base = buildBaseUrl(projectId);
     return request(`${base}/generation/jobs`, {
@@ -250,7 +315,7 @@ export const c1Api = {
     });
   },
 
-  // Suite Endpoints
+  // Phase 1: Suite Endpoints
   async listSuites(projectId) {
     const base = buildBaseUrl(projectId);
     return request(`${base}/suites`, {
@@ -338,6 +403,178 @@ export const c1Api = {
   async checkAdapterReadiness(projectId) {
     const base = buildBaseUrl(projectId);
     return request(`${base}/adapter/readiness`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  // Phase 3: Diagnosis and Explanation Endpoints
+  async diagnoseRun(projectId, runId, payload = {}) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/runs/${encodeURIComponent(runId)}/diagnose`, {
+      method: 'POST',
+      headers: getC1Headers(projectId),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getDiagnosis(projectId, diagnosisId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/diagnoses/${encodeURIComponent(diagnosisId)}`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async getCaseDiagnosis(projectId, runId, caseId) {
+    const base = buildBaseUrl(projectId);
+    return request(
+      `${base}/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/diagnosis`,
+      {
+        method: 'GET',
+        headers: getC1Headers(projectId),
+      }
+    );
+  },
+
+  async getDiagnosisCodeLocations(projectId, diagnosisId) {
+    const base = buildBaseUrl(projectId);
+    return request(
+      `${base}/diagnoses/${encodeURIComponent(diagnosisId)}/code-locations`,
+      {
+        method: 'GET',
+        headers: getC1Headers(projectId),
+      }
+    );
+  },
+
+  async listDiagnoses(projectId, { runId = null, limit = 50 } = {}) {
+    const base = buildBaseUrl(projectId);
+    const query = runId ? `?run_id=${encodeURIComponent(runId)}&limit=${limit}` : `?limit=${limit}`;
+    return request(`${base}/diagnoses${query}`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  // Phase 3: Correction & Sandbox Verification Endpoints
+  async requestCorrection(projectId, payload) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/corrections/attempts`, {
+      method: 'POST',
+      headers: getC1Headers(projectId),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getCorrection(projectId, correctionId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/corrections/${encodeURIComponent(correctionId)}`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async getCorrectionDiff(projectId, correctionId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/corrections/${encodeURIComponent(correctionId)}/diff`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async submitReview(projectId, correctionId, payload) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/corrections/${encodeURIComponent(correctionId)}/review`, {
+      method: 'POST',
+      headers: getC1Headers(projectId),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listCorrections(projectId, { runId = null, limit = 50 } = {}) {
+    const base = buildBaseUrl(projectId);
+    const query = runId ? `?run_id=${encodeURIComponent(runId)}&limit=${limit}` : `?limit=${limit}`;
+    return request(`${base}/corrections${query}`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  // Phase 3: Reporting & Exports Endpoints
+  async getWorkflowReport(projectId, filters = {}) {
+    const base = buildBaseUrl(projectId);
+    const params = new URLSearchParams();
+    if (filters.run_id) params.set('run_id', filters.run_id);
+    if (filters.suite_id) params.set('suite_id', filters.suite_id);
+    if (filters.verdict) params.set('verdict', filters.verdict);
+    if (filters.cause_category) params.set('cause_category', filters.cause_category);
+    if (filters.is_verified !== undefined && filters.is_verified !== null) {
+      params.set('is_verified', String(filters.is_verified));
+    }
+    params.set('limit', String(filters.limit || 50));
+    params.set('offset', String(filters.offset || 0));
+
+    return request(`${base}/reports/workflow?${params.toString()}`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async exportWorkflowReport(projectId, { runId = null, format = 'JSON' } = {}) {
+    const base = buildBaseUrl(projectId);
+    const query = runId ? `?run_id=${encodeURIComponent(runId)}&format=${format}` : `?format=${format}`;
+    const token = sessionStorage.getItem('qa_auth_token');
+    const headers = {
+      ...getC1Headers(projectId),
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${base}/reports/export${query}`, {
+      method: 'GET',
+      headers,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Export failed with status ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `c1_workflow_report_${Date.now()}.${format.toLowerCase()}`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  },
+
+  // Phase 3: Research Metrics & Labels Endpoints
+  async computeResearchMetrics(projectId, { runId = null, datasetSplit = null } = {}) {
+    const base = buildBaseUrl(projectId);
+    const params = new URLSearchParams();
+    if (runId) params.set('run_id', runId);
+    if (datasetSplit) params.set('dataset_split', datasetSplit);
+    const query = params.toString() ? `?${params.toString()}` : '';
+
+    return request(`${base}/research/metrics${query}`, {
+      method: 'POST',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async listReferenceLabels(projectId, filters = {}) {
+    const base = buildBaseUrl(projectId);
+    const params = new URLSearchParams();
+    if (filters.dataset_split) params.set('dataset_split', filters.dataset_split);
+    if (filters.task_family) params.set('task_family', filters.task_family);
+    if (filters.label_version) params.set('label_version', filters.label_version);
+    const query = params.toString() ? `?${params.toString()}` : '';
+
+    return request(`${base}/research/labels${query}`, {
       method: 'GET',
       headers: getC1Headers(projectId),
     });

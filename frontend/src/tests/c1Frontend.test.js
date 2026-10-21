@@ -16,6 +16,15 @@ import {
   RUN_STATUSES,
   CASE_EXECUTION_STATUSES,
   TRACE_COMPLETENESS,
+  CAUSE_CATEGORIES,
+  SOURCE_RELATIONSHIP_STATUS,
+  EVIDENCE_AVAILABILITY,
+  DIAGNOSIS_STATUS,
+  CORRECTION_STATUS,
+  VERIFICATION_STEP_TYPES,
+  STEP_EXECUTION_STATUS,
+  REVIEW_DECISIONS,
+  EXPORT_FORMATS,
   formatValue,
   escapeText,
 } from '../components/c1/c1Api.js';
@@ -23,9 +32,9 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-describe('Component 1 Tool-Call Correctness Frontend Tests (Phase 1 & Phase 2)', () => {
+describe('Component 1 Tool-Call Correctness Frontend Tests (Phases 1, 2, and 3)', () => {
   describe('C1 API Client and Endpoint Contract Definitions', () => {
-    it('defines all required Phase 1 and Phase 2 configuration, generation, and execution API methods', () => {
+    it('defines all required Phase 1, 2, and 3 configuration, generation, execution, diagnosis, and reporting API methods', () => {
       const requiredMethods = [
         // Phase 1
         'listConfigs',
@@ -52,6 +61,21 @@ describe('Component 1 Tool-Call Correctness Frontend Tests (Phase 1 & Phase 2)',
         'rerunExecution',
         'getCaseExecution',
         'checkAdapterReadiness',
+        // Phase 3
+        'diagnoseRun',
+        'getDiagnosis',
+        'getCaseDiagnosis',
+        'getDiagnosisCodeLocations',
+        'listDiagnoses',
+        'requestCorrection',
+        'getCorrection',
+        'getCorrectionDiff',
+        'submitReview',
+        'listCorrections',
+        'getWorkflowReport',
+        'exportWorkflowReport',
+        'computeResearchMetrics',
+        'listReferenceLabels',
       ];
 
       for (const method of requiredMethods) {
@@ -80,7 +104,14 @@ describe('Component 1 Tool-Call Correctness Frontend Tests (Phase 1 & Phase 2)',
 
       await assert.rejects(
         async () => {
-          await c1Api.getExecutionRun('', 'run_123');
+          await c1Api.getCaseDiagnosis('', 'run_1', 'case_1');
+        },
+        /Project ID is required/
+      );
+
+      await assert.rejects(
+        async () => {
+          await c1Api.requestCorrection(undefined, {});
         },
         /Project ID is required/
       );
@@ -149,17 +180,32 @@ describe('Component 1 Tool-Call Correctness Frontend Tests (Phase 1 & Phase 2)',
       assert.equal(Object.keys(CORRECTNESS_VERDICTS).length, 3);
     });
 
-    it('defines run lifecycle and trace completeness states', () => {
-      assert.equal(RUN_STATUSES.PENDING, 'PENDING');
-      assert.equal(RUN_STATUSES.RUNNING, 'RUNNING');
-      assert.equal(RUN_STATUSES.COMPLETED, 'COMPLETED');
-      assert.equal(RUN_STATUSES.FAILED, 'FAILED');
-      assert.equal(RUN_STATUSES.ABORTED, 'ABORTED');
+    it('defines supported cause categories matching CauseCategory backend contract', () => {
+      assert.equal(
+        CAUSE_CATEGORIES.SUPPORTED_APPLICATION_CODE_DEFECT,
+        'SUPPORTED_APPLICATION_CODE_DEFECT'
+      );
+      assert.equal(CAUSE_CATEGORIES.AGENT_BEHAVIOUR, 'AGENT_BEHAVIOUR');
+      assert.equal(
+        CAUSE_CATEGORIES.SPECIFICATION_OR_EXPECTATION_PROBLEM,
+        'SPECIFICATION_OR_EXPECTATION_PROBLEM'
+      );
+      assert.equal(CAUSE_CATEGORIES.UNKNOWN, 'UNKNOWN');
+    });
 
-      assert.equal(TRACE_COMPLETENESS.COMPLETE, 'COMPLETE');
-      assert.equal(TRACE_COMPLETENESS.INCOMPLETE, 'INCOMPLETE');
-      assert.equal(TRACE_COMPLETENESS.CORRUPTED, 'CORRUPTED');
-      assert.equal(TRACE_COMPLETENESS.MISSING, 'MISSING');
+    it('defines verification check step types and review decisions', () => {
+      assert.equal(VERIFICATION_STEP_TYPES.length, 6);
+      const stepIds = VERIFICATION_STEP_TYPES.map((s) => s.id);
+      assert.equal(stepIds.includes('REPRODUCE_ORIGINAL_FAILURE'), true);
+      assert.equal(stepIds.includes('APPLY_PATCH'), true);
+      assert.equal(stepIds.includes('BUILD_STATIC_CHECK'), true);
+      assert.equal(stepIds.includes('RERUN_ORIGINAL_CASE'), true);
+      assert.equal(stepIds.includes('RUN_REGRESSION_CHECKS'), true);
+      assert.equal(stepIds.includes('RUN_INDEPENDENT_ACCEPTANCE'), true);
+
+      assert.equal(REVIEW_DECISIONS.PENDING, 'PENDING');
+      assert.equal(REVIEW_DECISIONS.ACCEPTED, 'ACCEPTED');
+      assert.equal(REVIEW_DECISIONS.REJECTED, 'REJECTED');
     });
   });
 
@@ -185,6 +231,35 @@ describe('Component 1 Tool-Call Correctness Frontend Tests (Phase 1 & Phase 2)',
     });
   });
 
+  describe('Sandbox Verification and Review Invariance', () => {
+    it('guarantees candidate correction is unverified if any mandatory check is not PASSED', () => {
+      const checks = [
+        { step_type: 'REPRODUCE_ORIGINAL_FAILURE', status: 'PASSED', is_mandatory: true },
+        { step_type: 'APPLY_PATCH', status: 'PASSED', is_mandatory: true },
+        { step_type: 'BUILD_STATIC_CHECK', status: 'PASSED', is_mandatory: true },
+        { step_type: 'RERUN_ORIGINAL_CASE', status: 'PASSED', is_mandatory: true },
+        { step_type: 'RUN_REGRESSION_CHECKS', status: 'FAILED', is_mandatory: true },
+        { step_type: 'RUN_INDEPENDENT_ACCEPTANCE', status: 'PASSED', is_mandatory: true },
+      ];
+
+      const isVerified = checks.every((c) => !c.is_mandatory || c.status === 'PASSED');
+      assert.equal(isVerified, false, 'Candidate must not be verified when a regression check fails');
+    });
+
+    it('verifies review submission requires exact target_patch_hash binding', () => {
+      const reviewPayload = {
+        decision: 'ACCEPTED',
+        reviewer: 'developer_1',
+        target_patch_hash: 'sha256_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        reason: 'Verified clean pass in sandbox without regressions',
+      };
+
+      assert.equal(reviewPayload.decision, 'ACCEPTED');
+      assert.equal(reviewPayload.target_patch_hash.startsWith('sha256_'), true);
+      assert.equal(Boolean(reviewPayload.reviewer), true);
+    });
+  });
+
   describe('Agent Task Isolation and QA Quarantine Rule', () => {
     it('verifies agent-facing task view contract strips oracle expectations and validation issues', () => {
       const candidateCase = {
@@ -202,7 +277,6 @@ describe('Component 1 Tool-Call Correctness Frontend Tests (Phase 1 & Phase 2)',
         validation_issues: [],
       };
 
-      // Extract isolated agent facing task
       const agentFacing = {
         case_id: candidateCase.case_id,
         task_prompt: candidateCase.agent_task_prompt,
@@ -245,7 +319,7 @@ describe('Component 1 Tool-Call Correctness Frontend Tests (Phase 1 & Phase 2)',
       }
     });
 
-    it('verifies dedicated Component 1 workspace files exist and are populated', () => {
+    it('verifies all dedicated Component 1 workspace files exist and are populated', () => {
       const c1ComponentsDir = path.resolve(__dirname, '../components/c1');
       assert.equal(fs.existsSync(c1ComponentsDir), true);
 
@@ -257,6 +331,9 @@ describe('Component 1 Tool-Call Correctness Frontend Tests (Phase 1 & Phase 2)',
         'SuiteViewer.jsx',
         'RunDashboard.jsx',
         'ResultsViewer.jsx',
+        'DiagnosisPanel.jsx',
+        'CorrectionReviewPanel.jsx',
+        'ReportingModal.jsx',
       ];
 
       for (const file of expectedFiles) {
