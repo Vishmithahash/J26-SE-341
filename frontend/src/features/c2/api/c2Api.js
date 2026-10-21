@@ -157,4 +157,270 @@ export const c2Api = {
       }
     );
   },
+
+  // -------------------------------------------------------------------------
+  // Phase 2: Test Suite Generation & Inspection Endpoints
+  // -------------------------------------------------------------------------
+
+  /**
+   * Generate automatic test suite for an approved model version.
+   * POST /api/v1/c2/projects/{project_id}/suites/generate
+   */
+  async generateTestSuite(projectId, payload) {
+    if (!projectId) throw new Error('projectId is required to generate a test suite');
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/generate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * List all test suites for a project.
+   * GET /api/v1/c2/projects/{project_id}/suites
+   */
+  async listTestSuites(projectId) {
+    if (!projectId) throw new Error('projectId is required to list test suites');
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Get specific test suite details and diagnostics.
+   * GET /api/v1/c2/projects/{project_id}/suites/{suite_id}
+   */
+  async getTestSuite(projectId, suiteId) {
+    if (!projectId || !suiteId) {
+      throw new Error('projectId and suiteId are required to fetch a test suite');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(suiteId)}`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * List test cases in a suite with optional category and readiness filters.
+   * GET /api/v1/c2/projects/{project_id}/suites/{suite_id}/cases
+   */
+  async listTestCases(projectId, suiteId, { category, readiness } = {}) {
+    if (!projectId || !suiteId) {
+      throw new Error('projectId and suiteId are required to list test cases');
+    }
+    const params = new URLSearchParams();
+    if (category) params.append('category', category);
+    if (readiness) params.append('readiness', readiness);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(suiteId)}/cases${qs}`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Get specific test case detail.
+   * GET /api/v1/c2/projects/{project_id}/suites/{suite_id}/cases/{test_id}
+   */
+  async getTestCaseDetail(projectId, suiteId, testId) {
+    if (!projectId || !suiteId || !testId) {
+      throw new Error('projectId, suiteId, and testId are required to fetch a test case');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(
+        suiteId
+      )}/cases/${encodeURIComponent(testId)}`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Check suite readiness breakdown.
+   * GET /api/v1/c2/projects/{project_id}/suites/{suite_id}/readiness
+   */
+  async getSuiteReadiness(projectId, suiteId) {
+    if (!projectId || !suiteId) {
+      throw new Error('projectId and suiteId are required to check suite readiness');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(suiteId)}/readiness`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Export full QA test suite (tester private: contains reference paths, assertions, mutations).
+   * GET /api/v1/c2/projects/{project_id}/suites/{suite_id}/export/qa
+   */
+  async exportQASuite(projectId, suiteId) {
+    if (!projectId || !suiteId) {
+      throw new Error('projectId and suiteId are required to export QA suite');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(suiteId)}/export/qa`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Export strictly allowlisted agent task payloads (agent facing: NO reference paths or assertions).
+   * GET /api/v1/c2/projects/{project_id}/suites/{suite_id}/export/agent
+   */
+  async exportAgentTaskPayloads(projectId, suiteId) {
+    if (!projectId || !suiteId) {
+      throw new Error('projectId and suiteId are required to export agent task payloads');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(suiteId)}/export/agent`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Get allowlisted agent task payload for a single case.
+   * GET /api/v1/c2/projects/{project_id}/suites/{suite_id}/cases/{test_id}/agent-payload
+   */
+  async getCaseAgentPayload(projectId, suiteId, testId) {
+    if (!projectId || !suiteId || !testId) {
+      throw new Error('projectId, suiteId, and testId are required to fetch agent payload');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(
+        suiteId
+      )}/cases/${encodeURIComponent(testId)}/agent-payload`,
+      { method: 'GET' }
+    );
+  },
+
+  // -------------------------------------------------------------------------
+  // Phase 2: Execution & Conformance Evaluation Endpoints
+  // -------------------------------------------------------------------------
+
+  /**
+   * Execute an isolated test case with the backend orchestration pipeline.
+   * POST /api/v1/c2/projects/{project_id}/suites/{suite_id}/cases/{test_id}/run
+   */
+  async runCase(projectId, suiteId, testId, runId = null) {
+    if (!projectId || !suiteId || !testId) {
+      throw new Error('projectId, suiteId, and testId are required to run a test case');
+    }
+    const qs = runId ? `?run_id=${encodeURIComponent(runId)}` : '';
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(
+        suiteId
+      )}/cases/${encodeURIComponent(testId)}/run${qs}`,
+      { method: 'POST' }
+    );
+  },
+
+  /**
+   * Run a bounded batch of test cases for a suite.
+   * POST /api/v1/c2/projects/{project_id}/suites/{suite_id}/run
+   */
+  async runSuite(projectId, suiteId, maxCases = 50) {
+    if (!projectId || !suiteId) {
+      throw new Error('projectId and suiteId are required to run a test suite');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/suites/${encodeURIComponent(suiteId)}/run`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ max_cases: maxCases }),
+      }
+    );
+  },
+
+  /**
+   * Execute a clearly labeled offline synthetic demonstration of C2 workflow evaluation.
+   * POST /api/v1/c2/projects/{project_id}/demonstrations/run
+   */
+  async runSyntheticDemonstration(projectId, requestData) {
+    if (!projectId) throw new Error('projectId is required to run a demonstration');
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/demonstrations/run`, {
+      method: 'POST',
+      body: JSON.stringify(requestData),
+    });
+  },
+
+  /**
+   * List evaluation results for a project.
+   * GET /api/v1/c2/projects/{project_id}/evaluations
+   */
+  async listEvaluations(projectId, { suiteId, testId, verdict } = {}) {
+    if (!projectId) throw new Error('projectId is required to list evaluations');
+    const params = new URLSearchParams();
+    if (suiteId) params.append('suite_id', suiteId);
+    if (testId) params.append('test_id', testId);
+    if (verdict) params.append('verdict', verdict);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/evaluations${qs}`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Get specific evaluation result.
+   * GET /api/v1/c2/projects/{project_id}/evaluations/{evaluation_id}
+   */
+  async getEvaluation(projectId, evaluationId) {
+    if (!projectId || !evaluationId) {
+      throw new Error('projectId and evaluationId are required to fetch an evaluation');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/evaluations/${encodeURIComponent(evaluationId)}`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Retrieve original retained execution evidence for a run.
+   * GET /api/v1/c2/projects/{project_id}/evidence/{run_id}
+   */
+  async getRetainedEvidence(projectId, runId) {
+    if (!projectId || !runId) {
+      throw new Error('projectId and runId are required to fetch retained evidence');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/evidence/${encodeURIComponent(runId)}`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * Re-evaluate a previous execution from retained evidence.
+   * POST /api/v1/c2/projects/{project_id}/evaluations/{evaluation_id}/re-evaluate
+   */
+  async reEvaluateExecution(projectId, evaluationId, { evaluatorVersion, evaluatorConfig } = {}) {
+    if (!projectId || !evaluationId) {
+      throw new Error('projectId and evaluationId are required to re-evaluate');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/evaluations/${encodeURIComponent(
+        evaluationId
+      )}/re-evaluate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          evaluator_version: evaluatorVersion || null,
+          evaluator_config: evaluatorConfig || null,
+        }),
+      }
+    );
+  },
+
+  /**
+   * Independently verify replay reproduction from retained raw evidence.
+   * POST /api/v1/c2/projects/{project_id}/evaluations/{evaluation_id}/verify-reproduction
+   */
+  async verifyReproduction(projectId, evaluationId) {
+    if (!projectId || !evaluationId) {
+      throw new Error('projectId and evaluationId are required to verify reproduction');
+    }
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/evaluations/${encodeURIComponent(
+        evaluationId
+      )}/verify-reproduction`,
+      { method: 'POST' }
+    );
+  },
 };
+

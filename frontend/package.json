@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "test": "node --test src/tests/authAndSession.test.js src/tests/modelPreference.test.js src/tests/emptyComponentRoutes.test.js src/tests/projects.test.js src/features/c2/tests/c2Phase1.test.js",
+    "test": "node --test src/tests/authAndSession.test.js src/tests/modelPreference.test.js src/tests/emptyComponentRoutes.test.js src/tests/projects.test.js src/features/c2/tests/c2Phase1.test.js src/features/c2/tests/c2Phase2.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

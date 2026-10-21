@@ -7,17 +7,31 @@ import {
   Layers,
   ExternalLink,
   Check,
+  Sparkles,
+  Play,
 } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { useProject } from '../../../context/ProjectContext';
 import { projectsApi } from '../../../services/projects';
+import { c2Api } from '../api/c2Api';
 import { useC2Models } from '../hooks/useC2Models';
+import { useC2Suites } from '../hooks/useC2Suites';
+import { useC2Execution } from '../hooks/useC2Execution';
+
 import { ModelListView } from '../components/ModelListView';
 import { ModelDetailView } from '../components/ModelDetailView';
 import { ModelPreparationForm } from '../components/ModelPreparationForm';
 import { ValidationReportModal } from '../components/ValidationReportModal';
 import { ApprovalModal } from '../components/ApprovalModal';
 import { NewDraftModal } from '../components/NewDraftModal';
+
+import { TestSuiteListView } from '../components/TestSuiteListView';
+import { TestCaseListView } from '../components/TestCaseListView';
+import { TestSuiteGeneratorModal } from '../components/TestSuiteGeneratorModal';
+import { TestCaseDetailModal } from '../components/TestCaseDetailModal';
+import { AgentPayloadModal } from '../components/AgentPayloadModal';
+import { ExecutionPanel } from '../components/ExecutionPanel';
+import { DemonstrationRunnerModal } from '../components/DemonstrationRunnerModal';
 
 export const StateAwareWorkflowPage = () => {
   const { user } = useAuth();
@@ -38,11 +52,21 @@ export const StateAwareWorkflowPage = () => {
   const [sharedSelectionError, setSharedSelectionError] = useState(null);
   const [isDelegating, setIsDelegating] = useState(false);
 
+  // Workspace Tabs: 'models' | 'suites' | 'runs'
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState('models');
+
+  // Phase 1 Modals
   const [showPreparationForm, setShowPreparationForm] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [showDraftModal, setShowDraftModal] = useState(false);
+
+  // Phase 2 Modals
+  const [showGenerateModal, setShowGenerateModal] = useState(false);
+  const [showCaseDetailModal, setShowCaseDetailModal] = useState(false);
+  const [showAgentPayloadModal, setShowAgentPayloadModal] = useState(false);
+  const [agentPayloadTargetCaseId, setAgentPayloadTargetCaseId] = useState(null);
+  const [showDemoModal, setShowDemoModal] = useState(false);
 
   // Load authorized projects when no active project is resolved
   useEffect(() => {
@@ -71,6 +95,10 @@ export const StateAwareWorkflowPage = () => {
     setShowReportModal(false);
     setShowApprovalModal(false);
     setShowDraftModal(false);
+    setShowGenerateModal(false);
+    setShowCaseDetailModal(false);
+    setShowAgentPayloadModal(false);
+    setShowDemoModal(false);
     setSharedSelectionError(null);
   }, [user?.id, activeProjectId]);
 
@@ -87,7 +115,7 @@ export const StateAwareWorkflowPage = () => {
     }
   };
 
-  // Initialize C2 Models hook scoped strictly to shared activeProjectId and userId
+  // Phase 1 Hook: Models
   const {
     models,
     selectedModelSummary,
@@ -101,8 +129,8 @@ export const StateAwareWorkflowPage = () => {
     isApproving,
     isCreatingDraft,
     isBuildingCandidate,
-    error,
-    actionError,
+    error: modelsError,
+    actionError: modelsActionError,
     selectModel,
     setSelectedModelSummary,
     validateCurrentModel,
@@ -110,10 +138,77 @@ export const StateAwareWorkflowPage = () => {
     createNewDraft,
     buildCandidateModel,
     createDraftModel,
-    clearActionError,
+    clearActionError: clearModelsActionError,
   } = useC2Models(activeProjectId, user?.id);
 
-  // If loading shared project context
+  // Phase 2 Hook: Suites & Cases
+  const {
+    suites,
+    selectedSuiteSummary,
+    selectedSuiteDetail,
+    suiteReadiness,
+    cases,
+    selectedCaseSummary,
+    selectedCaseDetail,
+    categoryFilter,
+    readinessFilter,
+    isLoadingSuites,
+    isLoadingCases,
+    isGenerating,
+    error: suitesError,
+    actionError: suitesActionError,
+    setSelectedSuiteSummary,
+    setSelectedCaseSummary,
+    setCategoryFilter,
+    setReadinessFilter,
+    generateSuite,
+    clearActionError: clearSuitesActionError,
+  } = useC2Suites(activeProjectId, user?.id);
+
+  // Phase 2 Hook: Execution Controls
+  const executionState = useC2Execution(activeProjectId, user?.id);
+
+  // Filter approved models for test suite generation gating
+  const approvedModels = models.filter((m) => m.lifecycle_status === 'APPROVED');
+  const hasApprovedModel = approvedModels.length > 0;
+
+  // Handle running a case from test case list
+  const handleRunCaseFromList = async (suiteId, testId) => {
+    try {
+      await executionState.executeCase(suiteId, testId);
+      setActiveWorkspaceTab('runs');
+    } catch {
+      // Handled inside hook
+    }
+  };
+
+  // Handle QA Suite export
+  const handleExportQASuite = async (suiteId) => {
+    if (!activeProjectId || !suiteId) return;
+    try {
+      const data = await c2Api.exportQASuite(activeProjectId, suiteId);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `qa_suite_${suiteId}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(`QA Suite export failed: ${err.message}`);
+    }
+  };
+
+  // Handle open Agent Payload Modal
+  const handleOpenAgentPayload = (target = null) => {
+    const testId = typeof target === 'object' && target !== null ? target.test_id : target;
+    setAgentPayloadTargetCaseId(testId);
+    setShowAgentPayloadModal(true);
+  };
+
+  // Loading shared project context
   if (isLoadingActive) {
     return (
       <div className="min-h-[400px] flex items-center justify-center">
@@ -224,10 +319,12 @@ export const StateAwareWorkflowPage = () => {
     );
   }
 
-  // Versions for currently selected model
+  // Versions for currently selected model in Models tab
   const currentModelVersions = models.filter(
     (m) => m.model_id === selectedModelSummary?.model_id
   );
+
+  const activeErrors = modelsError || modelsActionError || suitesError || suitesActionError;
 
   return (
     <div className="space-y-6">
@@ -271,15 +368,18 @@ export const StateAwareWorkflowPage = () => {
       </div>
 
       {/* Global Errors or Action Errors */}
-      {(error || actionError) && (
+      {activeErrors && (
         <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-xs text-rose-800 dark:text-rose-200 flex items-start justify-between gap-3">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-            <span>{error || actionError}</span>
+            <span>{activeErrors}</span>
           </div>
           <button
             type="button"
-            onClick={clearActionError}
+            onClick={() => {
+              clearModelsActionError();
+              clearSuitesActionError();
+            }}
             className="text-xs font-semibold text-rose-700 dark:text-rose-300 hover:underline shrink-0"
           >
             Dismiss
@@ -287,34 +387,54 @@ export const StateAwareWorkflowPage = () => {
         </div>
       )}
 
-      {/* Workspace Tabs (Models first, with roadmap indicators for subsequent phases) */}
-      <div className="flex items-center border-b border-slate-200 dark:border-slate-800 gap-6">
+      {/* Workspace Tabs */}
+      <div className="flex items-center border-b border-slate-200 dark:border-slate-800 gap-6 overflow-x-auto">
         <button
           type="button"
           onClick={() => setActiveWorkspaceTab('models')}
-          className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors ${
+          className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors shrink-0 ${
             activeWorkspaceTab === 'models'
               ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
               : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
           }`}
         >
           <Layers className="w-4 h-4" />
-          Models Workspace
+          <span>Workflow Models</span>
         </button>
 
-        <span
-          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed"
-          title="Test Suites Workspace available in Phase 2"
+        <button
+          type="button"
+          onClick={() => setActiveWorkspaceTab('suites')}
+          className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors shrink-0 ${
+            activeWorkspaceTab === 'suites'
+              ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+          }`}
         >
+          <Sparkles className="w-4 h-4" />
           <span>Test Suites</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-400">
-            Phase 2
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
+            {suites?.length || 0}
           </span>
-        </span>
+        </button>
 
+        <button
+          type="button"
+          onClick={() => setActiveWorkspaceTab('runs')}
+          className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors shrink-0 ${
+            activeWorkspaceTab === 'runs'
+              ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+          }`}
+        >
+          <Play className="w-4 h-4" />
+          <span>Execution & Runs</span>
+        </button>
+
+        {/* Roadmap Indicators */}
         <span
-          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed"
-          title="Trace Observations available in Phase 3"
+          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed shrink-0"
+          title="Runtime Traces and Evidence Inspection available in Phase 3"
         >
           <span>Runtime Traces</span>
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-400">
@@ -323,8 +443,8 @@ export const StateAwareWorkflowPage = () => {
         </span>
 
         <span
-          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed"
-          title="Conformance Evaluations available in Phase 4"
+          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed shrink-0"
+          title="Conformance Evaluations & Differential Analysis available in Phase 4"
         >
           <span>Evaluations</span>
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-400">
@@ -333,7 +453,7 @@ export const StateAwareWorkflowPage = () => {
         </span>
 
         <span
-          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed"
+          className="py-3 text-xs text-slate-400 dark:text-slate-600 flex items-center gap-1.5 cursor-not-allowed shrink-0"
           title="Baselines & Benchmarks available in Phase 5"
         >
           <span>Baselines</span>
@@ -343,69 +463,124 @@ export const StateAwareWorkflowPage = () => {
         </span>
       </div>
 
-      {/* Main Workspace Body */}
-      {showPreparationForm ? (
-        <ModelPreparationForm
-          projectId={activeProjectId}
-          onBuildCandidate={async (input, autoVal) => {
-            await buildCandidateModel(input, autoVal);
-            setShowPreparationForm(false);
-          }}
-          onCreateDraft={async (def) => {
-            await createDraftModel(def);
-            setShowPreparationForm(false);
-          }}
-          isSubmitting={isBuildingCandidate}
-          onCancel={() => setShowPreparationForm(false)}
-        />
-      ) : (
+      {/* TAB 1: WORKFLOW MODELS (Phase 1) */}
+      {activeWorkspaceTab === 'models' && (
+        <>
+          {showPreparationForm ? (
+            <ModelPreparationForm
+              projectId={activeProjectId}
+              onBuildCandidate={async (input, autoVal) => {
+                await buildCandidateModel(input, autoVal);
+                setShowPreparationForm(false);
+              }}
+              onCreateDraft={async (def) => {
+                await createDraftModel(def);
+                setShowPreparationForm(false);
+              }}
+              isSubmitting={isBuildingCandidate}
+              onCancel={() => setShowPreparationForm(false)}
+            />
+          ) : (
+            <div className="space-y-6">
+              <ModelListView
+                models={models}
+                selectedModelId={selectedModelSummary?.model_id}
+                selectedVersion={selectedModelSummary?.version}
+                onSelectModel={(mId, ver) => {
+                  const summary = models.find((m) => m.model_id === mId && m.version === ver);
+                  setSelectedModelSummary(summary || null);
+                }}
+                onOpenPreparation={() => setShowPreparationForm(true)}
+                isLoading={isLoadingModels}
+              />
+
+              {selectedModelSummary && (
+                <div className="pt-2">
+                  {isLoadingDetail ? (
+                    <div className="p-12 text-center text-xs text-slate-400 bg-white dark:bg-[#131A26] rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-center gap-2">
+                      <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                      <span>Loading full model specification and predicates...</span>
+                    </div>
+                  ) : (
+                    <ModelDetailView
+                      model={selectedModelDetail || selectedModelSummary}
+                      readiness={readiness}
+                      validationReport={validationReport}
+                      validationHistory={validationHistory}
+                      onValidate={validateCurrentModel}
+                      onOpenApproval={() => setShowApprovalModal(true)}
+                      onOpenNewDraft={() => setShowDraftModal(true)}
+                      onOpenReport={() => setShowReportModal(true)}
+                      onRefresh={() =>
+                        selectModel(selectedModelSummary.model_id, selectedModelSummary.version)
+                      }
+                      isValidating={isValidating}
+                      allVersions={currentModelVersions}
+                      onSelectVersion={(mId, ver) => {
+                        const match = models.find((m) => m.model_id === mId && m.version === ver);
+                        setSelectedModelSummary(match || null);
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* TAB 2: TEST SUITES WORKSPACE (Phase 2) */}
+      {activeWorkspaceTab === 'suites' && (
         <div className="space-y-6">
-          {/* Models List Table */}
-          <ModelListView
-            models={models}
-            selectedModelId={selectedModelSummary?.model_id}
-            selectedVersion={selectedModelSummary?.version}
-            onSelectModel={(mId, ver) => {
-              const summary = models.find((m) => m.model_id === mId && m.version === ver);
-              setSelectedModelSummary(summary || null);
-            }}
-            onOpenPreparation={() => setShowPreparationForm(true)}
-            isLoading={isLoadingModels}
+          <TestSuiteListView
+            suites={suites}
+            selectedSuite={selectedSuiteSummary}
+            onSelectSuite={(suite) => setSelectedSuiteSummary(suite)}
+            onOpenGenerateModal={() => setShowGenerateModal(true)}
+            isLoading={isLoadingSuites}
+            suiteReadiness={suiteReadiness}
+            hasApprovedModel={hasApprovedModel}
           />
 
-          {/* Model Detail View */}
-          {selectedModelSummary && (
+          {selectedSuiteSummary && (
             <div className="pt-2">
-              {isLoadingDetail ? (
-                <div className="p-12 text-center text-xs text-slate-400 bg-white dark:bg-[#131A26] rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-center gap-2">
-                  <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                  <span>Loading full model specification and predicates...</span>
-                </div>
-              ) : (
-                <ModelDetailView
-                  model={selectedModelDetail || selectedModelSummary}
-                  readiness={readiness}
-                  validationReport={validationReport}
-                  validationHistory={validationHistory}
-                  onValidate={validateCurrentModel}
-                  onOpenApproval={() => setShowApprovalModal(true)}
-                  onOpenNewDraft={() => setShowDraftModal(true)}
-                  onOpenReport={() => setShowReportModal(true)}
-                  onRefresh={() => selectModel(selectedModelSummary.model_id, selectedModelSummary.version)}
-                  isValidating={isValidating}
-                  allVersions={currentModelVersions}
-                  onSelectVersion={(mId, ver) => {
-                    const match = models.find((m) => m.model_id === mId && m.version === ver);
-                    setSelectedModelSummary(match || null);
-                  }}
-                />
-              )}
+              <TestCaseListView
+                suite={selectedSuiteDetail || selectedSuiteSummary}
+                cases={cases}
+                selectedCase={selectedCaseSummary}
+                onSelectCase={(c) => setSelectedCaseSummary(c)}
+                onOpenCaseDetail={() => setShowCaseDetailModal(true)}
+                onRunCase={handleRunCaseFromList}
+                onOpenAgentPayload={handleOpenAgentPayload}
+                categoryFilter={categoryFilter}
+                onCategoryFilterChange={setCategoryFilter}
+                readinessFilter={readinessFilter}
+                onReadinessFilterChange={setReadinessFilter}
+                onExportQASuite={handleExportQASuite}
+                onExportAgentPayloads={() => handleOpenAgentPayload(null)}
+                isLoading={isLoadingCases}
+                isExecutingCase={executionState.isExecutingCase}
+              />
             </div>
           )}
         </div>
       )}
 
-      {/* Modals */}
+      {/* TAB 3: EXECUTION & RUNS WORKSPACE (Phase 2) */}
+      {activeWorkspaceTab === 'runs' && (
+        <ExecutionPanel
+          projectId={activeProjectId}
+          suites={suites}
+          selectedSuite={selectedSuiteSummary}
+          cases={cases}
+          selectedCase={selectedCaseSummary}
+          approvedModels={approvedModels}
+          executionState={executionState}
+          onOpenDemoModal={() => setShowDemoModal(true)}
+        />
+      )}
+
+      {/* Phase 1 Modals */}
       <ValidationReportModal
         isOpen={showReportModal}
         onClose={() => setShowReportModal(false)}
@@ -428,6 +603,45 @@ export const StateAwareWorkflowPage = () => {
         model={selectedModelDetail || selectedModelSummary}
         onCreateDraft={createNewDraft}
         isCreating={isCreatingDraft}
+      />
+
+      {/* Phase 2 Modals */}
+      <TestSuiteGeneratorModal
+        isOpen={showGenerateModal}
+        onClose={() => setShowGenerateModal(false)}
+        approvedModels={approvedModels}
+        onGenerate={generateSuite}
+        isGenerating={isGenerating}
+      />
+
+      <TestCaseDetailModal
+        isOpen={showCaseDetailModal}
+        onClose={() => setShowCaseDetailModal(false)}
+        testCase={selectedCaseDetail || selectedCaseSummary}
+        projectId={activeProjectId}
+        suiteId={selectedSuiteSummary?.suite_id}
+        onRunCase={handleRunCaseFromList}
+        isExecutingCase={executionState.isExecutingCase}
+      />
+
+      <AgentPayloadModal
+        isOpen={showAgentPayloadModal}
+        onClose={() => {
+          setShowAgentPayloadModal(false);
+          setAgentPayloadTargetCaseId(null);
+        }}
+        projectId={activeProjectId}
+        suiteId={selectedSuiteSummary?.suite_id}
+        testId={agentPayloadTargetCaseId}
+      />
+
+      <DemonstrationRunnerModal
+        isOpen={showDemoModal}
+        onClose={() => setShowDemoModal(false)}
+        modelId={selectedModelSummary?.model_id || 'c2_refund_efsm_nexacart'}
+        modelVersion={selectedModelSummary?.version || '1.0.0'}
+        onRunDemonstration={executionState.executeDemonstration}
+        isExecuting={executionState.isExecutingDemo}
       />
     </div>
   );
