@@ -9,6 +9,8 @@ import {
   RotateCw,
   Info,
   Activity,
+  Download,
+  Layers,
 } from 'lucide-react';
 import {
   POLICY_VERDICTS,
@@ -21,6 +23,8 @@ export function ExecutionRunsSection({
   onSelectRun,
   onRefreshRuns,
   isLoadingRuns,
+  onOpenFindingModal,
+  onOpenExportModal,
 }) {
   const [selectedRunId, setSelectedRunId] = useState(activeRun?.run_id || runsList[0]?.run_id || null);
 
@@ -153,9 +157,21 @@ export function ExecutionRunsSection({
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded">
                       Execution Trial Analysis
                     </span>
-                    <span className="text-xs font-mono text-slate-400">
-                      Run ID: {currentRun.run_id}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono text-slate-400">
+                        Run ID: {currentRun.run_id}
+                      </span>
+                      {onOpenExportModal && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenExportModal(currentRun)}
+                          className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 text-xs font-semibold border border-indigo-200 dark:border-indigo-800 transition-colors flex items-center gap-1"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Export Report</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <h4 className="text-base font-bold text-slate-900 dark:text-white font-mono mt-1">
@@ -307,18 +323,71 @@ export function ExecutionRunsSection({
                       {currentRun.findings.map((f, i) => (
                         <div
                           key={i}
-                          className="p-3 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900 text-xs space-y-1"
+                          className="p-3.5 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900 text-xs space-y-2"
                         >
                           <div className="flex items-center justify-between font-bold text-rose-900 dark:text-rose-200">
-                            <span>Finding: {f.finding_type || 'INVARIANT_VIOLATION'}</span>
-                            <span className="font-mono text-[10px]">{f.severity || 'HIGH'}</span>
+                            <span>Finding: {f.rule_id || f.finding_type || 'INVARIANT_VIOLATION'}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-[10px]">{f.severity || 'HIGH'}</span>
+                              {onOpenFindingModal && (
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenFindingModal(f, currentRun)}
+                                  className="px-2 py-0.5 rounded bg-rose-200/80 hover:bg-rose-300 dark:bg-rose-900/60 dark:hover:bg-rose-800 text-[10px] font-bold text-rose-950 dark:text-rose-100 transition-colors"
+                                >
+                                  Inspect Evidence Chain
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <p className="text-rose-800 dark:text-rose-300 text-[11px]">
-                            {f.description || f.message}
+                            {f.description || f.message || f.explanation}
                           </p>
                         </div>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {/* Inspect Run Evidence Chain Trigger */}
+                {onOpenFindingModal && (!currentRun.findings || currentRun.findings.length === 0) && (
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenFindingModal(
+                          {
+                            finding_id: `f-${currentRun.run_id}`,
+                            rule_id: currentRun.case_id,
+                            contract_id: currentRun.contract_id || 'contract-ecommerce-v1',
+                            contract_version: currentRun.contract_version || 1,
+                            rule_version: 1,
+                            verdict: currentRun.policy_verdict || 'NOT_EXERCISED',
+                            severity: 'HIGH',
+                            violation_stage:
+                              currentRun.attacker_objective_outcome === 'ACHIEVED'
+                                ? 'COMPLETED_PROHIBITED_ACTION_OR_EFFECT'
+                                : 'ATTEMPTED_PROHIBITED_ACTION',
+                            explanation:
+                              currentRun.evaluation_report_summary ||
+                              'Evaluation summary based on retained evidence package.',
+                            attack_outcome: currentRun.attacker_objective_outcome,
+                            benign_utility: currentRun.task_utility_outcome,
+                            observed_effect:
+                              currentRun.pre_cleanup_effects?.length > 0
+                                ? 'Pre-cleanup effects committed'
+                                : 'No persistent state delta',
+                            missing_evidence:
+                              currentRun.exposure_status === 'UNKNOWN' ? ['Unobserved exposure event trace'] : [],
+                          },
+                          currentRun
+                        )
+                      }
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>Inspect Complete Evidence Chain</span>
+                    </button>
                   </div>
                 )}
               </div>

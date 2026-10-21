@@ -333,6 +333,180 @@ export const c4Api = {
     const url = buildUrl(projectId, `/runs/${encodeURIComponent(runId)}/report`);
     return request(url, { method: 'GET' });
   },
+
+  // -------------------------------------------------------------
+  // Phase 3: Policy Change Diffing, Impact Planning & Regression
+  // -------------------------------------------------------------
+
+  /**
+   * Compare two accepted policy contracts to generate a deterministic diff.
+   */
+  async comparePolicyContracts(projectId, payload) {
+    const url = buildUrl(projectId, '/regression/compare');
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * Retrieve an existing policy comparison record.
+   */
+  async getPolicyComparison(projectId, comparisonId) {
+    const url = buildUrl(projectId, `/regression/comparisons/${encodeURIComponent(comparisonId)}`);
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Create a typed regression impact plan for a comparison and domain binding.
+   */
+  async createRegressionPlan(projectId, payload) {
+    const url = buildUrl(projectId, '/regression/plans');
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * Retrieve an existing regression plan by ID.
+   */
+  async getRegressionPlan(projectId, planId) {
+    const url = buildUrl(projectId, `/regression/plans/${encodeURIComponent(planId)}`);
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Selectively regenerate and revalidate affected test cases for a regression plan.
+   */
+  async regenerateRegressionPlan(projectId, planId) {
+    const url = buildUrl(projectId, `/regression/plans/${encodeURIComponent(planId)}/regenerate`);
+    return request(url, { method: 'POST' });
+  },
+
+  /**
+   * Freeze a validated regression plan into an immutable snapshot.
+   */
+  async freezeRegressionPlan(projectId, planId) {
+    const url = buildUrl(projectId, `/regression/plans/${encodeURIComponent(planId)}/freeze`);
+    return request(url, { method: 'POST' });
+  },
+
+  /**
+   * Selectively execute a frozen regression plan against the target adapter.
+   */
+  async executeRegressionPlan(projectId, planId, payload = {}) {
+    const url = buildUrl(projectId, `/regression/plans/${encodeURIComponent(planId)}/execute`);
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * Retrieve an evidence-linked regression report for a plan.
+   */
+  async getRegressionReport(projectId, planId) {
+    const url = buildUrl(projectId, `/regression/plans/${encodeURIComponent(planId)}/report`);
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Re-evaluate historical run evidence under candidate policy without fresh agent execution.
+   */
+  async reEvaluateHistorical(projectId, planId) {
+    const url = buildUrl(projectId, `/regression/plans/${encodeURIComponent(planId)}/re-evaluate-historical`);
+    return request(url, { method: 'POST' });
+  },
+
+  // -------------------------------------------------------------
+  // Phase 3: Research Evaluation, Datasets, Reviews & Experiments
+  // -------------------------------------------------------------
+
+  /**
+   * Register and validate a versioned evaluation dataset.
+   */
+  async registerEvaluationDataset(projectId, payload) {
+    const url = buildUrl(projectId, '/evaluation/datasets');
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * List evaluation datasets for a project.
+   */
+  async listEvaluationDatasets(projectId) {
+    const url = buildUrl(projectId, '/evaluation/datasets');
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Retrieve an evaluation dataset by ID and version.
+   */
+  async getEvaluationDataset(projectId, datasetId, version = 1) {
+    const url = `${buildUrl(projectId, `/evaluation/datasets/${encodeURIComponent(datasetId)}`)}?version=${version}`;
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Freeze an evaluation dataset to guarantee benchmark immutability.
+   */
+  async freezeEvaluationDataset(projectId, datasetId, version = 1) {
+    const url = `${buildUrl(projectId, `/evaluation/datasets/${encodeURIComponent(datasetId)}/freeze`)}?version=${version}`;
+    return request(url, { method: 'POST' });
+  },
+
+  /**
+   * Record an independent reviewer judgment.
+   */
+  async recordReviewerDecision(projectId, payload) {
+    const url = buildUrl(projectId, '/evaluation/reviews');
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * Calculate Cohen's Kappa agreement between two independent reviewers.
+   */
+  async getReviewerAgreement(projectId, reviewer1, reviewer2) {
+    const query = new URLSearchParams({
+      reviewer_1: reviewer1,
+      reviewer_2: reviewer2,
+    });
+    const url = `${buildUrl(projectId, '/evaluation/reviews/agreement')}?${query.toString()}`;
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Create a reproducible evaluation experiment configuration.
+   */
+  async createExperiment(projectId, payload) {
+    const url = buildUrl(projectId, '/evaluation/experiments');
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * Execute reproducible evaluation experiment trials and compute stratified metrics.
+   */
+  async executeExperiment(projectId, experimentId) {
+    const url = buildUrl(projectId, `/evaluation/experiments/${encodeURIComponent(experimentId)}/execute`);
+    return request(url, { method: 'POST' });
+  },
+
+  /**
+   * Retrieve a completed experiment report with uncertainty summaries.
+   */
+  async getExperimentReport(projectId, experimentId) {
+    const url = buildUrl(projectId, `/evaluation/experiments/${encodeURIComponent(experimentId)}/report`);
+    return request(url, { method: 'GET' });
+  },
 };
 
 export { ApiError };

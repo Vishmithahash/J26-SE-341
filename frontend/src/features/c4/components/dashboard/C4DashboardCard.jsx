@@ -17,7 +17,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
   const { activeProject } = useProject();
   const [readiness, setReadiness] = useState(null);
   const [bindings, setBindings] = useState([]);
-  const [latestRun, setLatestRun] = useState(null);
+  const [runsList, setRunsList] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -27,7 +27,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
     if (!projectId) {
       setReadiness(null);
       setBindings([]);
-      setLatestRun(null);
+      setRunsList([]);
       setError(null);
       return;
     }
@@ -39,7 +39,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
     Promise.allSettled([
       c4Api.getExtractionReadiness(projectId),
       c4Api.getBindings(projectId),
-      c4Api.listExecutionRuns(projectId, { limit: 1 }),
+      c4Api.listExecutionRuns(projectId, { limit: 50 }),
     ]).then(([readinessRes, bindingsRes, runsRes]) => {
       if (!isMounted) return;
 
@@ -55,10 +55,10 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
         setBindings([]);
       }
 
-      if (runsRes.status === 'fulfilled' && Array.isArray(runsRes.value) && runsRes.value.length > 0) {
-        setLatestRun(runsRes.value[0]);
+      if (runsRes.status === 'fulfilled' && Array.isArray(runsRes.value)) {
+        setRunsList(runsRes.value);
       } else {
-        setLatestRun(null);
+        setRunsList([]);
       }
 
       setIsLoading(false);
@@ -95,7 +95,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
           </h3>
 
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-            Policy derivation, safety contract gates, and injection resilience testing require an active project scope.
+            Policy derivation, safety contract gates, injection resilience testing, and regression analysis require an active project scope.
           </p>
 
           <div className="mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2.5">
@@ -120,7 +120,21 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
     );
   }
 
-  // Helper for latest verdict color
+  // Verdict distribution
+  const verdictDistribution = {
+    PASS: 0,
+    FAIL: 0,
+    INCONCLUSIVE: 0,
+    NOT_EXERCISED: 0,
+  };
+  runsList.forEach((r) => {
+    if (verdictDistribution[r.policy_verdict] !== undefined) {
+      verdictDistribution[r.policy_verdict]++;
+    }
+  });
+
+  const latestRun = runsList.length > 0 ? runsList[0] : null;
+
   const getVerdictStyle = (verdict) => {
     switch (verdict) {
       case POLICY_VERDICTS.PASS:
@@ -142,8 +156,8 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
           <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shrink-0">
             <ShieldCheck className="w-5 h-5" />
           </div>
-          <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-200/50 dark:border-emerald-900/50">
-            Phase 1 & 2 Active
+          <span className="text-[11px] font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 font-mono">
+            Phases 1, 2 & 3 Complete
           </span>
         </div>
 
@@ -151,7 +165,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
           Policy-Aware Safety and Prompt-Injection Testing
         </h3>
 
-        <div className="mt-2 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <div className="mt-1 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
           <span className="font-semibold text-slate-700 dark:text-slate-300 truncate max-w-[160px]">
             {activeProject.name}
           </span>
@@ -175,7 +189,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
               </div>
             </div>
           ) : (
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60 space-y-2">
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60 space-y-2.5">
               <div className="flex items-center justify-between text-xs">
                 <span className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
                   <Cpu className="w-3.5 h-3.5 text-indigo-500" />
@@ -198,7 +212,36 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
                 </span>
               </div>
 
-              {/* Latest Run Provenance */}
+              {/* Policy Verdict Distribution */}
+              {runsList.length > 0 && (
+                <div className="pt-2 border-t border-slate-200/50 dark:border-slate-700/50">
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                      Verdict Distribution ({runsList.length} trials):
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 text-center text-[10px] font-mono">
+                    <div className="p-1 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/50 dark:border-emerald-800/50">
+                      <span className="block font-bold">{verdictDistribution.PASS}</span>
+                      <span className="text-[9px]">PASS</span>
+                    </div>
+                    <div className="p-1 rounded bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200/50 dark:border-rose-800/50">
+                      <span className="block font-bold">{verdictDistribution.FAIL}</span>
+                      <span className="text-[9px]">FAIL</span>
+                    </div>
+                    <div className="p-1 rounded bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/50">
+                      <span className="block font-bold">{verdictDistribution.INCONCLUSIVE}</span>
+                      <span className="text-[9px]">INCONCL</span>
+                    </div>
+                    <div className="p-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                      <span className="block font-bold">{verdictDistribution.NOT_EXERCISED}</span>
+                      <span className="text-[9px]">NOT_EX</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Latest Run Provenance & Disentangled Outcomes */}
               <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/50 dark:border-slate-700/50">
                 <span className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
                   <Activity className="w-3.5 h-3.5 text-emerald-500" />
@@ -206,7 +249,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
                 </span>
                 {latestRun ? (
                   <span className={`font-mono text-xs ${getVerdictStyle(latestRun.policy_verdict)}`}>
-                    {latestRun.policy_verdict} ({latestRun.execution_mode})
+                    {latestRun.policy_verdict} ({latestRun.execution_mode || 'SIMULATED'})
                   </span>
                 ) : (
                   <span className="text-[11px] text-slate-400 italic">No trials executed yet</span>
@@ -214,9 +257,15 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
               </div>
 
               {latestRun && (
-                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
-                  <span>Exposure: {latestRun.exposure_status}</span>
-                  <span>{new Date(latestRun.created_at).toLocaleDateString()}</span>
+                <div className="space-y-1 text-[11px] text-slate-500 dark:text-slate-400 font-mono bg-slate-100/70 dark:bg-slate-900/60 p-2 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <span>Exposure: {latestRun.exposure_status}</span>
+                    <span>Attacker: {latestRun.attacker_objective_outcome}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Utility: {latestRun.task_utility_outcome}</span>
+                    <span>{new Date(latestRun.created_at).toLocaleDateString()}</span>
+                  </div>
                 </div>
               )}
             </div>
@@ -229,7 +278,7 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
           to={workspacePath}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
         >
-          <span>Open C4 Workspace</span>
+          <span>Open Full C4 Workspace</span>
           <ExternalLink className="w-3.5 h-3.5" />
         </Link>
         <span className="text-[11px] text-slate-400">Policy & Safety</span>

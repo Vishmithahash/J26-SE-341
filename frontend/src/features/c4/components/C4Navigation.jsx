@@ -53,18 +53,18 @@ export function C4Navigation({ activeTab, onSelectTab }) {
     {
       id: C4_WORKSPACE_TABS.POLICY_CHANGES,
       label: 'Policy Changes',
-      phase: 'Phase 5',
+      phase: 'Phase 3',
       icon: GitCompare,
-      status: 'Pending Phase 5',
-      isImplemented: false,
+      status: 'Implemented',
+      isImplemented: true,
     },
     {
       id: C4_WORKSPACE_TABS.EVALUATION_AND_REPORTS,
       label: 'Evaluation & Reports',
-      phase: 'Phase 6',
+      phase: 'Phase 3',
       icon: BarChart3,
-      status: 'Pending Phase 6',
-      isImplemented: false,
+      status: 'Implemented',
+      isImplemented: true,
     },
   ];
 

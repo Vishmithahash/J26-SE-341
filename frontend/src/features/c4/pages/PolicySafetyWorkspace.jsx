@@ -18,6 +18,8 @@ import { useDomainBindings } from '../hooks/useDomainBindings';
 import { useTestCaseGeneration } from '../hooks/useTestCaseGeneration';
 import { useTestCaseInspection } from '../hooks/useTestCaseInspection';
 import { useControlledExecution } from '../hooks/useControlledExecution';
+import { usePolicyRegression } from '../hooks/usePolicyRegression';
+import { useResearchEvaluation } from '../hooks/useResearchEvaluation';
 
 import { ProjectHeader } from '../components/ProjectHeader';
 import { C4Navigation } from '../components/C4Navigation';
@@ -31,7 +33,10 @@ import { TestCaseList } from '../components/cases/TestCaseList';
 import { CasePayloadsModal } from '../components/cases/CasePayloadsModal';
 import { ExecutionModal } from '../components/execution/ExecutionModal';
 import { ExecutionRunsSection } from '../components/execution/ExecutionRunsSection';
-import { PendingPhasePlaceholder } from '../components/PendingPhasePlaceholder';
+import { PolicyRegressionSection } from '../components/regression/PolicyRegressionSection';
+import { ResearchEvaluationSection } from '../components/evaluation/ResearchEvaluationSection';
+import { FindingDetailsModal } from '../components/evidence/FindingDetailsModal';
+import { ReportExportModal } from '../components/reports/ReportExportModal';
 import { C4_WORKSPACE_TABS } from '../api/types';
 
 export const PolicySafetyWorkspace = ({
@@ -47,10 +52,15 @@ export const PolicySafetyWorkspace = ({
   // Selected candidate rule IDs for contract creation
   const [selectedRuleIds, setSelectedRuleIds] = useState([]);
 
-  // Modal inspection states for Phase 2
+  // Modal inspection states for Phase 2 & Phase 3
   const [isPayloadModalOpen, setIsPayloadModalOpen] = useState(false);
   const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false);
   const [modalTargetCase, setModalTargetCase] = useState(null);
+  const [isFindingModalOpen, setIsFindingModalOpen] = useState(false);
+  const [modalTargetFinding, setModalTargetFinding] = useState(null);
+  const [modalTargetRunForFinding, setModalTargetRunForFinding] = useState(null);
+  const [isReportExportModalOpen, setIsReportExportModalOpen] = useState(false);
+  const [modalTargetRunForExport, setModalTargetRunForExport] = useState(null);
 
   // DOM refs to scroll directly to sections
   const extractionSectionRef = useRef(null);
@@ -63,6 +73,11 @@ export const PolicySafetyWorkspace = ({
     setIsPayloadModalOpen(false);
     setIsExecutionModalOpen(false);
     setModalTargetCase(null);
+    setIsFindingModalOpen(false);
+    setModalTargetFinding(null);
+    setModalTargetRunForFinding(null);
+    setIsReportExportModalOpen(false);
+    setModalTargetRunForExport(null);
   }, []);
 
   const {
@@ -84,14 +99,25 @@ export const PolicySafetyWorkspace = ({
   const generation = useTestCaseGeneration(activeProjectId, isCurrentGeneration, getGeneration);
   const cases = useTestCaseInspection(activeProjectId, isCurrentGeneration, getGeneration);
   const execution = useControlledExecution(activeProjectId, isCurrentGeneration, getGeneration);
+  const regression = usePolicyRegression(activeProjectId, isCurrentGeneration, getGeneration);
+  const evaluation = useResearchEvaluation(activeProjectId, isCurrentGeneration, getGeneration);
 
   // Load test cases when project is ready or tab switches to TEST_CASES
   const { loadTestCases } = cases;
+  const { loadRuns } = execution;
+  const { loadDatasets } = evaluation;
+
   useEffect(() => {
     if (activeProjectId && activeTab === C4_WORKSPACE_TABS.TEST_CASES) {
       loadTestCases();
     }
-  }, [activeProjectId, activeTab, loadTestCases]);
+    if (activeProjectId && activeTab === C4_WORKSPACE_TABS.RUNS_AND_FINDINGS) {
+      loadRuns();
+    }
+    if (activeProjectId && activeTab === C4_WORKSPACE_TABS.EVALUATION_AND_REPORTS) {
+      loadDatasets();
+    }
+  }, [activeProjectId, activeTab, loadTestCases, loadRuns, loadDatasets]);
 
   // Candidate selection helpers
   const handleToggleSelectRule = useCallback((ruleId) => {
@@ -148,6 +174,28 @@ export const PolicySafetyWorkspace = ({
     setModalTargetCase(null);
   }, []);
 
+  const handleOpenFindingModal = useCallback((finding, run) => {
+    setModalTargetFinding(finding);
+    setModalTargetRunForFinding(run);
+    setIsFindingModalOpen(true);
+  }, []);
+
+  const handleCloseFindingModal = useCallback(() => {
+    setIsFindingModalOpen(false);
+    setModalTargetFinding(null);
+    setModalTargetRunForFinding(null);
+  }, []);
+
+  const handleOpenReportExportModal = useCallback((run) => {
+    setModalTargetRunForExport(run);
+    setIsReportExportModalOpen(true);
+  }, []);
+
+  const handleCloseReportExportModal = useCallback(() => {
+    setIsReportExportModalOpen(false);
+    setModalTargetRunForExport(null);
+  }, []);
+
   const handleGenerateCasesWrapper = useCallback(
     async (params) => {
       const report = await generation.generateCases(params);
@@ -167,7 +215,7 @@ export const PolicySafetyWorkspace = ({
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold uppercase tracking-wider">
               <TitleIcon className="w-3.5 h-3.5" />
-              Component 4 • Phase 1 & 2 Active
+              Component 4 • Complete (Phases 1, 2 & 3 Active)
             </div>
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 text-xs font-medium">
               <Shield className="w-3 h-3 text-slate-400" />
@@ -356,16 +404,31 @@ export const PolicySafetyWorkspace = ({
                 onSelectRun={execution.setActiveRun}
                 onRefreshRuns={() => execution.loadRuns()}
                 isLoadingRuns={execution.isLoadingRuns}
+                onOpenFindingModal={handleOpenFindingModal}
+                onOpenExportModal={handleOpenReportExportModal}
               />
             </div>
           )}
 
-          {/* FUTURE PHASES: Clear roadmap placeholders without fake data */}
+          {/* TAB 5: Policy Changes & Impact Regression (Phase 3 Implemented) */}
           {activeTab === C4_WORKSPACE_TABS.POLICY_CHANGES && (
-            <PendingPhasePlaceholder tabId={activeTab} />
+            <div className="space-y-6">
+              <PolicyRegressionSection
+                regression={regression}
+                contracts={contracts}
+                bindings={bindings}
+              />
+            </div>
           )}
+
+          {/* TAB 6: Research Evaluation & Benchmarks (Phase 3 Implemented) */}
           {activeTab === C4_WORKSPACE_TABS.EVALUATION_AND_REPORTS && (
-            <PendingPhasePlaceholder tabId={activeTab} />
+            <div className="space-y-6">
+              <ResearchEvaluationSection
+                evaluation={evaluation}
+                projectId={activeProjectId}
+              />
+            </div>
           )}
         </div>
       )}
@@ -406,6 +469,21 @@ export const PolicySafetyWorkspace = ({
         onClose={handleCloseExecutionModal}
         error={execution.error}
         successMessage={execution.successMessage}
+      />
+
+      {/* Evidence-Linked Finding Details Modal */}
+      <FindingDetailsModal
+        isOpen={isFindingModalOpen}
+        finding={modalTargetFinding}
+        runRecord={modalTargetRunForFinding}
+        onClose={handleCloseFindingModal}
+      />
+
+      {/* Authenticated Report Export Modal */}
+      <ReportExportModal
+        isOpen={isReportExportModalOpen}
+        runRecord={modalTargetRunForExport}
+        onClose={handleCloseReportExportModal}
       />
     </div>
   );
