@@ -278,64 +278,57 @@ This document provides the authoritative mapping between user actions in the Com
 
 ---
 
-### 2. Backend Authorization Gap & Server Security Blocker
+### 2. Backend Authorization Enforcement (Resolved)
 
-#### 2.1 Exact Endpoints Missing Server-Side Authentication & Project Ownership Enforcement
-The FastAPI router for Component 2 (`backend/app/components/c2_state_aware_workflow/api/router.py`) declares route parameters scoped by `project_id: str` and injects `db: DbSession = Annotated[Session, Depends(get_db)]`, but **completely lacks** any dependency on `current_user` (e.g. `Annotated[User, Depends(require_active_user)]`) and performs **zero database checks** to verify whether the calling user owns or is an authorized member of `project_id`.
+#### 2.1 Server-Side Authentication & Project Ownership Policy
+The FastAPI router for Component 2 (`backend/app/components/c2_state_aware_workflow/api/router.py`) now enforces server-side authentication and project access policy via the route-level dependency `authorize_c2_project_access`:
+- Injects `require_active_user` to ensure caller is an authenticated, active user.
+- Denies unknown roles with `403 Forbidden`.
+- Calls shared `get_project(db, current_user, project_id)`:
+  - `USER`: May access only projects owned by the authenticated account (`project.owner_user_id == current_user.id`). Inaccessible or nonexistent projects return `404 Not Found` (fail-closed enumeration prevention).
+  - `ADMIN`: Follows shared platform administrative policy and may access any project's C2 records.
+  - Queries remain strictly scoped to `(project_id, model_id, version)`. A model identifier from another project cannot bypass project scoping (returns `404 Not Found`).
 
-The exact Phase 1 (and related) endpoints missing server-side authentication and project authorization are:
-1. `POST /api/v1/c2/projects/{project_id}/models/build` (Line 320) — Builds/proposes candidate EFSM models.
-2. `POST /api/v1/c2/projects/{project_id}/models` (Line 367) — Directly creates draft EFSM models.
-3. `GET /api/v1/c2/projects/{project_id}/models` (Line 395) — Lists all workflow models for a project.
-4. `GET /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}` (Line 426) — Retrieves full model definition.
-5. `POST /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/validate` (Line 447) — Executes validation engine on model version.
-6. `GET /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/validation-reports` (Line 469) — Retrieves validation report history.
-7. `POST /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/approve` (Line 485) — Freezes model version and records approval.
-8. `POST /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/new-draft` (Line 519) — Branches new draft versions from an approved model.
-9. `GET /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/readiness` (Line 553) — Returns authoritative readiness status.
+All C2 endpoints under `/api/v1/c2` inherit this dependency:
+1. `POST /api/v1/c2/projects/{project_id}/models/build` — Builds/proposes candidate EFSM models.
+2. `POST /api/v1/c2/projects/{project_id}/models` — Directly creates draft EFSM models.
+3. `GET /api/v1/c2/projects/{project_id}/models` — Lists all workflow models for an authorized project.
+4. `GET /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}` — Retrieves full model definition.
+5. `POST /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/validate` — Executes validation engine on model version.
+6. `GET /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/validation-reports` — Retrieves validation report history.
+7. `POST /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/approve` — Freezes model version and records approval.
+8. `POST /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/new-draft` — Branches new draft versions from an approved model.
+9. `GET /api/v1/c2/projects/{project_id}/models/{model_id}/versions/{version}/readiness` — Returns authoritative readiness status.
 
-*(Note: All subsequent suite generation, evaluation, reporting, and benchmark endpoints in `router.py` similarly lack `current_user` dependencies).*
-
-#### 2.2 Security Blocker Disclosure
-- **Crucial Limitation**: Neither client-side route guards (`ProtectedRoute`), nor project-scoped URL parameters, nor frontend request filtering resolve or mitigate this server-side vulnerability.
-- Any unauthenticated or unauthorized client capable of sending HTTP requests to the backend server can list, inspect, modify, validate, or approve workflow models for any `project_id`.
-- **Classification**: Server-side authorization is an **active integration blocker** to secure multi-user or multi-tenant deployment.
-- **Frontend Safeguards**: The C2 frontend strictly isolates outgoing requests to the active user's authorized active project ID, includes the user's bearer token in headers (`Authorization: Bearer <token>`), and never introduces cross-project administrative bypasses.
-- **Backend Boundary**: In accordance with the strict read-only boundary on backend files, all backend files remain unchanged.
+#### 2.2 Security Resolution Verification
+- Verified by isolated integration tests in `backend/tests/test_c2_authorization.py`:
+  - Unauthenticated requests are rejected (`401 Unauthorized`).
+  - Deactivated user accounts are rejected (`401 Unauthorized`).
+  - Users can access, validate, approve, and modify models within their own projects (`200 / 201`).
+  - Non-owners are denied access to foreign projects (`404 Not Found`).
+  - Administrators have access across projects per shared policy.
+  - Cross-project model ID injection returns `404 Not Found`.
+  - Unknown roles are denied (`403 Forbidden`).
 
 ---
 
-### 3. Shared ProjectContext Response-Unwrap Blocker
+### 3. Shared ProjectContext Response Handling (Resolved)
 
-#### 3.1 Defect Description
-In the shared `ProjectContext` (`frontend/src/context/ProjectContext.jsx`):
-- Line 32-33:
-  ```javascript
-  const res = await projectsApi.getProject(storedId);
-  const project = res.project;
-  ```
-- Line 64-65:
-  ```javascript
-  const res = await projectsApi.getProject(projectId);
-  const project = res.project;
-  if (project.lifecycle === 'archived') { ... }
-  ```
-The backend endpoint `GET /api/v1/projects/{project_id}` returns a `ProjectResponse` object directly:
-`{ "project_id": "...", "name": "...", "lifecycle": "active", ... }`.
-It does **not** return `{ "project": { ... } }`.
-Consequently, `res.project` evaluates to `undefined`, which:
-1. Causes `loadActiveProject()` to silently clear the stored selection (`setActiveProjectState(null)`).
-2. Causes `selectActiveProject(projectId)` to throw a `TypeError: Cannot read properties of undefined (reading 'lifecycle')`.
+#### 3.1 Defect Resolution in Shared ProjectContext
+In `frontend/src/context/ProjectContext.jsx`:
+- Response unwrapping now supports both direct `ProjectResponse` and wrapped `{ project: ... }` via `const project = res?.project || res;`.
+- Validation is enforced before accessing properties:
+  - `isValidProject(project, targetId)`: Confirms `project` is a non-null object with a matching non-empty `project_id`.
+  - `isSelectableLifecycle(project)`: Ensures `project.lifecycle !== 'archived'`.
+- Request counters (`requestCounterRef`) guard against stale asynchronous responses and out-of-order race conditions when switching accounts or projects.
+- On malformed, archived, or inaccessible projects, stored IDs and state are cleared cleanly without TypeErrors.
 
-#### 3.2 Component 2 Handling & Required Shared Fix
-- **One Authoritative Active Project**: Component 2 strictly consumes the shared `ProjectContext` (`activeProject` / `activeProjectId`) and does not maintain an independent active project or private storage bypass.
-- **Integration Blocker Notice**: When no active project is resolved in the shared context, C2 renders an explicit blocker notice and provides role-correct navigation (`/admin/projects` for ADMIN, `/app/projects` for USER).
-- **Delegation**: Any project selection triggered from C2 delegates strictly to `selectActiveProject(projectId)`. If `selectActiveProject` throws due to the unwrap mismatch, the error is displayed without silently substituting an active project.
-- **Required Shared Fix**: In `frontend/src/context/ProjectContext.jsx` (lines 33 and 65), update:
-  ```diff
-  - const project = res.project;
-  + const project = res.project || res;
-  ```
+#### 3.2 Component 2 Integration
+- **Clean UI States**: Component 2 displays a standard empty state when no project has been selected, and renders error alerts only when an actual project selection or network request fails.
+- **Role-Correct Navigation**: C2 empty state provides role-correct navigation:
+  - `USER`: Redirects to `/app/projects`.
+  - `ADMIN`: Redirects to `/admin/projects`.
+- **Strict Scope**: C2 continues to use the authoritative shared active-project context without creating any separate local active-project state.
 
 ---
 

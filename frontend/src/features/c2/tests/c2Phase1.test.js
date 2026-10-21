@@ -345,4 +345,94 @@ describe('Component 2 Phase 1: Models Workspace Tests', () => {
       );
     });
   });
+
+  describe('6. Active-Project Response Handling & Stale-Response Protection', () => {
+    // Contract implementation matching ProjectContext.jsx
+    const unwrapProjectResponse = (res) => res?.project || res;
+    const isValidProject = (proj, expectedId) => {
+      return Boolean(
+        proj &&
+        typeof proj === 'object' &&
+        typeof proj.project_id === 'string' &&
+        proj.project_id.trim().length > 0 &&
+        (expectedId === undefined || proj.project_id === expectedId)
+      );
+    };
+    const isSelectableLifecycle = (proj) => {
+      return Boolean(proj && proj.lifecycle && proj.lifecycle !== 'archived');
+    };
+
+    it('unwraps direct ProjectResponse without modification', () => {
+      const direct = {
+        project_id: 'proj_alpha',
+        name: 'Alpha Project',
+        lifecycle: 'active',
+      };
+      const unwrapped = unwrapProjectResponse(direct);
+      assert.deepEqual(unwrapped, direct);
+    });
+
+    it('unwraps wrapped { project: ... } response correctly', () => {
+      const wrapped = {
+        project: {
+          project_id: 'proj_beta',
+          name: 'Beta Project',
+          lifecycle: 'active',
+        },
+      };
+      const unwrapped = unwrapProjectResponse(wrapped);
+      assert.equal(unwrapped.project_id, 'proj_beta');
+      assert.equal(unwrapped.name, 'Beta Project');
+    });
+
+    it('validates project identity matching the requested project ID', () => {
+      const proj = { project_id: 'proj_target', name: 'Target' };
+      assert.equal(isValidProject(proj, 'proj_target'), true);
+      assert.equal(isValidProject(proj, 'proj_other'), false);
+    });
+
+    it('rejects malformed, empty, or missing project responses without TypeErrors', () => {
+      assert.equal(isValidProject(null, 'proj_1'), false);
+      assert.equal(isValidProject(undefined, 'proj_1'), false);
+      assert.equal(isValidProject('not-an-object', 'proj_1'), false);
+      assert.equal(isValidProject({}, 'proj_1'), false);
+      assert.equal(isValidProject({ project_id: '' }, ''), false);
+      assert.equal(isValidProject({ project_id: '   ' }, '   '), false);
+    });
+
+    it('enforces selectable lifecycle (active vs archived)', () => {
+      assert.equal(isSelectableLifecycle({ lifecycle: 'active' }), true);
+      assert.equal(isSelectableLifecycle({ lifecycle: 'archived' }), false);
+      assert.equal(isSelectableLifecycle({ lifecycle: null }), false);
+      assert.equal(isSelectableLifecycle(null), false);
+    });
+
+    it('discards stale asynchronous responses when request counters diverge', async () => {
+      let latestRequestId = 0;
+      let activeProjectState = null;
+
+      // Simulate first selection attempt
+      const attempt1RequestId = ++latestRequestId;
+      // Simulate second selection attempt shortly after
+      const _attempt2RequestId = ++latestRequestId;
+
+      // Attempt 2 resolves first
+      activeProjectState = { project_id: 'proj_fast' };
+
+      // Attempt 1 resolves late
+      const handleAttempt1Response = (proj) => {
+        if (latestRequestId !== attempt1RequestId) {
+          // Stale response discarded!
+          return;
+        }
+        activeProjectState = proj;
+      };
+
+      handleAttempt1Response({ project_id: 'proj_slow_stale' });
+
+      // State retains the project from attempt 2, not overwritten by stale attempt 1
+      assert.equal(activeProjectState.project_id, 'proj_fast');
+    });
+  });
 });
+

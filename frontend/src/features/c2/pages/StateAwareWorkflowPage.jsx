@@ -81,9 +81,7 @@ export const StateAwareWorkflowPage = () => {
     try {
       await selectActiveProject(projectId);
     } catch (err) {
-      setSharedSelectionError(
-        `Shared selectActiveProject("${projectId}") failed: ${err.message || err}. (Root cause: ProjectContext.jsx lines 33 & 65 inspect res.project, but backend returns ProjectResponse directly).`
-      );
+      setSharedSelectionError(err.message || 'Failed to set active project.');
     } finally {
       setIsDelegating(false);
     }
@@ -172,43 +170,22 @@ export const StateAwareWorkflowPage = () => {
             </Link>
           </div>
 
-          {/* Shared Context Error Notification if delegation failed */}
+          {/* Shared Context Error Notification if actual selection attempt fails */}
           {sharedSelectionError && (
             <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-xs text-rose-800 dark:text-rose-200 text-left space-y-1">
               <div className="font-semibold flex items-center gap-1.5">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                <span>Shared Selection Failure</span>
+                <span>Project Selection Failed</span>
               </div>
-              <p className="text-[11px] font-mono leading-relaxed">{sharedSelectionError}</p>
+              <p className="text-[11px] leading-relaxed">{sharedSelectionError}</p>
             </div>
           )}
 
-          {/* Authoritative Integration Blocker Notice */}
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 text-left space-y-2 mt-4">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-white">
-              <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
-              <span>Authoritative Active-Project Integration Blocker</span>
-            </div>
-            <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
-              Component 2 strictly requires an authoritative active project from the shared <code>ProjectContext</code>.
-              Currently, the protected shared <code>ProjectContext</code> encounters a response-unwrapping mismatch on <code>projectsApi.getProject()</code>
-              (expecting <code>res.project</code>, whereas the backend returns <code>ProjectResponse</code> directly),
-              which prevents retaining the active project state.
-            </p>
-            <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono bg-slate-100 dark:bg-slate-950 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
-              Required Shared Fix: In <code>frontend/src/context/ProjectContext.jsx</code> (lines 33 &amp; 65),
-              change <code>const project = res.project;</code> to <code>const project = res.project || res;</code>.
-            </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Per strict ownership boundary rules, Component 2 does not edit shared files or maintain an independent project state.
-            </p>
-          </div>
-
-          {/* Delegate Selection to Shared ProjectContext if authorized projects exist */}
+          {/* Quick Select Authorized Project delegating to shared ProjectContext */}
           {availableProjects.length > 0 && (
             <div className="pt-6 border-t border-slate-200 dark:border-slate-800 text-left space-y-2">
               <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                Delegate Selection to Shared Context:
+                Select an Authorized Project:
               </span>
               <div className="space-y-1.5">
                 {availableProjects.map((proj) => (
