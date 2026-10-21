@@ -14,6 +14,14 @@ from app.database import Base, get_db
 from app.main import app
 
 
+from app.config import Settings, get_settings
+from app.shared.auth.models import User, UserRole
+from app.shared.auth.security import create_access_token, hash_password
+from app.shared.projects.models import Project
+
+TEST_SECRET = "c2-test-auth-secret-key-32-chars-long!!"
+
+
 @pytest.fixture
 def client_with_db():
     engine = create_engine(
@@ -24,15 +32,47 @@ def client_with_db():
     Base.metadata.create_all(engine)
     testing_session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-    def override_get_db():
-        db = testing_session_local()
-        try:
-            yield db
-        finally:
-            db.close()
+    # Seed authenticated user and project
+    db = testing_session_local()
+    user = User(
+        name="Evaluator Dasith",
+        email="evaluator@test.com",
+        canonical_email="evaluator@test.com",
+        password_hash=hash_password("password123"),
+        role=UserRole.USER,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
 
+    user_id = user.id
+    project = Project(
+        project_id="research_project_nexacart",
+        name="NexaCart",
+        owner_user_id=user_id,
+        backend_base_url="http://localhost:8000",
+        backend_health_url="http://localhost:8000/health",
+        lifecycle="active",
+    )
+    db.add(project)
+    db.commit()
+    db.close()
+
+    def override_get_db():
+        session = testing_session_local()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    settings = Settings(auth_secret_key=TEST_SECRET)
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    token, _ = create_access_token(user_id, settings)
     with TestClient(app) as test_client:
+        test_client.headers["Authorization"] = f"Bearer {token}"
         yield test_client
     app.dependency_overrides.clear()
 

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import { projectsApi } from '../services/projects';
 import {
@@ -7,6 +7,23 @@ import {
   clearStoredActiveProjectId,
 } from '../services/activeProject';
 
+// Exported pure helpers for response unwrapping and project validation
+export const unwrapProjectResponse = (res) => res?.project || res;
+
+export const isValidProject = (proj, expectedId) => {
+  return Boolean(
+    proj &&
+    typeof proj === 'object' &&
+    typeof proj.project_id === 'string' &&
+    proj.project_id.trim().length > 0 &&
+    (expectedId === undefined || proj.project_id === expectedId)
+  );
+};
+
+export const isSelectableLifecycle = (proj) => {
+  return Boolean(proj && proj.lifecycle && proj.lifecycle !== 'archived');
+};
+
 const ProjectContext = createContext(null);
 
 export const ProjectProvider = ({ children }) => {
@@ -14,14 +31,20 @@ export const ProjectProvider = ({ children }) => {
   const [activeProject, setActiveProjectState] = useState(null);
   const [isLoadingActive, setIsLoadingActive] = useState(false);
 
+  // Request counter to protect against stale asynchronous responses and account switches
+  const requestCounterRef = useRef(0);
+
   // Sync and validate active project whenever user identity changes
   const loadActiveProject = useCallback(async () => {
-    if (!isAuthenticated || !user?.id) {
+    const currentRequestId = ++requestCounterRef.current;
+    const currentUserId = user?.id;
+
+    if (!isAuthenticated || !currentUserId) {
       setActiveProjectState(null);
       return;
     }
 
-    const storedId = getStoredActiveProjectId(user.id);
+    const storedId = getStoredActiveProjectId(currentUserId);
     if (!storedId) {
       setActiveProjectState(null);
       return;
@@ -30,20 +53,30 @@ export const ProjectProvider = ({ children }) => {
     setIsLoadingActive(true);
     try {
       const res = await projectsApi.getProject(storedId);
-      const project = res.project;
-      // Requirement: clear or replace selection if project is archived or inaccessible
-      if (project && project.lifecycle !== 'archived') {
+      // Support both direct ProjectResponse and wrapped { project: ... }
+      const project = res?.project || res;
+
+      // Ensure response is for the latest attempt and current user
+      if (requestCounterRef.current !== currentRequestId || user?.id !== currentUserId) {
+        return;
+      }
+
+      if (isValidProject(project, storedId) && isSelectableLifecycle(project)) {
         setActiveProjectState(project);
       } else {
-        clearStoredActiveProjectId(user.id);
+        clearStoredActiveProjectId(currentUserId);
         setActiveProjectState(null);
       }
     } catch {
-      // Access lost or invalid ID
-      clearStoredActiveProjectId(user.id);
-      setActiveProjectState(null);
+      // Inaccessible, deleted, or network error
+      if (requestCounterRef.current === currentRequestId && user?.id === currentUserId) {
+        clearStoredActiveProjectId(currentUserId);
+        setActiveProjectState(null);
+      }
     } finally {
-      setIsLoadingActive(false);
+      if (requestCounterRef.current === currentRequestId && user?.id === currentUserId) {
+        setIsLoadingActive(false);
+      }
     }
   }, [isAuthenticated, user]);
 
@@ -52,33 +85,53 @@ export const ProjectProvider = ({ children }) => {
   }, [loadActiveProject]);
 
   const selectActiveProject = async (projectId) => {
-    if (!user?.id) return null;
-    if (!projectId) {
-      clearStoredActiveProjectId(user.id);
+    const currentRequestId = ++requestCounterRef.current;
+    const currentUserId = user?.id;
+
+    if (!currentUserId) return null;
+    if (!projectId || typeof projectId !== 'string' || !projectId.trim()) {
+      clearStoredActiveProjectId(currentUserId);
       setActiveProjectState(null);
       return null;
     }
 
+    const targetId = projectId.trim();
     setIsLoadingActive(true);
     try {
-      const res = await projectsApi.getProject(projectId);
-      const project = res.project;
-      if (project.lifecycle === 'archived') {
+      const res = await projectsApi.getProject(targetId);
+      // Support both direct ProjectResponse and wrapped { project: ... }
+      const project = res?.project || res;
+
+      if (requestCounterRef.current !== currentRequestId || user?.id !== currentUserId) {
+        return null;
+      }
+
+      if (!isValidProject(project, targetId)) {
+        throw new Error('Received invalid project response from server.');
+      }
+
+      if (!isSelectableLifecycle(project)) {
         throw new Error('Archived projects cannot be set as the active project.');
       }
-      setStoredActiveProjectId(user.id, project.project_id);
+
+      setStoredActiveProjectId(currentUserId, project.project_id);
       setActiveProjectState(project);
       return project;
     } catch (err) {
-      clearStoredActiveProjectId(user.id);
-      setActiveProjectState(null);
+      if (requestCounterRef.current === currentRequestId && user?.id === currentUserId) {
+        clearStoredActiveProjectId(currentUserId);
+        setActiveProjectState(null);
+      }
       throw err;
     } finally {
-      setIsLoadingActive(false);
+      if (requestCounterRef.current === currentRequestId && user?.id === currentUserId) {
+        setIsLoadingActive(false);
+      }
     }
   };
 
   const clearActiveProject = () => {
+    requestCounterRef.current += 1;
     if (user?.id) {
       clearStoredActiveProjectId(user.id);
     }
@@ -108,3 +161,4 @@ export const useProject = () => {
   }
   return context;
 };
+

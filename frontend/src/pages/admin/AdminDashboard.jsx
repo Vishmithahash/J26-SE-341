@@ -18,6 +18,7 @@ import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { getModelPreference } from '../../services/modelPreference';
 import { C3DashboardCard } from '../../features/c3/components/C3DashboardCard';
+import { C1DashboardCard } from '../../components/c1/C1DashboardCard';
 
 export const AdminDashboard = () => {
   const { user } = useAuth();
@@ -277,6 +278,8 @@ export const AdminDashboard = () => {
           {components.map((comp) => {
             if (comp.name === 'Robustness and Failure Recovery Testing') {
               return <C3DashboardCard key={comp.name} role="ADMIN" />;
+            if (comp.name === 'Explainable Tool-Call Correctness Testing') {
+              return <C1DashboardCard key={comp.name} role="ADMIN" />;
             }
             const Icon = comp.icon;
             return (

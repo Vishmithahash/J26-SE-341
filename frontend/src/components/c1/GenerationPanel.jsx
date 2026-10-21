@@ -1,0 +1,403 @@
+import React, { useState } from 'react';
+import {
+  Play,
+  RotateCcw,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  Clock,
+  Sparkles,
+  Sliders,
+  Filter,
+  Layers,
+} from 'lucide-react';
+import { c1Api, CASE_CATEGORIES } from './c1Api';
+
+export const GenerationPanel = ({
+  projectId,
+  activeConfig,
+  onJobSuccess,
+}) => {
+  const [scenarioPrompt, setScenarioPrompt] = useState(
+    'Customer requests a refund for damaged item with photo proof and valid order ID.'
+  );
+  const [selectedReqIds, setSelectedReqIds] = useState([]);
+  const [selectedTools, setSelectedTools] = useState([]);
+  const [selectedCategories, setSelectedCategories] = useState(
+    CASE_CATEGORIES.map((c) => c.id)
+  );
+  const [maxCandidates, setMaxCandidates] = useState(15);
+  const [maxAcceptedCases, setMaxAcceptedCases] = useState(8);
+  const [seed, setSeed] = useState(42);
+  const [autoPromote, setAutoPromote] = useState(false);
+  const [suiteId, setSuiteId] = useState('suite_nexacart_standard_v1');
+  const [suiteName, setSuiteName] = useState('Standard Refund Tool-Call Test Suite');
+
+  // Submission / Execution State
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationJob, setGenerationJob] = useState(null);
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [retryAllowed, setRetryAllowed] = useState(false);
+
+  const availableRequirements = activeConfig?.requirements || [];
+  const availableTools = activeConfig?.tools || [];
+
+  const handleToggleCategory = (catId) => {
+    if (selectedCategories.includes(catId)) {
+      setSelectedCategories(selectedCategories.filter((c) => c !== catId));
+    } else {
+      setSelectedCategories([...selectedCategories, catId]);
+    }
+  };
+
+  const handleToggleRequirement = (reqId) => {
+    if (selectedReqIds.includes(reqId)) {
+      setSelectedReqIds(selectedReqIds.filter((id) => id !== reqId));
+    } else {
+      setSelectedReqIds([...selectedReqIds, reqId]);
+    }
+  };
+
+  const handleToggleTool = (toolName) => {
+    if (selectedTools.includes(toolName)) {
+      setSelectedTools(selectedTools.filter((t) => t !== toolName));
+    } else {
+      setSelectedTools([...selectedTools, toolName]);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    if (e) e.preventDefault();
+    if (!activeConfig) {
+      setErrorMsg('A valid configuration version is required before triggering generation.');
+      return;
+    }
+    if (selectedCategories.length === 0) {
+      setErrorMsg('Please select at least one test case category.');
+      return;
+    }
+
+    setIsGenerating(true);
+    setErrorMsg(null);
+    setRetryAllowed(false);
+
+    const payload = {
+      config_version: activeConfig.version || 1,
+      requirement_ids: selectedReqIds.length > 0 ? selectedReqIds : null,
+      tool_names: selectedTools.length > 0 ? selectedTools : null,
+      scenario_prompt: scenarioPrompt.trim() || null,
+      case_categories: selectedCategories,
+      max_candidates: Number(maxCandidates) || 15,
+      max_accepted_cases: Number(maxAcceptedCases) || 8,
+      seed: seed !== '' && seed !== null ? Number(seed) : null,
+      generator_id: 'c1_deterministic_generator',
+      generator_version: '1.0.0',
+      auto_promote_suite: autoPromote,
+      suite_id: autoPromote ? suiteId.trim() : null,
+      suite_name: autoPromote ? suiteName.trim() : null,
+    };
+
+    try {
+      const jobResponse = await c1Api.createGenerationJob(projectId, payload);
+      setGenerationJob(jobResponse);
+      if (onJobSuccess) {
+        onJobSuccess(jobResponse);
+      }
+    } catch (err) {
+      setErrorMsg(err.message || 'Generation failed.');
+      setRetryAllowed(true);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Panel Banner */}
+      <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            Automatic Tool-Call Candidate Generation
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Synthesizes boundary, error, and compliance test cases strictly derived from configuration specifications
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={isGenerating || !activeConfig}
+          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-50 transition-all"
+        >
+          {isGenerating ? (
+            <>
+              <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              <span>Generating Cases...</span>
+            </>
+          ) : (
+            <>
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Generate Candidates</span>
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Error / Status Alerts */}
+      {errorMsg && (
+        <div className="flex items-center justify-between p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs text-red-800 dark:text-red-300">
+          <div className="flex items-center gap-2">
+            <XCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+          {retryAllowed && (
+            <button
+              type="button"
+              onClick={handleSubmit}
+              className="inline-flex items-center gap-1 font-semibold text-red-700 dark:text-red-400 underline hover:no-underline"
+            >
+              <RotateCcw className="w-3 h-3" /> Retry Generation
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Job Execution Result Card */}
+      {generationJob && (
+        <div className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span className="text-xs font-semibold text-slate-900 dark:text-white">
+                Generation Completed: Job {generationJob.job_id.slice(0, 8)}...
+              </span>
+            </div>
+            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+              Hash: {generationJob.content_hash?.slice(0, 10)}...
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-2 border-t border-indigo-100 dark:border-indigo-900/40">
+            <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">Total Generated</div>
+              <div className="text-base font-bold text-slate-900 dark:text-white">
+                {generationJob.summary?.total_generated || 0}
+              </div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">Valid Candidates</div>
+              <div className="text-base font-bold text-emerald-600 dark:text-emerald-400">
+                {generationJob.summary?.valid_candidates || 0}
+              </div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">Invalid / Rejected</div>
+              <div className="text-base font-bold text-red-600 dark:text-red-400">
+                {generationJob.summary?.invalid_candidates || 0}
+              </div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">Duplicates Removed</div>
+              <div className="text-base font-bold text-amber-600 dark:text-amber-400">
+                {generationJob.summary?.duplicates_removed || 0}
+              </div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">Selected Count</div>
+              <div className="text-base font-bold text-indigo-600 dark:text-indigo-400">
+                {generationJob.summary?.selected_count || 0}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Generation Parameters Form */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Left Column: Scope & Categories */}
+        <div className="space-y-4 p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+          <h3 className="text-xs font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+            <Filter className="w-4 h-4 text-slate-500" />
+            Generation Scope & Category Filter
+          </h3>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+              Optional High-Level Scenario Prompt
+            </label>
+            <textarea
+              rows={2}
+              value={scenarioPrompt}
+              onChange={(e) => setScenarioPrompt(e.target.value)}
+              placeholder="Guide candidate generation with domain scenario details..."
+              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                Supported Case Categories ({selectedCategories.length}/{CASE_CATEGORIES.length})
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedCategories(
+                    selectedCategories.length === CASE_CATEGORIES.length
+                      ? [CASE_CATEGORIES[0].id]
+                      : CASE_CATEGORIES.map((c) => c.id)
+                  )
+                }
+                className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline"
+              >
+                {selectedCategories.length === CASE_CATEGORIES.length ? 'Deselect All' : 'Select All'}
+              </button>
+            </div>
+
+            <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+              {CASE_CATEGORIES.map((cat) => (
+                <label
+                  key={cat.id}
+                  className="flex items-start gap-2 p-2 rounded-lg border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedCategories.includes(cat.id)}
+                    onChange={() => handleToggleCategory(cat.id)}
+                    className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div>
+                    <div className="text-xs font-medium text-slate-800 dark:text-slate-200">
+                      {cat.label}
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {cat.desc}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Limits & Reproducibility Settings */}
+        <div className="space-y-4 p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+          <h3 className="text-xs font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+            <Sliders className="w-4 h-4 text-slate-500" />
+            Synthesis Limits & Reproducibility
+          </h3>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Candidate Limit (1-100)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={maxCandidates}
+                onChange={(e) => setMaxCandidates(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Accepted Limit (1-50)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="50"
+                value={maxAcceptedCases}
+                onChange={(e) => setMaxAcceptedCases(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+              Algorithmic Seed (Reproducibility)
+            </label>
+            <input
+              type="number"
+              value={seed}
+              onChange={(e) => setSeed(e.target.value)}
+              placeholder="e.g. 42"
+              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+            />
+            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+              Guarantees deterministic, reproducible test case derivation.
+            </p>
+          </div>
+
+          {/* Targeted Requirements & Tools */}
+          {availableRequirements.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Target Requirements (Optional filter)
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {availableRequirements.map((r) => (
+                  <button
+                    key={r.req_id}
+                    type="button"
+                    onClick={() => handleToggleRequirement(r.req_id)}
+                    className={`px-2 py-1 text-[11px] rounded-lg border transition-colors ${
+                      selectedReqIds.includes(r.req_id)
+                        ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    {r.req_id}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Auto-Promote Option */}
+          <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoPromote}
+                onChange={(e) => setAutoPromote(e.target.checked)}
+                className="rounded text-indigo-600 focus:ring-indigo-500"
+              />
+              <span className="text-xs font-medium text-slate-800 dark:text-slate-200">
+                Auto-Promote Valid Candidates to Accepted Suite
+              </span>
+            </label>
+
+            {autoPromote && (
+              <div className="grid grid-cols-2 gap-2 pl-6">
+                <div>
+                  <input
+                    type="text"
+                    value={suiteId}
+                    onChange={(e) => setSuiteId(e.target.value)}
+                    placeholder="Suite ID"
+                    className="w-full px-2 py-1 text-[11px] rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <input
+                    type="text"
+                    value={suiteName}
+                    onChange={(e) => setSuiteName(e.target.value)}
+                    placeholder="Suite Name"
+                    className="w-full px-2 py-1 text-[11px] rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

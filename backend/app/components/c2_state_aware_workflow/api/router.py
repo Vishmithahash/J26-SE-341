@@ -108,9 +108,42 @@ from app.components.c2_state_aware_workflow.validator.service import (
     ModelValidationService,
 )
 from app.database import get_db
+from app.shared.auth.dependencies import require_active_user
+from app.shared.auth.models import User, UserRole
+from app.shared.projects.models import Project
+from app.shared.projects.service import get_project
 
-router = APIRouter(prefix="/api/v1/c2", tags=["c2-state-aware-workflow"])
 DbSession = Annotated[Session, Depends(get_db)]
+
+
+def authorize_c2_project_access(
+    project_id: str,
+    current_user: Annotated[User, Depends(require_active_user)],
+    db: DbSession,
+) -> Project:
+    """Authorize access to project-scoped C2 operations using shared platform policies.
+
+    Enforces:
+    1. Authenticated, active account dependency (require_active_user).
+    2. Unknown roles are denied with 403 Forbidden.
+    3. Project existence and access enforcement:
+       - USER may access only projects permitted by the existing ownership policy.
+       - ADMIN follows the existing shared administrative access policy.
+       - Missing or inaccessible projects follow the existing API error convention (404).
+    """
+    if current_user.role not in (UserRole.ADMIN, UserRole.USER):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied for account role.",
+        )
+    return get_project(db, current_user, project_id)
+
+
+router = APIRouter(
+    prefix="/api/v1/c2",
+    tags=["c2-state-aware-workflow"],
+    dependencies=[Depends(authorize_c2_project_access)],
+)
 
 
 class ApprovalRequest(BaseModel):
