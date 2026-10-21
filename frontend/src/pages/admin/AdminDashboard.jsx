@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { getModelPreference } from '../../services/modelPreference';
+import { C4DashboardCard } from '../../features/c4/components/dashboard/C4DashboardCard';
 
 export const AdminDashboard = () => {
   const { user } = useAuth();
@@ -274,6 +275,10 @@ export const AdminDashboard = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {components.map((comp) => {
+            if (comp.name === 'Policy-Aware Safety and Prompt-Injection Testing') {
+              return <C4DashboardCard key={comp.name} basePath="/admin" />;
+            }
+
             const Icon = comp.icon;
             return (
               <div

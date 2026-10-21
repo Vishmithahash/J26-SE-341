@@ -22,6 +22,7 @@ import { SettingsPage } from './pages/shared/SettingsPage';
 import { EmptyComponentPage } from './pages/shared/EmptyComponentPage';
 import { AccessDeniedPage } from './pages/AccessDeniedPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { PolicySafetyWorkspace } from './features/c4/pages/PolicySafetyWorkspace';
 
 // Role-aware root redirect component
 const RootRedirect = () => {
@@ -106,7 +107,7 @@ export const App = () => {
                 <Route
                   path="policy-safety"
                   element={
-                    <EmptyComponentPage
+                    <PolicySafetyWorkspace
                       title="Policy-Aware Safety and Prompt-Injection Testing"
                       icon={ShieldCheck}
                     />
@@ -166,7 +167,7 @@ export const App = () => {
                 <Route
                   path="policy-safety"
                   element={
-                    <EmptyComponentPage
+                    <PolicySafetyWorkspace
                       title="Policy-Aware Safety and Prompt-Injection Testing"
                       icon={ShieldCheck}
                     />

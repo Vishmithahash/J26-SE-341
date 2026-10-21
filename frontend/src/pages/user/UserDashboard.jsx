@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getModelPreference } from '../../services/modelPreference';
+import { C4DashboardCard } from '../../features/c4/components/dashboard/C4DashboardCard';
 
 export const UserDashboard = () => {
   const { user } = useAuth();
@@ -179,6 +180,10 @@ export const UserDashboard = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {components.map((comp) => {
+            if (comp.name === 'Policy-Aware Safety and Prompt-Injection Testing') {
+              return <C4DashboardCard key={comp.name} basePath="/app" />;
+            }
+
             const Icon = comp.icon;
             return (
               <div
