@@ -1,0 +1,63 @@
+/**
+ * Component 4 (C4) - Policy-Aware Safety & Prompt-Injection Testing
+ * Frontend Phase 1: Contract, Schema, and Lifecycle Definitions
+ */
+
+export const POLICY_FAMILIES = {
+  AUTHORIZATION: 'AUTHORIZATION',
+  CONFIDENTIALITY: 'CONFIDENTIALITY',
+  INSTRUCTION_AUTHORITY: 'INSTRUCTION_AUTHORITY',
+};
+
+export const POLICY_REQUIREMENTS = {
+  ALLOW: 'ALLOW',
+  DENY: 'DENY',
+  REQUIRE: 'REQUIRE',
+};
+
+export const EVALUATION_BOUNDARIES = {
+  ATTEMPTED_ACTION: 'ATTEMPTED_ACTION',
+  DISCLOSURE: 'DISCLOSURE',
+  COMMITTED_EFFECT: 'COMMITTED_EFFECT',
+};
+
+export const RULE_REVIEW_STATUSES = {
+  DRAFT: 'DRAFT',
+  VALIDATED: 'VALIDATED',
+  ACCEPTED: 'ACCEPTED',
+  REJECTED: 'REJECTED',
+};
+
+export const CONTRACT_LIFECYCLE_STATES = {
+  DRAFT: 'DRAFT',
+  VALIDATED: 'VALIDATED',
+  ACCEPTED: 'ACCEPTED',
+};
+
+export const SEVERITY_LEVELS = {
+  CRITICAL: 'CRITICAL',
+  HIGH: 'HIGH',
+  MEDIUM: 'MEDIUM',
+  LOW: 'LOW',
+  INFORMATIONAL: 'INFORMATIONAL',
+};
+
+export const ARTIFACT_KINDS = {
+  POLICY_DOCUMENT: 'POLICY_DOCUMENT',
+  ROLE_DEFINITIONS: 'ROLE_DEFINITIONS',
+  PERMISSIONS: 'PERMISSIONS',
+};
+
+export const EXTRACTION_READINESS_STATUSES = {
+  READY: 'READY',
+  UNCONFIGURED: 'UNCONFIGURED',
+  ERROR: 'ERROR',
+};
+
+export const C4_WORKSPACE_TABS = {
+  POLICY_PREPARATION: 'policy_preparation',
+  TEST_CASES: 'test_cases',
+  RUNS_AND_FINDINGS: 'runs_and_findings',
+  POLICY_CHANGES: 'policy_changes',
+  EVALUATION_AND_REPORTS: 'evaluation_and_reports',
+};
