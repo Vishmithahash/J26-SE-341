@@ -34,26 +34,26 @@ Component 3 evaluates AI agent and tool robustness under operational failures an
 
 | Method | Endpoint Path | Backend Router & Function | Description & Payload Requirements | Auth Status |
 |---|---|---|---|---|
-| `GET` | `/api/v1/c3/fault-catalog` | `router.py:fault_catalog()` | Returns catalogue of the 5 operational fault families (`TIMEOUT_DISCONNECTION`, `TRANSIENT_5XX`, `RATE_LIMIT_429`, `TOOL_UNAVAILABILITY`, `MALFORMED_RESPONSE`). | Unauthenticated (Platform research phase) |
-| `POST` | `/api/v1/c3/cases/validate` | `router.py:validate_case()` | Pure deterministic static validation of candidate case against adapter manifest, fixture metadata, and recovery contract. Body: `FaultValidationRequest`. | Unauthenticated |
-| `POST` | `/api/v1/c3/cases/generate` | `router.py:generate_cases()` | Deterministic candidate expansion, static filtering, deduplication, and suite freezing. Body: `FaultGenerationRequest`. | Unauthenticated |
-| `POST` | `/api/v1/c3/suites/import` | `persistence_router.py:import_suite_endpoint()` | Idempotently persists a verified frozen suite and candidate cases. Body: `SuiteImportRequest { project_id, frozen_suite }`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/suites` | `persistence_router.py:list_suites_endpoint()` | Lists stored frozen suites for an authorized project. Query: `project_id`, `domain`, `limit`, `offset`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/suites/{id}` | `persistence_router.py:get_suite_endpoint()` | Retrieves stored frozen suite by ID or SHA-256 digest. Query: `project_id`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/cases` | `persistence_router.py:list_cases_endpoint()` | Lists stored candidate cases with filters. Query: `project_id`, `suite_digest`, `fault_family`, `effect_phase`, `limit`, `offset`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/cases/{case_id}` | `persistence_router.py:get_case_endpoint()` | Retrieves single stored candidate case snapshot. Query: `project_id`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/executions` | `persistence_router.py:list_executions_endpoint()` | Lists tracked executions with bounded pagination and status filters. Query: `project_id`, `status`, `target_mode`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/executions/{id}` | `persistence_router.py:get_execution_endpoint()` | Retrieves tracked suite execution record. Query: `project_id`. | Unauthenticated (project_id param only) |
-| `POST` | `/api/v1/c3/executions/import` | `persistence_router.py:import_execution_endpoint()` | Imports execution artifact transactionally without target execution. Body: `ExecutionArtifactImportRequest`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/pairs` | `persistence_router.py:list_pairs_endpoint()` | Lists matched trial pairs with exposure and clean-qualification filters. Query: `project_id`, `exposure_status`, `clean_qualification`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/pairs/{pair_id}` | `persistence_router.py:get_pair_endpoint()` | Retrieves matched pair evidence record including clean and fault trials. Query: `project_id`. | Unauthenticated (project_id param only) |
-| `POST` | `/api/v1/c3/pairs/import` | `persistence_router.py:import_pair_endpoint()` | Validates and persists matched clean/fault pair evidence. Body: `MatchedPairImportRequest`. | Unauthenticated (project_id param only) |
-| `POST` | `/api/v1/c3/evaluations/compute`| `persistence_router.py:compute_evaluation_endpoint()` | Executes authoritative evaluation engine and stores evaluation result. Body: `EvaluationComputeRequest`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/evaluations` | `persistence_router.py:list_evaluations_endpoint()`| Lists stored recovery evaluations. Query: `project_id`, `pair_id`, `recovery_verdict`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/evaluations/{id}` | `persistence_router.py:get_evaluation_endpoint()`| Retrieves stored recovery evaluation record. Query: `project_id`. | Unauthenticated (project_id param only) |
-| `POST` | `/api/v1/c3/recovery/evaluate` | `router.py:evaluate_recovery_endpoint()` | Pure deterministic evaluation of recovery rules against evidence and C2 facts. Body: `RecoveryEvaluationRequest`. | Unauthenticated |
-| `GET` | `/api/v1/c3/reports/executions/{id}` | `persistence_router.py:get_execution_report_endpoint()` | Comprehensive execution summary and recovery evaluation metrics with explicit denominators. Query: `project_id`. | Unauthenticated (project_id param only) |
-| `GET` | `/api/v1/c3/reports/executions/{id}/export` | `persistence_router.py:export_execution_report_csv_endpoint()` | Downloads execution report formatted as CSV attachment. Query: `project_id`. | Unauthenticated (project_id param only) |
+| `GET` | `/api/v1/c3/fault-catalog` | `router.py:fault_catalog()` | Returns catalogue of the 5 operational fault families (`TIMEOUT_DISCONNECTION`, `TRANSIENT_5XX`, `RATE_LIMIT_429`, `TOOL_UNAVAILABILITY`, `MALFORMED_RESPONSE`). | Open metadata endpoint |
+| `POST` | `/api/v1/c3/cases/validate` | `router.py:validate_case()` | Pure deterministic static validation of candidate case against adapter manifest, fixture metadata, and recovery contract. Body: `FaultValidationRequest`. | Authenticated (`require_c3_active_user`) |
+| `POST` | `/api/v1/c3/cases/generate` | `router.py:generate_cases()` | Deterministic candidate expansion, static filtering, deduplication, and suite freezing. Body: `FaultGenerationRequest`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `POST` | `/api/v1/c3/suites/import` | `persistence_router.py:import_suite_endpoint()` | Idempotently persists a verified frozen suite and candidate cases. Body: `SuiteImportRequest { project_id, frozen_suite }`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/suites` | `persistence_router.py:list_suites_endpoint()` | Lists stored frozen suites for an authorized project. Query: `project_id`, `domain`, `limit`, `offset`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/suites/{id}` | `persistence_router.py:get_suite_endpoint()` | Retrieves stored frozen suite by ID or SHA-256 digest. Query: `project_id`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/cases` | `persistence_router.py:list_cases_endpoint()` | Lists stored candidate cases with filters. Query: `project_id`, `suite_digest`, `fault_family`, `effect_phase`, `limit`, `offset`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/cases/{case_id}` | `persistence_router.py:get_case_endpoint()` | Retrieves single stored candidate case snapshot. Query: `project_id`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/executions` | `persistence_router.py:list_executions_endpoint()` | Lists tracked executions with bounded pagination and status filters. Query: `project_id`, `status`, `target_mode`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/executions/{id}` | `persistence_router.py:get_execution_endpoint()` | Retrieves tracked suite execution record. Query: `project_id`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `POST` | `/api/v1/c3/executions/import` | `persistence_router.py:import_execution_endpoint()` | Imports execution artifact transactionally without target execution. Body: `ExecutionArtifactImportRequest`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/pairs` | `persistence_router.py:list_pairs_endpoint()` | Lists matched trial pairs with exposure and clean-qualification filters. Query: `project_id`, `exposure_status`, `clean_qualification`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/pairs/{pair_id}` | `persistence_router.py:get_pair_endpoint()` | Retrieves matched pair evidence record including clean and fault trials. Query: `project_id`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `POST` | `/api/v1/c3/pairs/import` | `persistence_router.py:import_pair_endpoint()` | Validates and persists matched clean/fault pair evidence. Body: `MatchedPairImportRequest`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `POST` | `/api/v1/c3/evaluations/compute`| `persistence_router.py:compute_evaluation_endpoint()` | Executes authoritative evaluation engine and stores evaluation result. Body: `EvaluationComputeRequest`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/evaluations` | `persistence_router.py:list_evaluations_endpoint()`| Lists stored recovery evaluations. Query: `project_id`, `pair_id`, `recovery_verdict`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/evaluations/{id}` | `persistence_router.py:get_evaluation_endpoint()`| Retrieves stored recovery evaluation record. Query: `project_id`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `POST` | `/api/v1/c3/recovery/evaluate` | `router.py:evaluate_recovery_endpoint()` | Pure deterministic evaluation of recovery rules against evidence and C2 facts. Body: `RecoveryEvaluationRequest`. | Authenticated (`require_c3_active_user`) |
+| `GET` | `/api/v1/c3/reports/executions/{id}` | `persistence_router.py:get_execution_report_endpoint()` | Comprehensive execution summary and recovery evaluation metrics with explicit denominators. Query: `project_id`. | Authenticated & Scoped (`verify_c3_project_access`) |
+| `GET` | `/api/v1/c3/reports/executions/{id}/export` | `persistence_router.py:export_execution_report_csv_endpoint()` | Downloads execution report formatted as CSV attachment via authenticated fetch-and-Blob. Query: `project_id`. | Authenticated & Scoped (`verify_c3_project_access`) |
 
 ---
 
@@ -74,16 +74,16 @@ To ensure research validity and eliminate confounding factors, the frontend stri
    - `NOT_TRIGGERED`: Target tool or occurrence was never called during trial execution (e.g. caller exited early).
    - `EXPOSURE_UNKNOWN`: Indeterminate exposure receipt.
    - *Note*: `NOT_TRIGGERED` is **not** a successful recovery test.
-4. **Clean Baseline Control Qualification**:
+4. **Clean Baseline Control Qualification & Evaluation Eligibility**:
    - `QUALIFIED`: Baseline clean trial ran without fault injection and completed successfully.
-   - `DISQUALIFIED`: Clean control failed (e.g. crashed or produced an unhandled exception).
-   - *Note*: Failed clean controls are **retained** honestly in the paired results and are never retried until passing or hidden.
+   - `DISQUALIFIED`: Clean control failed (e.g. application task failed or crashed).
+   - *Phase 4 Correction*: A failed clean application task alone does **not** disqualify an otherwise valid, comparable fault trial with confirmed exposure from recovery evaluation. The clean result is retained and differential fault attribution limitations are disclosed in the **Main Outcome Analysis**, while a **Supplementary Clean-Passing Analysis** is presented for strict comparison.
 5. **Recovery Verdict** (Eligible trials with confirmed exposure only):
    - `PASS_COMPLETED`: Task successfully completed following fault recovery (`Pass: Completed`).
-   - `PASS_GRACEFUL`: Task aborted gracefully without state corruption and notified caller/user (`Pass: Graceful`).
-   - `FAIL`: Violated recovery contract rules (e.g., duplicate side effects or unverified retries) (`Fail`).
-   - `INCONCLUSIVE`: Trial did not qualify for recovery evaluation or evidence was insufficient (`Inconclusive`).
-   - *Note*: A harness deadline or timeout is not graceful recovery. Recovery verdicts are never inferred client-side. Ineligible trials return `null` verdict and `NOT_EVALUATED` status.
+   - `PASS_GRACEFUL`: Task stopped or aborted gracefully under contract-permitted outcomes (`Pass: Graceful`).
+   - `FAIL`: Violated recovery contract rules (e.g., budget exceeded, duplicate side effects, unsafe retries, or untruthful completion claims).
+   - `INCONCLUSIVE`: Trial had uncertain cleanup settling or missing required C2 observation facts.
+   - *Note*: Ineligible trials return `null` verdict and `NOT_EVALUATED` status.
 
 ---
 
@@ -95,21 +95,32 @@ To ensure research validity and eliminate confounding factors, the frontend stri
 
 ---
 
-### 5. Execution Reports & Explicit Denominators
+### 5. Execution Reports & Protected CSV Downloads
 
 Structured execution reports strictly specify explicit denominators for all counts:
 - `planned_cases`: Total candidate fault cases defined in the frozen suite manifest.
 - `executed_pairs`: Total matched trial pairs initiated by the runner.
 - `evaluated_trials`: Total fault trials evaluated by the recovery evaluation engine.
 - Breakdown: Clean qualification, exposure outcomes, recovery verdicts, and cleanup certainty.
-- Direct CSV export streamed via `/api/v1/c3/reports/executions/{id}/export`.
+- **Protected CSV Download**: Uses an authenticated fetch-and-Blob flow (`Authorization: Bearer <token>`), checks response status, creates a temporary blob URL, and immediately revokes the URL after triggering download. Bearer tokens are never passed in URL parameters.
 
 ---
 
-### 6. Three-Way Research Protocol & Ablation Governance (Phase 7)
+### 6. Approved Research Protocol & CLI Disclosures
 
-- **CLI-Only Tooling**: Evaluated via `python -m app.components.c3_robustness_recovery.runtime.research_runner`.
-- **Partitions**: 40% Development, 20% Validation, 40% Blinded Held-Out Test.
-- **Baselines**: B0 Clean Control, B1 Blind Retry, B2 Stateless Error Handling, B3 Idempotent Recovery Agent.
-- **Ablations**: A1 No Fixture Reset, A2 No Exposure Receipt, A3 No C2 Facts.
-- **Prerequisites**: Live research accuracy claims remain blocked until independent reviewed ground truth and inter-annotator agreement thresholds are certified.
+- **Planned Split**: Labeled as 40/20/40 planned split pending frozen dataset manifest confirmation.
+- **Approved Baselines**:
+  - Matched Clean Control (`CLEAN_MATCHED_BASELINE`).
+  - B1: Fixed fault suite baseline (`FIXED_SUITE_BASELINE`).
+  - B2: Outcome-only baseline (`OUTCOME_ONLY_BASELINE`).
+  - Full C3: Proposed method (`PRODUCTION_C3`).
+- **Approved Ablations**:
+  - A1: No capability validation (`A1_NO_CAPABILITY_VALIDATION`).
+  - A2: No exposure receipt (`A2_NO_EXPOSURE_RECEIPT`).
+  - A3: No C2 state facts (`A3_NO_STATE_FACTS`).
+  - A4: No effect-phase distinction (`A4_NO_EFFECT_PHASE_DISTINCTION`).
+- **Valid CLI Commands**:
+  - `python -m app.components.c3_robustness_recovery.runtime.suite_runner --help`
+  - `python -m app.components.c3_robustness_recovery.runtime.evaluate --help`
+  - `python -m app.components.c3_robustness_recovery.runtime.runner --synthetic`
+  - Developer commands are clearly marked as Advanced Developer Documentation and are never executed directly from browser interfaces.

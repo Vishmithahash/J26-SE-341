@@ -4,6 +4,7 @@ import {
   Download,
   AlertTriangle,
   RefreshCw,
+  Info,
 } from 'lucide-react';
 import { c3Api } from '../api.js';
 import { C3Badge } from './C3Badge';
@@ -18,6 +19,8 @@ export const C3ExecutionReportViewer = ({
   const [report, setReport] = useState(initialReport);
   const [isLoading, setIsLoading] = useState(!initialReport);
   const [error, setError] = useState(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
 
   useEffect(() => {
     if (!initialReport && executionId && projectId) {
@@ -46,10 +49,17 @@ export const C3ExecutionReportViewer = ({
     }
   }, [projectId, executionId, initialReport]);
 
-  const handleExportCsv = () => {
+  const handleExportCsv = async () => {
     if (!projectId || !executionId) return;
-    const url = c3Api.getExecutionReportCsvUrl(projectId, executionId);
-    window.open(url, '_blank');
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      await c3Api.downloadExecutionReportCsv(projectId, executionId);
+    } catch (err) {
+      setExportError(err.message || 'Failed to download execution report CSV.');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const handleUseDemoReport = () => {
@@ -78,10 +88,15 @@ export const C3ExecutionReportViewer = ({
           <button
             type="button"
             onClick={handleExportCsv}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors shadow-xs"
+            disabled={isExporting}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-semibold text-xs transition-colors shadow-xs"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export CSV</span>
+            {isExporting ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            <span>{isExporting ? 'Exporting...' : 'Export CSV'}</span>
           </button>
           {onClose && (
             <button
@@ -94,6 +109,19 @@ export const C3ExecutionReportViewer = ({
           )}
         </div>
       </div>
+
+      {exportError && (
+        <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-xs text-rose-700 dark:text-rose-300 flex items-center justify-between gap-2">
+          <span>{exportError}</span>
+          <button
+            type="button"
+            onClick={() => setExportError(null)}
+            className="text-xs font-semibold underline text-rose-800 dark:text-rose-200"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="p-8 text-center space-y-3">
@@ -160,7 +188,7 @@ export const C3ExecutionReportViewer = ({
                     (report.verdict_counts?.inconclusive_count || 0)}
                 </div>
                 <p className="text-[10px] text-slate-400 mt-0.5">
-                  Passed clean & exposure gating
+                  Confirmed exposure & valid execution
                 </p>
               </div>
             </div>
@@ -254,6 +282,69 @@ export const C3ExecutionReportViewer = ({
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Differential Attribution Limitations Callout */}
+          {((report.clean_disqualified_count ?? 0) > 0 || (report.clean_control_notes && report.clean_control_notes.length > 0)) && (
+            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-300 flex items-start gap-2.5">
+              <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="font-semibold block text-amber-950 dark:text-amber-200">
+                  Limitations on Differential Fault Attribution:
+                </span>
+                <p className="text-[11px] leading-relaxed text-amber-800/90 dark:text-amber-300/90">
+                  {report.clean_control_notes?.[0] ||
+                    'One or more clean baseline controls failed task execution. Comparable fault trials with confirmed exposure remain included in main outcome analysis and evaluated for recovery compliance, but differential failure attribution is limited.'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Supplementary Analysis: Qualified Clean-Passing Subset */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="font-bold text-slate-900 dark:text-white text-xs block">
+                Supplementary Analysis: Clean-Passing Subset
+              </span>
+              <span className="text-[10px] font-mono text-slate-400 bg-white dark:bg-slate-900 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700">
+                Supplementary Differential View
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Supplementary outcome partition restricted strictly to trial pairs whose clean control achieved verified baseline qualification (<code className="font-mono">QUALIFIED</code>):
+            </p>
+            {(() => {
+              const cases = report.case_reports || [];
+              const cleanQualifiedCases = cases.filter((c) => c.clean_qualification === 'QUALIFIED');
+              const evalClean = cleanQualifiedCases.filter((c) => c.recovery_verdict && c.recovery_verdict !== 'NOT_EVALUATED');
+              const passComp = evalClean.filter((c) => c.recovery_verdict === 'PASS_COMPLETED').length;
+              const passGrac = evalClean.filter((c) => c.recovery_verdict === 'PASS_GRACEFUL').length;
+              const failCount = evalClean.filter((c) => c.recovery_verdict === 'FAIL').length;
+              const inconcCount = evalClean.filter((c) => c.recovery_verdict === 'INCONCLUSIVE').length;
+              const totalQualifiedControls = report.clean_qualified_count ?? 0;
+              const countDisplay = cases.length > 0 ? evalClean.length : totalQualifiedControls;
+
+              return (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-xs">
+                  <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase block font-sans font-semibold">Subset Total</span>
+                    <span className="font-bold text-slate-900 dark:text-white text-sm">{countDisplay}</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase block font-sans font-semibold">Pass Completed</span>
+                    <span className="font-bold text-emerald-600 text-sm">{cases.length > 0 ? passComp : '—'}</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase block font-sans font-semibold">Pass Graceful</span>
+                    <span className="font-bold text-sky-600 text-sm">{cases.length > 0 ? passGrac : '—'}</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase block font-sans font-semibold">Fail / Inconc.</span>
+                    <span className="font-bold text-rose-600 text-sm">{cases.length > 0 ? (failCount + inconcCount) : '—'}</span>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Rule Violations and Attribution */}

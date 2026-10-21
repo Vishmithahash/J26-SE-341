@@ -28,31 +28,36 @@ export const C3ResearchView = () => {
       <div className="p-6 rounded-2xl bg-slate-900 text-white border border-slate-800 space-y-3">
         <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[11px] font-semibold uppercase tracking-wider">
           <Sparkles className="w-3.5 h-3.5" />
-          Research Protocol & Ablation Governance (Phase 7)
+          Research Protocol & Ablation Governance
         </div>
         <h2 className="text-xl font-bold tracking-tight">
-          Three-Way Partitioned Protocol, Baselines & Ablations
+          Planned 3-Way Protocol, Canonical Baselines & Ablations
         </h2>
         <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">
-          Component 3 enforces research rigor through 40/20/40 family-partitioned splits, comparative baselines, and ablation models. Research experiments and statistical metrics are executed strictly via the developer CLI to preserve benchmark integrity without browser fabrication.
+          Component 3 enforces research rigor through a planned 40/20/40 family-partitioned split, comparative evaluation baselines (B1 fixed suite, B2 outcome-only, Full C3 proposed method, and matched clean control), and method ablations (A1–A4). Research experiments and evaluations are executed strictly via developer CLI entry points without fabricated browser executions.
         </p>
 
         {/* CLI Architecture Badge */}
         <div className="p-3 rounded-xl bg-purple-950/50 border border-purple-800 text-purple-200 text-xs flex items-start gap-2.5">
           <Info className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
           <div className="leading-relaxed">
-            <span className="font-bold">CLI-Only Research Architecture:</span> The research runner (<code className="font-mono text-purple-300">research_runner.py</code>) and research metrics engine (<code className="font-mono text-purple-300">research_metrics.py</code>) operate as offline command-line pipelines. No pseudo-endpoints or fabricated reviewer labels are created in the browser.
+            <span className="font-bold">Developer CLI Architecture:</span> Real recovery evaluation and runner pipelines operate as offline command-line entry points (<code className="font-mono text-purple-300">runtime.evaluate</code>, <code className="font-mono text-purple-300">runtime.suite_runner</code>, <code className="font-mono text-purple-300">runtime.runner</code>). Shell commands are never executed from the browser, and no pseudo-endpoints or fabricated reviewer labels are created client-side.
           </div>
         </div>
       </div>
 
       {/* Partitions / Splits (40/20/40) */}
       <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Split className="w-4 h-4 text-indigo-600" />
-            <span>Family-Partitioned Dataset Splits (40 / 20 / 40)</span>
-          </h3>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Split className="w-4 h-4 text-indigo-600" />
+              <span>Planned Family-Partitioned Dataset Splits (40 / 20 / 40)</span>
+            </h3>
+            <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5">
+              Labeled as planned split pending frozen dataset manifest confirmation.
+            </p>
+          </div>
           <span className="text-xs font-mono text-slate-400">
             Protocol: {proto.protocol_id} (v{proto.protocol_version})
           </span>
@@ -89,7 +94,7 @@ export const C3ResearchView = () => {
         <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
           <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <Layers className="w-4 h-4 text-emerald-600" />
-            <span>Comparative Agent Baselines (B0 – B3)</span>
+            <span>Comparative Evaluation Baselines</span>
           </h3>
           <div className="space-y-3 text-xs">
             {proto.baselines.map((b) => (
@@ -115,7 +120,7 @@ export const C3ResearchView = () => {
         <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
           <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <GitBranch className="w-4 h-4 text-amber-600" />
-            <span>Methodological Ablation Models (A1 – A3)</span>
+            <span>Methodological Ablation Models (A1 – A4)</span>
           </h3>
           <div className="space-y-3 text-xs">
             {proto.ablations.map((a) => (
@@ -140,25 +145,30 @@ export const C3ResearchView = () => {
 
       {/* Developer CLI Terminal Commands */}
       <div className="p-6 rounded-2xl bg-slate-950 text-slate-200 border border-slate-800 shadow-xs space-y-4">
-        <h3 className="text-sm font-bold text-white flex items-center gap-2">
-          <Terminal className="w-4 h-4 text-emerald-400" />
-          <span>Research Runner CLI Commands</span>
-        </h3>
-        <p className="text-xs text-slate-400 leading-relaxed">
-          Run bounded research experiments across partitions and domains directly in your terminal:
-        </p>
+        <div>
+          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+            <Terminal className="w-4 h-4 text-emerald-400" />
+            <span>Developer CLI Commands (Advanced Documentation)</span>
+          </h3>
+          <p className="text-xs text-slate-400 leading-relaxed mt-1">
+            Execute real runtime and evaluation pipelines directly from a Python terminal environment. Shell commands are never executed in the browser; unsupported arguments (<code className="font-mono text-slate-300">--split</code>, <code className="font-mono text-slate-300">--domain</code>) are omitted.
+          </p>
+        </div>
 
         <div className="space-y-3 text-xs font-mono">
+          {/* Command 1: evaluate */}
           <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-3">
             <div className="truncate">
               <span className="text-slate-500">$ </span>
-              <span className="text-emerald-400">python -m app.components.c3_robustness_recovery.runtime.research_runner --split held_out --domain banking</span>
+              <span className="text-emerald-400">
+                python -m app.components.c3_robustness_recovery.runtime.evaluate --evidence-file evidence.json --export-dir evidence_output
+              </span>
             </div>
             <button
               type="button"
               onClick={() =>
                 handleCopy(
-                  'python -m app.components.c3_robustness_recovery.runtime.research_runner --split held_out --domain banking',
+                  'python -m app.components.c3_robustness_recovery.runtime.evaluate --evidence-file evidence.json --export-dir evidence_output',
                   'cmd1'
                 )
               }
@@ -173,16 +183,19 @@ export const C3ResearchView = () => {
             </button>
           </div>
 
+          {/* Command 2: suite_runner */}
           <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-3">
             <div className="truncate">
               <span className="text-slate-500">$ </span>
-              <span className="text-emerald-400">python -m app.components.c3_robustness_recovery.runtime.research_runner --baseline B3 --ablation A2</span>
+              <span className="text-emerald-400">
+                python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --export-dir evidence_output
+              </span>
             </div>
             <button
               type="button"
               onClick={() =>
                 handleCopy(
-                  'python -m app.components.c3_robustness_recovery.runtime.research_runner --baseline B3 --ablation A2',
+                  'python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --export-dir evidence_output',
                   'cmd2'
                 )
               }
@@ -196,8 +209,36 @@ export const C3ResearchView = () => {
               )}
             </button>
           </div>
+
+          {/* Command 3: runner */}
+          <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-3">
+            <div className="truncate">
+              <span className="text-slate-500">$ </span>
+              <span className="text-emerald-400">
+                python -m app.components.c3_robustness_recovery.runtime.runner --synthetic --export-dir evidence_output
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                handleCopy(
+                  'python -m app.components.c3_robustness_recovery.runtime.runner --synthetic --export-dir evidence_output',
+                  'cmd3'
+                )
+              }
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors shrink-0"
+              title="Copy command"
+            >
+              {copiedCmd === 'cmd3' ? (
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 };
+

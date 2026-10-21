@@ -1,4 +1,4 @@
-import { request } from '../../services/api.js';
+import { api, request } from '../../services/api.js';
 
 export const FAULT_FAMILIES = {
   TIMEOUT_DISCONNECTION: 'TIMEOUT_DISCONNECTION',
@@ -481,4 +481,59 @@ export const c3Api = {
   getExecutionReportCsvUrl(projectId, executionId) {
     return `/api/v1/c3/reports/executions/${encodeURIComponent(executionId)}/export?project_id=${encodeURIComponent(projectId)}`;
   },
+
+  /**
+   * Protected download of execution report CSV using authenticated fetch and Blob flow.
+   * Never places authentication tokens in URLs.
+   * Releases object URLs after triggering download.
+   */
+  async downloadExecutionReportCsv(projectId, executionId) {
+    if (!projectId) {
+      throw new Error('Project ID is required to export execution report CSV.');
+    }
+    if (!executionId) {
+      throw new Error('Execution ID is required to export execution report CSV.');
+    }
+    const token = api.getToken();
+    const headers = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const url = `/api/v1/c3/reports/executions/${encodeURIComponent(executionId)}/export?project_id=${encodeURIComponent(projectId)}`;
+    let response;
+    try {
+      response = await fetch(url, { method: 'GET', headers });
+    } catch {
+      throw new Error('Network error: unable to download CSV report.');
+    }
+
+    if (!response.ok) {
+      let detail = `Download failed with status ${response.status}`;
+      try {
+        const errJson = await response.json();
+        if (errJson.detail) {
+          detail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+        }
+      } catch {
+        // non-JSON response body
+      }
+      throw new Error(detail);
+    }
+
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const filename = `report_${executionId}.csv`;
+    try {
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return { success: true, filename };
+    } finally {
+      window.URL.revokeObjectURL(blobUrl);
+    }
+  },
 };
+

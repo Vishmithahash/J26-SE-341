@@ -149,17 +149,17 @@ describe('Component 3 Phase 3: Recovery Evaluation, Explanations, Reports & Gove
       assert.strictEqual(testSplit?.percentage, 40);
     });
 
-    it('documents all four comparative baselines B0 to B3 and ablations A1 to A3', () => {
+    it('documents comparative baselines including clean control, B1, B2, Full C3 and ablations A1 to A4', () => {
       const baselineIds = DEMO_RESEARCH_PROTOCOL.baselines.map((b) => b.baseline_id);
-      assert.deepStrictEqual(baselineIds, ['B0', 'B1', 'B2', 'B3']);
+      assert.deepStrictEqual(baselineIds, ['CLEAN_CONTROL', 'B1', 'B2', 'FULL_C3']);
 
       const ablationIds = DEMO_RESEARCH_PROTOCOL.ablations.map((a) => a.ablation_id);
-      assert.deepStrictEqual(ablationIds, ['A1', 'A2', 'A3']);
+      assert.deepStrictEqual(ablationIds, ['A1', 'A2', 'A3', 'A4']);
     });
 
-    it('specifies explicit developer CLI execution command', () => {
-      assert.ok(DEMO_RESEARCH_PROTOCOL.cli_command.includes('research_runner'));
-      assert.ok(DEMO_RESEARCH_PROTOCOL.cli_command.includes('--split held_out'));
+    it('specifies explicit developer CLI execution command with real runtime entry point', () => {
+      assert.ok(DEMO_RESEARCH_PROTOCOL.cli_command.includes('runtime.evaluate'));
+      assert.ok(DEMO_RESEARCH_PROTOCOL.cli_command.includes('--evidence-file'));
     });
   });
 

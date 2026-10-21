@@ -76,12 +76,12 @@ export const C3ExplanationEvidenceView = ({ evaluationRecord, onClose }) => {
           <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800/80 text-rose-200 text-xs flex items-start gap-2.5">
             <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold text-rose-300">First Observable Rule Violation:</span>{' '}
+              <span className="font-bold text-rose-300">Reported First Violated Rule:</span>{' '}
               <code className="font-mono bg-rose-900/60 px-1.5 py-0.5 rounded text-rose-200 font-bold">
                 {firstViolation}
               </code>
               <p className="mt-1 text-rose-300/90 leading-relaxed">
-                The evaluation engine chronologically ordered rule violations by runtime event timestamps. This rule was the earliest causal violation detected in the fault trial.
+                Reported based on evaluator evaluation order and supporting rule events. Chronological and causal localization remains limited to verified runtime event timestamps; unsequenced rules reflect engine evaluation precedence.
               </p>
             </div>
           </div>

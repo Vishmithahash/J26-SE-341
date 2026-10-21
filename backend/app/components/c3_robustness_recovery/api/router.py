@@ -69,6 +69,19 @@ class C3SafeRoute(APIRoute):
         return custom_handler
 
 
+from typing import Annotated
+
+from fastapi import Depends
+from sqlalchemy.orm import Session
+
+from app.components.c3_robustness_recovery.api.authorization import (
+    require_c3_active_user,
+    verify_c3_project_access,
+    verify_project_consistency,
+)
+from app.database import get_db
+from app.shared.auth.models import User
+
 router = APIRouter(
     prefix="/api/v1/c3",
     tags=["Component 3: Robustness and Failure Recovery"],
@@ -93,6 +106,7 @@ def fault_catalog() -> FaultCatalogResponse:
     return get_fault_catalog()
 
 
+
 @router.post(
     "/cases/validate",
     response_model=FaultValidationResponse,
@@ -106,8 +120,12 @@ def fault_catalog() -> FaultCatalogResponse:
 )
 def validate_case(
     request: FaultValidationRequest,
+    current_user: Annotated[User, Depends(require_c3_active_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> FaultValidationResponse:
-    """Validate declared candidate fault case metadata deterministically."""
+    """Validate declared candidate fault case metadata deterministically with project authorization."""
+    project_id = request.candidate_case.project_id
+    verify_c3_project_access(project_id, current_user, db)
     return validate_fault_case(request)
 
 
@@ -124,8 +142,12 @@ def validate_case(
 )
 def generate_cases(
     request: FaultGenerationRequest,
+    current_user: Annotated[User, Depends(require_c3_active_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> FaultGenerationResponse:
-    """Deterministically generate and freeze feasible fault cases without executing them."""
+    """Deterministically generate and freeze feasible fault cases with project authorization."""
+    project_id = request.project_id
+    verify_c3_project_access(project_id, current_user, db)
     return generate_feasible_cases(request)
 
 
@@ -142,6 +164,15 @@ def generate_cases(
 )
 def evaluate_recovery_endpoint(
     request: RecoveryEvaluationRequest,
+    current_user: Annotated[User, Depends(require_c3_active_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> RecoveryEvaluationResult:
-    """Deterministically evaluate recovery rules from submitted evidence and C2 facts."""
+    """Deterministically evaluate recovery rules with project scoping and cross-field identity verification."""
+    verify_project_consistency(
+        request.project_id,
+        request.candidate_case.project_id,
+        request.matched_evidence.project_id,
+    )
+    verify_c3_project_access(request.project_id, current_user, db)
     return evaluate_recovery(request)
+

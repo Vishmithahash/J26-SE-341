@@ -18,7 +18,7 @@ from app.components.c3_robustness_recovery.contracts.evaluation import (
     RecoveryVerdict,
     RuleEvaluationStatus,
 )
-from app.components.c3_robustness_recovery.contracts.schemas import EffectPhase
+from app.components.c3_robustness_recovery.contracts.schemas import EffectPhase, TerminalOutcome
 from app.components.c3_robustness_recovery.runtime.adapter import (
     CleanupStatus,
     RecoveryActor,
@@ -246,6 +246,10 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
         "USER_ESCALATION",
         "GRACEFUL_STOP",
         "SAFE_DEGRADED",
+        "GRACEFUL_HALT",
+        TerminalOutcome.GRACEFUL_ABORT_USER_NOTIFIED.value,
+        TerminalOutcome.FAIL_SAFE_STOP.value,
+        TerminalOutcome.SUCCESS_DEGRADED_FALLBACK.value,
     }
     ordinary_incomplete_outcomes = {
         "INCOMPLETE",

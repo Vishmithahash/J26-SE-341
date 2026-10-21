@@ -57,7 +57,7 @@ export const C3DashboardCard = ({ role = 'USER' }) => {
             <RotateCcw className="w-5 h-5" />
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
-            <C3Badge status="DEMONSTRATION" label="Phase 3 Active" />
+            <C3Badge status="READY" label="Operational" />
             {isAdmin && (
               <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
                 Admin View
