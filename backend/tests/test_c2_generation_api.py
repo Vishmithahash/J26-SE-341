@@ -17,6 +17,10 @@ from app.database import Base, get_db
 from app.main import app
 
 
+from tests.auth_test_fixtures import AutoSeedingTestClient, seed_test_admin, seed_test_projects
+from app.shared.auth.dependencies import require_active_user
+
+
 @pytest.fixture
 def client_with_approved_model():
     engine = create_engine(
@@ -36,7 +40,9 @@ def client_with_approved_model():
 
     # Pre-seed approved refund model in database
     db = testing_session_local()
+    admin_user = seed_test_admin(db)
     efsm = build_synthetic_refund_efsm()
+    seed_test_projects(db, [efsm.project_id], owner_id=admin_user.id)
     repo = C2ModelRepository(db)
     repo.create_draft_model(efsm.project_id, efsm)
     val_service = ModelValidationService(db)
@@ -51,9 +57,11 @@ def client_with_approved_model():
     db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
+    app.dependency_overrides[require_active_user] = lambda: admin_user
+    with AutoSeedingTestClient(testing_session_local(), admin_user) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
 
 
 def test_api_generate_suite_and_query_endpoints(

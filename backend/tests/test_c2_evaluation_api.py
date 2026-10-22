@@ -40,13 +40,20 @@ def client_with_approved_suite():
         finally:
             db.close()
 
-    app.dependency_overrides[get_db] = override_get_db
-    client = TestClient(app)
-
     db = testing_session_local()
+    from tests.auth_test_fixtures import AutoSeedingTestClient, seed_test_admin, seed_test_projects
+    from app.shared.auth.dependencies import require_active_user
+
+    admin_user = seed_test_admin(db)
+    seed_test_projects(db, ["eval_api_proj"], owner_id=admin_user.id)
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_active_user] = lambda: admin_user
+    client = AutoSeedingTestClient(testing_session_local(), admin_user)
+
     repo = C2ModelRepository(db)
     project_id = "eval_api_proj"
     model = build_synthetic_refund_efsm()
+
 
     # 1. Create model in DRAFT
     repo.create_draft_model(project_id, model)
@@ -86,7 +93,8 @@ def client_with_approved_suite():
     try:
         yield client, project_id, suite_id, test_id, model
     finally:
-        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.clear()
+
 
 
 def test_api_evaluate_test_run_and_retrieval(client_with_approved_suite):

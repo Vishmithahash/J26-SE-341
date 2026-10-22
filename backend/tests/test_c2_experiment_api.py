@@ -42,8 +42,14 @@ def db_session():
         session.close()
 
 
+from tests.auth_test_fixtures import AutoSeedingTestClient, seed_test_admin
+from app.shared.auth.dependencies import require_active_user
+
+
 @pytest.fixture
 def client(db_session: Session):
+    admin_user = seed_test_admin(db_session)
+
     def override_get_db():
         try:
             yield db_session
@@ -51,9 +57,11 @@ def client(db_session: Session):
             pass
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
+    app.dependency_overrides[require_active_user] = lambda: admin_user
+    with AutoSeedingTestClient(db_session, admin_user) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
 
 
 @pytest.fixture

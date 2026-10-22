@@ -39,6 +39,14 @@ def test_health_endpoint(client):
     assert response.json() == {"status": "healthy"}
 
 
+def test_openapi_endpoint(client):
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    schema = response.json()
+    assert "paths" in schema
+    assert "/api/v1/projects/{project_id}/integration/plans" in schema["paths"]
+
+
 def test_health_db_success(client):
     mock_session = MagicMock(spec=Session)
     mock_scalar = MagicMock()
