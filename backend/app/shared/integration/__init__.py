@@ -3,6 +3,12 @@
 Component: Shared Integration Foundation (Part 1)
 """
 
+from app.shared.integration.adapters import (
+    ControlledTestTargetAdapter,
+    LiveNexaCartTargetAdapter,
+    TargetMode,
+    TargetReadinessStatus,
+)
 from app.shared.integration.contracts import (
     C1ConfigReference,
     C2ModelReference,
@@ -13,6 +19,9 @@ from app.shared.integration.contracts import (
     ComponentReferencesPlan,
     ComponentType,
     CorrelationMapping,
+    ExecutionListResponse,
+    ExecutionStartRequest,
+    ExecutionStatusResponse,
     IntegrationPlanListResponse,
     IntegrationPlanStatus,
     IntegrationReadinessReport,
@@ -23,8 +32,10 @@ from app.shared.integration.contracts import (
     ReadinessSeverity,
     ReadinessVerdict,
 )
+from app.shared.integration.executor import SharedExecutionCoordinator
 from app.shared.integration.models import (
     IntegrationArtifactReferenceModel,
+    IntegrationExecutionModel,
     IntegrationIdentifierMappingModel,
     IntegrationRunPlanModel,
 )
@@ -40,8 +51,13 @@ __all__ = [
     "ComponentReadinessSummary",
     "ComponentReferencesPlan",
     "ComponentType",
+    "ControlledTestTargetAdapter",
     "CorrelationMapping",
+    "ExecutionListResponse",
+    "ExecutionStartRequest",
+    "ExecutionStatusResponse",
     "IntegrationArtifactReferenceModel",
+    "IntegrationExecutionModel",
     "IntegrationIdentifierMappingModel",
     "IntegrationPlanListResponse",
     "IntegrationPlanStatus",
@@ -50,9 +66,13 @@ __all__ = [
     "IntegrationRunPlanModel",
     "IntegrationRunPlanResponse",
     "IntegrationService",
+    "LiveNexaCartTargetAdapter",
     "NativeEntityType",
     "ReadinessIssueCode",
     "ReadinessSeverity",
     "ReadinessVerdict",
+    "SharedExecutionCoordinator",
+    "TargetMode",
+    "TargetReadinessStatus",
     "router",
 ]

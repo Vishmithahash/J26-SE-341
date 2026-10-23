@@ -18,12 +18,16 @@ from app.shared.auth.dependencies import require_active_user
 from app.shared.auth.models import User
 from app.shared.integration.contracts import (
     ComponentReferencesPlan,
+    ExecutionListResponse,
+    ExecutionStartRequest,
+    ExecutionStatusResponse,
     IntegrationPlanListResponse,
     IntegrationReadinessReport,
     IntegrationRunPlanCreateRequest,
     IntegrationRunPlanResponse,
     ReadinessCheckRequest,
 )
+from app.shared.integration.executor import SharedExecutionCoordinator
 from app.shared.integration.service import IntegrationService
 from app.shared.projects.models import Project
 from app.shared.projects.service import get_project
@@ -132,3 +136,84 @@ def validate_readiness(
         c4=payload.c4_reference,
     )
     return service.check_readiness(project_id, references)
+
+
+@router.post(
+    "/plans/{plan_id}/execute",
+    response_model=ExecutionStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute a frozen integration run plan",
+    description=(
+        "Launches coordinated execution of the validated run plan. "
+        "Executes the application once per trial, captures retained evidence, "
+        "and evaluates the evidence using C1, C2, C3, and C4 evaluators."
+    ),
+)
+def execute_plan(
+    project_id: str,
+    plan_id: str,
+    payload: ExecutionStartRequest,
+    current_user: Annotated[User, Depends(require_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+    project: Annotated[Project, Depends(get_authorized_project)],
+) -> ExecutionStatusResponse:
+    """Execute a validated integration run plan."""
+    coordinator = SharedExecutionCoordinator(db)
+    return coordinator.execute_plan(project, current_user, plan_id, payload)
+
+
+@router.get(
+    "/plans/{plan_id}/executions",
+    response_model=ExecutionListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List executions for an integration run plan",
+    description="Returns all executions and evaluations performed for this plan.",
+)
+def list_executions(
+    project_id: str,
+    plan_id: str,
+    project: Annotated[Project, Depends(get_authorized_project)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ExecutionListResponse:
+    """List executions for a plan."""
+    coordinator = SharedExecutionCoordinator(db)
+    return coordinator.list_executions(project, plan_id)
+
+
+@router.get(
+    "/plans/{plan_id}/executions/{execution_id}",
+    response_model=ExecutionStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get execution status and evaluation results",
+    description="Retrieves execution status, retained evidence digest, and component evaluations.",
+)
+def get_execution(
+    project_id: str,
+    plan_id: str,
+    execution_id: str,
+    project: Annotated[Project, Depends(get_authorized_project)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ExecutionStatusResponse:
+    """Retrieve execution status and findings."""
+    coordinator = SharedExecutionCoordinator(db)
+    return coordinator.get_execution(project, plan_id, execution_id)
+
+
+@router.post(
+    "/plans/{plan_id}/executions/{execution_id}/cancel",
+    response_model=ExecutionStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Cancel an ongoing execution",
+    description="Safely requests execution cancellation with bounded settling.",
+)
+def cancel_execution(
+    project_id: str,
+    plan_id: str,
+    execution_id: str,
+    current_user: Annotated[User, Depends(require_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+    project: Annotated[Project, Depends(get_authorized_project)],
+) -> ExecutionStatusResponse:
+    """Cancel an active execution."""
+    coordinator = SharedExecutionCoordinator(db)
+    return coordinator.cancel_execution(project, plan_id, execution_id)

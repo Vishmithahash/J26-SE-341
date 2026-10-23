@@ -1,18 +1,107 @@
-"""Minimal adapter and validation service for Component 2 workflow assertion facts.
+"""Adapter, validation service, and bridge for Component 2 workflow assertion facts.
 
 Component: C3 - Robustness and Failure Recovery Testing
 Phase: Phase 4 - Recovery evaluation using evidence and C2 facts.
 
 C2 owns workflow state-machine evaluation and assertion truth determination.
 C3 consumes discrete TRUE / FALSE / UNKNOWN facts without computing domain workflow state.
+This module implements the authoritative C2-to-C3 callable bridge.
 """
 
 from collections import defaultdict
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.components.c3_robustness_recovery.contracts.evaluation import (
     C2AssertionFact,
     C2FactValue,
 )
+from app.components.c3_robustness_recovery.contracts.schemas import RecoveryContract
+from app.components.c3_robustness_recovery.runtime.evidence import MatchedPairEvidence
+
+
+class C2ToC3AssertionMapping(BaseModel):
+    """Explicit versioned binding between a C3 recovery requirement and a C2 state assertion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    c3_assertion_id: str = Field(
+        ..., description="Assertion ID expected by C3 recovery contract or rules"
+    )
+    c3_assertion_version: str = Field(
+        default="1.0.0", description="Assertion version expected by C3"
+    )
+    c2_assertion_id: str = Field(
+        ..., description="Underlying assertion ID defined in C2 predicate catalog"
+    )
+    c2_assertion_version: str = Field(
+        default="1.0.0", description="Version of C2 assertion definition"
+    )
+    entity_type: str = Field(
+        default="order", description="Entity type scoped by the assertion"
+    )
+    required_time_scope: str = Field(
+        default="post_recovery",
+        description="Observation time scope (e.g. 'post_recovery', 'final_state')",
+    )
+    required_trial_role: str = Field(
+        default="FAULT",
+        description="Role of trial providing observation evidence (must be FAULT for recovery)",
+    )
+
+
+# Default versioned mappings connecting canonical C3 requirements to registered C2 assertions
+DEFAULT_C2_TO_C3_MAPPINGS: list[C2ToC3AssertionMapping] = [
+    C2ToC3AssertionMapping(
+        c3_assertion_id="order_created",
+        c3_assertion_version="1.0.0",
+        c2_assertion_id="order_created",
+        c2_assertion_version="1.0.0",
+        entity_type="order",
+        required_time_scope="post_recovery",
+    ),
+    C2ToC3AssertionMapping(
+        c3_assertion_id="refund_completed",
+        c3_assertion_version="1.0.0",
+        c2_assertion_id="refund_completed",
+        c2_assertion_version="1.0.0",
+        entity_type="refund",
+        required_time_scope="post_recovery",
+    ),
+    C2ToC3AssertionMapping(
+        c3_assertion_id="inventory_reserved",
+        c3_assertion_version="1.0.0",
+        c2_assertion_id="inventory_reserved",
+        c2_assertion_version="1.0.0",
+        entity_type="inventory",
+        required_time_scope="post_recovery",
+    ),
+    C2ToC3AssertionMapping(
+        c3_assertion_id="duplicate_side_effect_detected",
+        c3_assertion_version="1.0.0",
+        c2_assertion_id="duplicate_side_effect_detected",
+        c2_assertion_version="1.0.0",
+        entity_type="side_effects",
+        required_time_scope="post_recovery",
+    ),
+    C2ToC3AssertionMapping(
+        c3_assertion_id="idempotency_key_reused",
+        c3_assertion_version="1.0.0",
+        c2_assertion_id="idempotency_key_reused",
+        c2_assertion_version="1.0.0",
+        entity_type="call",
+        required_time_scope="post_recovery",
+    ),
+    C2ToC3AssertionMapping(
+        c3_assertion_id="target_idempotency_enforced",
+        c3_assertion_version="1.0.0",
+        c2_assertion_id="target_idempotency_enforced",
+        c2_assertion_version="1.0.0",
+        entity_type="idempotency",
+        required_time_scope="post_recovery",
+    ),
+]
 
 
 def validate_c2_facts(facts: list[C2AssertionFact]) -> tuple[bool, list[str]]:
@@ -59,6 +148,7 @@ def get_c2_fact_value(
     entity_id: str | None = None,
     snapshot_id: str | None = None,
     assertion_version: str | None = None,
+    expected_trial_id: str | None = None,
 ) -> C2FactValue:
     """Retrieve the discrete truth value of a specific assertion fact.
 
@@ -83,6 +173,12 @@ def get_c2_fact_value(
             continue
         if snapshot_id is not None and fact.snapshot_id != snapshot_id:
             continue
+        if expected_trial_id is not None:
+            fact_trial_id = fact.details.get("trial_id")
+            if fact_trial_id and fact_trial_id != expected_trial_id:
+                # Reject fact belonging to another trial
+                continue
+
         matching_values.add(fact.value)
 
     if not matching_values:
@@ -105,15 +201,202 @@ def get_c2_fact_value(
 
 
 def check_c2_integration_status() -> tuple[bool, str]:
-    """Check availability of live Component 2 service in this workspace.
+    """Check availability of live Component 2 predicate evaluation service and assertion bridge.
 
-    Currently, app.components.c2_state_aware_workflow contains only an empty package marker.
-    Live C2 service integration is therefore BLOCKED; offline/fixture facts are used.
+    Inspects registered capabilities in app.components.c2_state_aware_workflow dynamically.
+    An importable package alone does not prove a functioning bridge.
     """
-    return (
-        False,
-        (
-            "Live C2 service integration is BLOCKED: app.components.c2_state_aware_workflow "
-            "is an empty package marker in this workspace. Discrete fixture facts are consumed."
-        ),
+    try:
+        from app.components.c2_state_aware_workflow.integrations.assertion_facade import (
+            C2NamedAssertionEvaluator,
+        )
+
+        evaluator = C2NamedAssertionEvaluator()
+        registered = evaluator.list_registered_assertions()
+        if not registered:
+            return (
+                False,
+                "Live C2 service integration is BLOCKED: assertion facade present but zero assertions registered.",
+            )
+        return (
+            True,
+            f"Live C2 predicate evaluator and assertion bridge operational ({len(registered)} registered assertions).",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return (
+            False,
+            f"Live C2 service integration is BLOCKED: {exc}",
+        )
+
+
+def evaluate_c2_facts_bridge(
+    project_id: str,
+    pair_id: str,
+    fault_trial_id: str,
+    evidence: MatchedPairEvidence,
+    recovery_contract: RecoveryContract,
+    observation_snapshot: dict[str, Any] | None = None,
+    mappings: list[C2ToC3AssertionMapping] | None = None,
+    expected_entity_id: str | None = None,
+    time_scope: str = "post_recovery",
+) -> list[C2AssertionFact]:
+    """Callable bridge that obtains named assertion results through C2-owned evaluation logic.
+
+    Guarantees:
+    - Only evaluates observations from the FAULT trial (never clean trial).
+    - Preserves discrete TRUE, FALSE, UNKNOWN without collapsing into overall C2 verdicts.
+    - Rejects mismatched project, pair, trial, entity, version or evidence references.
+    - Missing, ambiguous or unobserved state facts evaluate to UNKNOWN (no manufactured passes).
+    - Facts are tagged with server-side authoritative provenance: 'C2_EVALUATOR_BRIDGE'.
+    """
+    # 1. Scope and trial verification
+    if evidence.pair_id != pair_id:
+        raise ValueError(
+            f"Mismatched pair reference: bridge requested pair '{pair_id}' but evidence has '{evidence.pair_id}'."
+        )
+
+    if evidence.clean_trial.trial_id == fault_trial_id:
+        raise ValueError(
+            f"Safety violation: trial '{fault_trial_id}' is the clean control trial. "
+            "C2 recovery facts must refer to the fault trial, never the clean trial."
+        )
+
+    if evidence.fault_trial.trial_id != fault_trial_id:
+        raise ValueError(
+            f"Mismatched trial reference: bridge requested fault trial '{fault_trial_id}' "
+            f"but evidence fault trial is '{evidence.fault_trial.trial_id}'."
+        )
+
+    # 2. Check C2 availability
+    is_available, status_msg = check_c2_integration_status()
+    if not is_available:
+        # If C2 is unavailable, return all required assertions as UNKNOWN
+        facts: list[C2AssertionFact] = []
+        for req_id in recovery_contract.required_state_assertions:
+            facts.append(
+                C2AssertionFact(
+                    assertion_id=req_id,
+                    assertion_version="1.0.0",
+                    value=C2FactValue.UNKNOWN,
+                    entity_id=expected_entity_id,
+                    time_scope=time_scope,
+                    evaluator_version="c2_unavailable",
+                    provenance="C2_EVALUATOR_BRIDGE",
+                    supporting_evidence_refs=[fault_trial_id],
+                    details={"error": status_msg},
+                )
+            )
+        return facts
+
+    # 3. Import C2 assertion evaluator & prepare context
+    from app.components.c2_state_aware_workflow.integrations.assertion_facade import (
+        C2NamedAssertionEvaluator,
     )
+    from app.components.c2_state_aware_workflow.predicates.evaluator import (
+        EvaluationContext,
+    )
+    from app.components.c2_state_aware_workflow.predicates.tristate import TriState
+
+    evaluator = C2NamedAssertionEvaluator()
+
+    # Build evaluation context from actual observed state
+    # Scopes: after=observation_snapshot, before=clean baseline snapshot, event=fault execution metadata
+    context_data = observation_snapshot or {}
+    eval_context = EvaluationContext(
+        after=context_data.get("after") or context_data,
+        before=context_data.get("before"),
+        event=context_data.get("event")
+        or {
+            "trial_id": fault_trial_id,
+            "tool_calls_count": evidence.fault_trial.tool_calls_count,
+            "subsequent_calls_count": evidence.fault_trial.subsequent_calls_count,
+            "caller_outcome": evidence.fault_trial.caller_outcome,
+        },
+        variables=context_data.get("vars", {}),
+    )
+
+    # 4. Resolve mappings
+    active_mappings = {
+        m.c3_assertion_id: m for m in (mappings or DEFAULT_C2_TO_C3_MAPPINGS)
+    }
+
+    facts: list[C2AssertionFact] = []
+    snapshot_id = context_data.get("snapshot_id") or f"snap-{fault_trial_id[:8]}"
+
+    # All assertions required by contract + standard rule assertions
+    all_target_assertions = set(recovery_contract.required_state_assertions)
+    # Also include standard recovery rules assertions if context or contract refers to them
+    all_target_assertions.update(
+        [
+            "duplicate_side_effect_detected",
+            "idempotency_key_reused",
+            "target_idempotency_enforced",
+        ]
+    )
+
+    for c3_id in sorted(all_target_assertions):
+        mapping = active_mappings.get(c3_id)
+        if mapping is None:
+            # Unmapped assertion: strictly UNKNOWN
+            facts.append(
+                C2AssertionFact(
+                    assertion_id=c3_id,
+                    assertion_version="1.0.0",
+                    value=C2FactValue.UNKNOWN,
+                    entity_id=expected_entity_id,
+                    snapshot_id=snapshot_id,
+                    time_scope=time_scope,
+                    evaluator_version=evaluator.EVALUATOR_VERSION,
+                    provenance="C2_EVALUATOR_BRIDGE",
+                    supporting_evidence_refs=[fault_trial_id, snapshot_id],
+                    details={
+                        "project_id": project_id,
+                        "pair_id": pair_id,
+                        "trial_id": fault_trial_id,
+                        "reason": f"No registered C2 mapping for assertion '{c3_id}'.",
+                    },
+                )
+            )
+            continue
+
+        # Evaluate through C2 predicate evaluator
+        c2_res = evaluator.evaluate_named_assertion(
+            assertion_id=mapping.c2_assertion_id,
+            observation_context=eval_context,
+            time_scope=mapping.required_time_scope,
+            entity_id=expected_entity_id,
+            snapshot_id=snapshot_id,
+            expected_version=mapping.c2_assertion_version,
+        )
+
+        # Convert TriState to C2FactValue
+        if c2_res.value == TriState.TRUE:
+            fact_val = C2FactValue.TRUE
+        elif c2_res.value == TriState.FALSE:
+            fact_val = C2FactValue.FALSE
+        else:
+            fact_val = C2FactValue.UNKNOWN
+
+        facts.append(
+            C2AssertionFact(
+                assertion_id=mapping.c3_assertion_id,
+                assertion_version=mapping.c3_assertion_version,
+                value=fact_val,
+                entity_id=expected_entity_id,
+                snapshot_id=snapshot_id,
+                time_scope=mapping.required_time_scope,
+                evaluator_version=evaluator.EVALUATOR_VERSION,
+                provenance="C2_EVALUATOR_BRIDGE",
+                supporting_evidence_refs=[fault_trial_id, snapshot_id],
+                details={
+                    "project_id": project_id,
+                    "pair_id": pair_id,
+                    "trial_id": fault_trial_id,
+                    "c2_assertion_id": mapping.c2_assertion_id,
+                    "c2_assertion_version": mapping.c2_assertion_version,
+                    **c2_res.details,
+                },
+            )
+        )
+
+    return facts

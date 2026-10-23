@@ -452,3 +452,50 @@ class ReadinessCheckRequest(BaseModel):
     c2_reference: C2ModelReference | None = Field(default=None)
     c3_reference: C3SuiteReference | None = Field(default=None)
     c4_reference: C4PolicyReference | None = Field(default=None)
+
+
+class ExecutionStartRequest(BaseModel):
+    """Request payload to execute a frozen integration run plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_mode: str = Field(
+        default="CONTROLLED_TEST",
+        description="Execution mode: 'CONTROLLED_TEST' or 'LIVE_AUT'",
+    )
+    timeout_seconds: int = Field(
+        default=60, ge=1, le=600, description="Execution timeout in seconds"
+    )
+    max_tool_calls: int = Field(
+        default=50, ge=1, le=200, description="Max tool calls budget"
+    )
+    task_prompt_override: str | None = Field(
+        default=None, description="Optional override for natural language agent prompt"
+    )
+
+
+class ExecutionStatusResponse(BaseModel):
+    """Execution status and projected multi-evaluator outcome."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    execution_id: str
+    integration_run_id: str
+    project_id: str
+    lifecycle_status: str
+    target_mode: str
+    plan_digest: str
+    started_at_utc: datetime
+    completed_at_utc: datetime | None = None
+    retained_evidence_digest: str | None = None
+    evaluations: dict[str, Any] = Field(default_factory=dict)
+    error_message: str | None = None
+
+
+class ExecutionListResponse(BaseModel):
+    """List of execution records for an integration plan."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[ExecutionStatusResponse] = Field(default_factory=list)
+    total: int = Field(default=0)

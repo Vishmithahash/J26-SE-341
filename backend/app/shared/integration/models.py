@@ -89,6 +89,12 @@ class IntegrationRunPlanModel(Base):
             order_by="IntegrationArtifactReferenceModel.id",
         )
     )
+    executions: Mapped[list["IntegrationExecutionModel"]] = relationship(
+        "IntegrationExecutionModel",
+        back_populates="run_plan",
+        cascade="all, delete-orphan",
+        order_by="IntegrationExecutionModel.created_at_utc.desc()",
+    )
 
 
 class IntegrationIdentifierMappingModel(Base):
@@ -152,4 +158,60 @@ class IntegrationArtifactReferenceModel(Base):
 
     run_plan: Mapped["IntegrationRunPlanModel"] = relationship(
         "IntegrationRunPlanModel", back_populates="artifact_references"
+    )
+
+
+class IntegrationExecutionModel(Base):
+    """Additive persistence for coordinated integration trial executions and retained evaluations."""
+
+    __tablename__ = "integration_executions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    execution_id: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
+    )
+    integration_run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("integration_run_plans.integration_run_id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    triggered_by_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(32), default="PENDING", index=True, nullable=False
+    )
+    target_mode: Mapped[str] = mapped_column(
+        String(32), default="CONTROLLED_TEST", nullable=False
+    )
+    plan_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    retained_evidence_digest: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+
+    # Retained evidence and multi-evaluator verdicts stored as JSON
+    retained_evidence: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    evaluations: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    started_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    completed_at_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    run_plan: Mapped["IntegrationRunPlanModel"] = relationship(
+        "IntegrationRunPlanModel", back_populates="executions"
     )
