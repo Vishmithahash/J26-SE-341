@@ -27,6 +27,7 @@ import { PolicySafetyWorkspace } from './features/c4/pages/PolicySafetyWorkspace
 import { C3AdminWorkspace } from './features/c3/pages/C3AdminWorkspace';
 import { C3UserWorkspace } from './features/c3/pages/C3UserWorkspace';
 import { StateAwareWorkflowPage } from './features/c2/pages/StateAwareWorkflowPage';
+import { CombinedResultsView } from './features/integration';
 
 // Role-aware root redirect component
 const RootRedirect = () => {
@@ -79,6 +80,7 @@ export const App = () => {
                 <Route path="projects/new" element={<ProjectFormPage />} />
                 <Route path="projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="projects/:projectId/edit" element={<ProjectFormPage />} />
+                <Route path="projects/:projectId/results" element={<CombinedResultsView />} />
 
                 {/* Component 1: Explainable Tool-Call Correctness Testing */}
                 <Route
@@ -126,6 +128,7 @@ export const App = () => {
                 <Route path="projects/new" element={<ProjectFormPage />} />
                 <Route path="projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="projects/:projectId/edit" element={<ProjectFormPage />} />
+                <Route path="projects/:projectId/results" element={<CombinedResultsView />} />
 
                 {/* Component 1: Explainable Tool-Call Correctness Testing */}
                 <Route

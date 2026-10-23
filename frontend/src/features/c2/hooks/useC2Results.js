@@ -14,6 +14,8 @@ export const useC2Results = (projectId, userId) => {
   const [runReport, setRunReport] = useState(null);
   const [suiteReport, setSuiteReport] = useState(null);
   const [exportStatus, setExportStatus] = useState(null);
+  const [exportError, setExportError] = useState(null);
+  const [lastConfirmedReceipt, setLastConfirmedReceipt] = useState(null);
   const [reproductionResult, setReproductionResult] = useState(null);
 
   // Filters
@@ -101,6 +103,8 @@ export const useC2Results = (projectId, userId) => {
     setRunReport(null);
     setSuiteReport(null);
     setExportStatus(null);
+    setExportError(null);
+    setLastConfirmedReceipt(null);
     setReproductionResult(null);
     setError(null);
     setActionError(null);
@@ -120,6 +124,7 @@ export const useC2Results = (projectId, userId) => {
       setObservedCoverage(null);
       setRunReport(null);
       setExportStatus(null);
+      setExportError(null);
       setReproductionResult(null);
 
       if (!evaluation || !projectId) return;
@@ -238,14 +243,27 @@ export const useC2Results = (projectId, userId) => {
       if (inFlightRef.current) return;
       inFlightRef.current = true;
       setIsExportingReport(true);
+      setExportError(null);
       setActionError(null);
 
       try {
         const result = await c2Api.exportC2ReportContribution(projectId, evaluationId);
         setExportStatus(result);
+        if (result?.published_to_shared_aggregator) {
+          setLastConfirmedReceipt(result);
+        }
         return result;
       } catch (err) {
-        setActionError(err.message || 'Failed to export C2 report contribution.');
+        const isConflict = err.status === 409 || String(err.message || '').includes('409') || String(err.message || '').toLowerCase().includes('conflict');
+        const errDetail = {
+          status: err.status || (isConflict ? 409 : 500),
+          isConflict,
+          message: isConflict
+            ? 'Publication conflict: an export contribution already exists for this execution in the shared integration service.'
+            : (err.message || 'Failed to export C2 report contribution.'),
+        };
+        setExportError(errDetail);
+        setActionError(errDetail.message);
         throw err;
       } finally {
         inFlightRef.current = false;
@@ -324,6 +342,8 @@ export const useC2Results = (projectId, userId) => {
     runReport,
     suiteReport,
     exportStatus,
+    exportError,
+    lastConfirmedReceipt,
     reproductionResult,
     suiteFilter,
     testFilter,

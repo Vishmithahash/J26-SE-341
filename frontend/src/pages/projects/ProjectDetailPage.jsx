@@ -18,6 +18,7 @@ import {
   History,
   Plus,
   Info,
+  Layers,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useProject } from '../../context/ProjectContext';
@@ -379,6 +380,16 @@ export const ProjectDetailPage = () => {
               <span>{isActiveProject ? 'Active Project' : 'Select as Active'}</span>
             </button>
           )}
+
+          {/* Cross-Component Combined Results */}
+          <Link
+            to={`${basePath}/projects/${projectId}/results`}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-xs font-semibold transition-colors"
+            title="Inspect cross-component integration results and combined QA reports"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Combined results</span>
+          </Link>
 
           {!isArchived && (
             <Link

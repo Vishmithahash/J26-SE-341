@@ -36,6 +36,8 @@ export const ResultsWorkspace = ({
     observedCoverage,
     runReport,
     exportStatus,
+    exportError,
+    lastConfirmedReceipt,
     reproductionResult,
     suiteFilter,
     testFilter,
@@ -403,6 +405,8 @@ export const ResultsWorkspace = ({
         onClose={() => setShowReportModal(false)}
         report={runReport || selectedEvaluation}
         exportStatus={exportStatus}
+        exportError={exportError}
+        lastConfirmedReceipt={lastConfirmedReceipt}
         onExportReport={exportReport}
         isExporting={isExportingReport}
       />

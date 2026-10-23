@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "test": "node --test src/tests/authAndSession.test.js src/tests/modelPreference.test.js src/tests/emptyComponentRoutes.test.js src/tests/projects.test.js src/features/c2/tests/c2Phase1.test.js src/features/c2/tests/c2Phase2.test.js src/features/c2/tests/c2Phase3.test.js src/features/c3/tests/c3Phase1.test.js src/features/c3/tests/c3Phase2.test.js src/features/c3/tests/c3Phase3.test.js src/features/c3/tests/c3Phase4.test.js src/features/c4/tests/*.test.js",
+    "test": "node --test src/tests/authAndSession.test.js src/tests/modelPreference.test.js src/tests/emptyComponentRoutes.test.js src/tests/projects.test.js src/tests/c1Frontend.test.js src/features/c2/tests/c2Dashboard.test.js src/features/c2/tests/c2Phase1.test.js src/features/c2/tests/c2Phase2.test.js src/features/c2/tests/c2Phase3.test.js src/features/c3/tests/c3Phase1.test.js src/features/c3/tests/c3Phase2.test.js src/features/c3/tests/c3Phase3.test.js src/features/c3/tests/c3Phase4.test.js src/features/c4/tests/c4Phase1.test.js src/features/c4/tests/c4Phase2.test.js src/features/c4/tests/c4Phase3.test.js src/features/c4/tests/c4Integration.test.js src/tests/integrationResults.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

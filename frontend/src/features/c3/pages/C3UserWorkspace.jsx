@@ -86,7 +86,7 @@ export const C3UserWorkspace = () => {
             Robustness and Failure Recovery Testing
           </h1>
           <p className="mt-2 text-sm text-slate-300 leading-relaxed">
-            Phase 1 Quality Assurance foundation. Formulate declarative candidate fault cases, verify static contract validity, deterministically generate Feasible Frozen Suites, and inspect project test archives.
+            Formulate declarative candidate fault cases, verify static contract validity, deterministically generate Feasible Frozen Suites, and inspect project test archives.
           </p>
         </div>
       </div>
@@ -278,41 +278,33 @@ export const C3UserWorkspace = () => {
         </div>
       )}
 
-      {/* Next Steps and Readiness Blockers */}
+      {/* Execution Boundaries & Verification Overview */}
       <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
           <Info className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-          <span>Next Steps & Runtime Execution Blockers</span>
+          <span>Execution Boundaries & Verification Status</span>
         </h3>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
             <span className="font-semibold text-slate-800 dark:text-slate-200 block">
-              1. What is Verified in Phase 1:
+              Verified Capabilities:
             </span>
             <ul className="list-disc list-inside space-y-1 text-slate-600 dark:text-slate-400 pl-1">
               <li>Deterministic metadata consistency (<code className="font-mono">STATIC_VALID</code>).</li>
-              <li>Pure generation and bounded permutation search (<code className="font-mono">max_candidates_examined</code>).</li>
+              <li>Pure candidate generation and bounded permutation search.</li>
               <li>Cryptographic suite digest freezing (<code className="font-mono">SHA-256</code>) and semantic case fingerprints.</li>
               <li>Project-scoped persistence and retrieval for valid suites.</li>
             </ul>
           </div>
 
-          <div className="p-4 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/60 space-y-2">
-            <span className="font-semibold text-amber-900 dark:text-amber-200 block">
-              2. Active Live Execution Blockers:
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
+            <span className="font-semibold text-slate-800 dark:text-slate-200 block">
+              Runtime Connectivity:
             </span>
-            <ul className="list-disc list-inside space-y-1 text-amber-800/90 dark:text-amber-300/90 pl-1">
-              <li>
-                <strong>Target AUT URL:</strong> Live target environment endpoint (<code className="font-mono">NEXACART_AUT_URL</code>) is not deployed in this workspace.
-              </li>
-              <li>
-                <strong>Fixture Reset Key:</strong> Out-of-band database reset facility for clean state guarantees is unconfigured.
-              </li>
-              <li>
-                <strong>Runtime Injector:</strong> Live domain proxy/interceptor is in demonstration mode; live execution halts safely with exit code 2.
-              </li>
-            </ul>
+            <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+              Live execution is not connected in this standalone workspace. Test trials are evaluated using imported evidence records or executed through shared integration plans and persistence APIs.
+            </p>
           </div>
         </div>
       </div>

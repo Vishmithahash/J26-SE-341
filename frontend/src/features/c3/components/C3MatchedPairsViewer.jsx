@@ -15,6 +15,20 @@ import {
   CLEAN_QUALIFICATION,
 } from '../api';
 
+const formatCleanup = (trial) => {
+  if (!trial) return <span className="font-mono text-slate-400">Unavailable</span>;
+  if (trial.cleanup_successful === true) {
+    return <span className="font-mono font-medium text-emerald-600 dark:text-emerald-400">Cleaned & verified (true)</span>;
+  }
+  if (trial.cleanup_successful === false) {
+    return <span className="font-mono font-medium text-rose-600 dark:text-rose-400">Cleanup failed (false)</span>;
+  }
+  if (trial.cleanup_status) {
+    return <span className="font-mono">{trial.cleanup_status}</span>;
+  }
+  return <span className="font-mono text-slate-400 italic">Not assessed (null)</span>;
+};
+
 export const C3MatchedPairsViewer = ({
   pairs = [],
   totalPairs = null,
@@ -224,7 +238,7 @@ export const C3MatchedPairsViewer = ({
                             }
                           />
                           <div className="text-[10px] text-slate-400">
-                            Fault: <span className="font-mono">{evidence.fault_trial?.episodes?.[0]?.fault_family || 'TIMEOUT_DISCONNECTION'}</span>
+                            Fault: <span className="font-mono">{evidence.fault_trial?.episodes?.[0]?.fault_family || 'Unspecified'}</span>
                           </div>
                         </div>
                       </td>
@@ -242,7 +256,7 @@ export const C3MatchedPairsViewer = ({
                           <C3Badge status={recoveryVerdict} />
                         ) : (
                           <span className="text-[11px] text-slate-400 italic">
-                            Deferred (authoritative engine pending)
+                            No evaluation attached
                           </span>
                         )}
                       </td>
@@ -282,7 +296,7 @@ export const C3MatchedPairsViewer = ({
                     </code>
                   </h2>
                   <p className="text-[11px] text-slate-400 font-mono">
-                    Case: {selectedPair.case_id} | Run: {selectedPair.run_id} | Mode: {selectedPair.target_mode || 'DEMONSTRATION'}
+                    Case: {selectedPair.case_id || '—'} | Run: {selectedPair.run_id || '—'} | Mode: {selectedPair.target_mode || 'Unspecified'}
                   </p>
                 </div>
               </div>
@@ -303,21 +317,21 @@ export const C3MatchedPairsViewer = ({
                   <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
                     Readiness Status
                   </span>
-                  <C3Badge status={selectedPair.readiness_status || 'READY'} />
+                  <C3Badge status={selectedPair.readiness_status || 'NOT_CHECKED'} />
                 </div>
 
                 <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1">
                   <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
                     Clean Baseline Control
                   </span>
-                  <C3Badge status={selectedPair.clean_qualification || 'QUALIFIED'} />
+                  <C3Badge status={selectedPair.clean_qualification || 'UNASSESSED'} />
                 </div>
 
                 <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1">
                   <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
                     Fault Exposure
                   </span>
-                  <C3Badge status={selectedPair.exposure_status || 'CONFIRMED'} />
+                  <C3Badge status={selectedPair.exposure_status || 'EXPOSURE_UNKNOWN'} />
                 </div>
 
                 <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1">
@@ -345,27 +359,27 @@ export const C3MatchedPairsViewer = ({
                   <div className="space-y-1.5 text-[11px] text-slate-600 dark:text-slate-400">
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Trial ID:</strong>{' '}
-                      <code className="font-mono">{selectedPair.clean_trial?.trial_id || 'trial-clean-001'}</code>
+                      <code className="font-mono">{selectedPair.clean_trial?.trial_id || '—'}</code>
                     </div>
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Execution Status:</strong>{' '}
-                      <span className="font-mono">{selectedPair.clean_trial?.execution_status || 'COMPLETED'}</span>
+                      <span className="font-mono">{selectedPair.clean_trial?.execution_status || '—'}</span>
                     </div>
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Caller Outcome:</strong>{' '}
-                      <span className="font-mono">{selectedPair.clean_trial?.caller_outcome || 'SUCCESS_TASK_COMPLETED'}</span>
+                      <span className="font-mono">{selectedPair.clean_trial?.caller_outcome || '—'}</span>
                     </div>
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Tool Calls Count:</strong>{' '}
-                      <span className="font-mono">{selectedPair.clean_trial?.tool_calls_count ?? 1}</span>
+                      <span className="font-mono">{selectedPair.clean_trial?.tool_calls_count ?? '—'}</span>
                     </div>
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Fixture Namespace:</strong>{' '}
-                      <span className="font-mono">{selectedPair.clean_trial?.fixture_namespace || 'fix-cart-populated'}</span>
+                      <span className="font-mono">{selectedPair.clean_trial?.fixture_namespace || '—'}</span>
                     </div>
                     <div>
-                      <strong className="text-slate-700 dark:text-slate-300">Cleanup Status:</strong>{' '}
-                      <span className="font-mono">{selectedPair.clean_trial?.cleanup_status || 'CLEANUP_VERIFIED'}</span>
+                      <strong className="text-slate-700 dark:text-slate-300">Cleanup:</strong>{' '}
+                      {formatCleanup(selectedPair.clean_trial)}
                     </div>
                   </div>
 
@@ -406,27 +420,27 @@ export const C3MatchedPairsViewer = ({
                   <div className="space-y-1.5 text-[11px] text-slate-600 dark:text-slate-400">
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Trial ID:</strong>{' '}
-                      <code className="font-mono">{selectedPair.fault_trial?.trial_id || 'trial-fault-001'}</code>
+                      <code className="font-mono">{selectedPair.fault_trial?.trial_id || '—'}</code>
                     </div>
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Execution Status:</strong>{' '}
-                      <span className="font-mono">{selectedPair.fault_trial?.execution_status || 'COMPLETED'}</span>
+                      <span className="font-mono">{selectedPair.fault_trial?.execution_status || '—'}</span>
                     </div>
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Recovery Actor:</strong>{' '}
-                      <span className="font-mono">{selectedPair.fault_trial?.recovery_actor || 'SCRIPTED_CALLER'}</span>
+                      <span className="font-mono">{selectedPair.fault_trial?.recovery_actor || '—'}</span>
                     </div>
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Subsequent Tool Calls:</strong>{' '}
-                      <span className="font-mono">{selectedPair.fault_trial?.subsequent_calls_count ?? 1}</span>
+                      <span className="font-mono">{selectedPair.fault_trial?.subsequent_calls_count ?? '—'}</span>
                     </div>
                     <div>
                       <strong className="text-slate-700 dark:text-slate-300">Caller Outcome:</strong>{' '}
-                      <span className="font-mono">{selectedPair.fault_trial?.caller_outcome || 'SUCCESS_CLEAN_RECOVERY'}</span>
+                      <span className="font-mono">{selectedPair.fault_trial?.caller_outcome || '—'}</span>
                     </div>
                     <div>
-                      <strong className="text-slate-700 dark:text-slate-300">Cleanup Status:</strong>{' '}
-                      <span className="font-mono">{selectedPair.fault_trial?.cleanup_status || 'CLEANUP_VERIFIED'}</span>
+                      <strong className="text-slate-700 dark:text-slate-300">Cleanup:</strong>{' '}
+                      {formatCleanup(selectedPair.fault_trial)}
                     </div>
                   </div>
 
