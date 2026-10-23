@@ -27,9 +27,6 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from app.components.c2_state_aware_workflow.integrations.reporting import (
-    C2ReportPublisher,
-)
 from app.shared.auth.models import User
 from app.shared.integration.contracts import (
     CombinedQAReport,
@@ -43,6 +40,7 @@ from app.shared.integration.contracts import (
 )
 from app.shared.integration.models import (
     IntegrationExecutionModel,
+    IntegrationPublishedContributionModel,
     IntegrationReportModel,
     IntegrationRunPlanModel,
 )
@@ -83,10 +81,60 @@ class AggregatorClientAdapter:
     def publish(self, evaluation: Any) -> str:
         """Record published evaluation and return confirmed publication token."""
         self.published_payloads.append(evaluation)
-        token = f"PUB-{self.execution_id[:8]}-C2-OK"
-        if self.db and self.project_id:
+        payload = (
+            evaluation.model_dump(mode="json")
+            if hasattr(evaluation, "model_dump")
+            else dict(evaluation)
+            if isinstance(evaluation, dict)
+            else {"raw": str(evaluation)}
+        )
+        content_digest = canonical_json_digest(payload)
+        proj_id = self.project_id or payload.get("project_id") or "default_project"
+        contrib_id = (
+            payload.get("evaluation_id")
+            or payload.get("contribution_id")
+            or f"contrib_{self.execution_id}"
+        )
+        comp_type = payload.get("component") or "C2"
+
+        if self.db:
+            existing = (
+                self.db.execute(
+                    select(IntegrationPublishedContributionModel).where(
+                        IntegrationPublishedContributionModel.project_id == proj_id,
+                        IntegrationPublishedContributionModel.contribution_id
+                        == contrib_id,
+                    )
+                )
+                .scalars()
+                .first()
+            )
+
+            if existing:
+                if existing.content_digest == content_digest:
+                    return existing.publication_token
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Contribution '{contrib_id}' in project '{proj_id}' already exists "
+                        f"with differing content digest ({existing.content_digest} != {content_digest})."
+                    ),
+                )
+
+            token = f"PUB-{self.execution_id[:8]}-{content_digest[:8]}"
+            pub_record = IntegrationPublishedContributionModel(
+                project_id=proj_id,
+                component_type=comp_type,
+                contribution_id=contrib_id,
+                execution_id=self.execution_id,
+                publication_token=token,
+                content_digest=content_digest,
+                payload=payload,
+            )
+            self.db.add(pub_record)
+
             exec_stmt = select(IntegrationExecutionModel).where(
-                IntegrationExecutionModel.project_id == self.project_id,
+                IntegrationExecutionModel.project_id == proj_id,
                 IntegrationExecutionModel.execution_id == self.execution_id,
             )
             exec_rec = self.db.execute(exec_stmt).scalars().first()
@@ -98,8 +146,11 @@ class AggregatorClientAdapter:
                 evals["C2"] = c2_data
                 exec_rec.evaluations = evals
                 self.db.add(exec_rec)
-                self.db.commit()
-        return token
+
+            self.db.commit()
+            return token
+
+        return f"PUB-{self.execution_id[:8]}-{content_digest[:8]}"
 
 
 class SharedReportAggregator:
@@ -214,7 +265,7 @@ class SharedReportAggregator:
                             component=ComponentType.C1,
                             rule_or_check_id=chk_id,
                             native_verdict=chk_verdict,
-                            severity="VIOLATION" if chk_verdict != "PASS" else "INFO",
+                            severity="VIOLATION" if chk_verdict == "FAIL" else "INFO",
                             event_id=check.get("event_id"),
                             tool_call_id=check.get("tool_name"),
                             entity_id=check.get("entity_id"),
@@ -238,11 +289,8 @@ class SharedReportAggregator:
         if refs.c2 is not None:
             c2_data = evaluations.get("C2")
             if c2_data:
-                aggregator_client = AggregatorClientAdapter(
-                    execution_id, self.db, project.project_id
-                )
-                c2_publisher = C2ReportPublisher(aggregator_client=aggregator_client)
-                c2_pub_token = c2_publisher.publish_component_finding(c2_data)
+                c2_pub_token = c2_data.get("publication_token")
+                publisher_status = "CONNECTED" if c2_pub_token else "STUB"
 
                 c2_verdict = c2_data.get("verdict", "UNKNOWN")
                 violations = c2_data.get("violations", [])
@@ -271,7 +319,7 @@ class SharedReportAggregator:
                         "observed_states": observed_states,
                         "reasons": reasons,
                         "first_divergence": c2_data.get("first_divergence"),
-                        "publisher_status": c2_publisher.status.value,
+                        "publisher_status": publisher_status,
                         "publication_token": c2_pub_token,
                     },
                     evidence_references=[f"trace-{execution_id[:8]}-c2-states"],
@@ -303,11 +351,12 @@ class SharedReportAggregator:
                             )
                         )
 
-                    # Only create finding if actual non-passing verdict (not EXPECTED REJECTION PASS)
+                    # Only create finding if actual non-passing verdict (not EXPECTED REJECTION PASS or INCONCLUSIVE)
                     if not violations and c2_verdict not in (
                         "PASS",
                         "EXPECTED REJECTION PASS",
                         "EXPECTED_REJECTION_PASS",
+                        "INCONCLUSIVE",
                     ):
                         finding_id = compute_finding_id(
                             "C2", execution_id, "workflow_outcome", c2_verdict
@@ -318,7 +367,9 @@ class SharedReportAggregator:
                                 component=ComponentType.C2,
                                 rule_or_check_id="EFSM_WORKFLOW_VERDICT",
                                 native_verdict=c2_verdict,
-                                severity="VIOLATION",
+                                severity="INFO"
+                                if c2_verdict == "INCONCLUSIVE"
+                                else "VIOLATION",
                                 event_id=None,
                                 tool_call_id=None,
                                 entity_id=None,
@@ -596,6 +647,17 @@ class SharedReportAggregator:
             )
         )
 
+        has_any_violation = any(
+            c.violations_or_findings_count > 0
+            for c in contributions.values()
+            if c.status == "EVALUATED"
+        )
+        has_inconclusive = any(
+            c.native_verdict in ("INCONCLUSIVE", "UNKNOWN")
+            for c in contributions.values()
+            if c.status == "EVALUATED"
+        )
+
         overall_verdict: str
         if not_ready_comps:
             overall_verdict = "NOT_READY"
@@ -603,6 +665,10 @@ class SharedReportAggregator:
             overall_verdict = "PARTIAL_NOT_ALL_COMPONENTS_EVALUATED"
         elif all_evaluated_passed:
             overall_verdict = "PASSED"
+        elif has_any_violation:
+            overall_verdict = "FAILED"
+        elif has_inconclusive:
+            overall_verdict = "INCONCLUSIVE"
         elif len(evaluated_comps) > 0:
             overall_verdict = "FAILED"
         else:

@@ -5,6 +5,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.components.c2_state_aware_workflow.baselines.contracts import (
@@ -1524,24 +1525,39 @@ def export_c2_report_contribution(
         report = report_service.build_run_report(project_id, evaluation_id)
         aggregator_client = None
         published_shared = False
-        from sqlalchemy import select
-
-        from app.shared.integration.models import IntegrationExecutionModel
+        from app.shared.integration.models import (
+            IntegrationExecutionModel,
+            IntegrationIdentifierMappingModel,
+        )
         from app.shared.integration.reporting import AggregatorClientAdapter
 
-        exec_rec = (
+        mapping_rec = (
             db.execute(
-                select(IntegrationExecutionModel).where(
-                    IntegrationExecutionModel.project_id == project_id,
-                    (
-                        (IntegrationExecutionModel.execution_id == evaluation_id)
-                        | (IntegrationExecutionModel.id == evaluation_id)
-                    ),
+                select(IntegrationIdentifierMappingModel).where(
+                    IntegrationIdentifierMappingModel.project_id == project_id,
+                    IntegrationIdentifierMappingModel.component_type == "C2",
+                    IntegrationIdentifierMappingModel.native_id == evaluation_id,
                 )
             )
             .scalars()
             .first()
         )
+
+        exec_rec = None
+        if mapping_rec:
+            target_exec_id = (mapping_rec.context_json or {}).get("execution_id")
+            if target_exec_id:
+                exec_rec = (
+                    db.execute(
+                        select(IntegrationExecutionModel).where(
+                            IntegrationExecutionModel.project_id == project_id,
+                            IntegrationExecutionModel.execution_id == target_exec_id,
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+
         if exec_rec:
             aggregator_client = AggregatorClientAdapter(
                 execution_id=exec_rec.execution_id,

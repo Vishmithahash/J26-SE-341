@@ -294,9 +294,26 @@ def project_c3_matched_pair_evidence(
         for e in fault_trace.tool_events
     ]
 
-    exposure_confirmed = fault_trace.fault_injected and any(
-        not e.success for e in fault_trace.tool_events
-    )
+    target_tool = None
+    target_occurrence = None
+    if fault_trace.fault_details:
+        target_tool = fault_trace.fault_details.get("target_tool")
+        target_occurrence = fault_trace.fault_details.get(
+            "injected_at_call_index"
+        ) or fault_trace.fault_details.get("occurrence")
+
+    # Correlate exposure strictly to the targeted tool and occurrence
+    exposure_confirmed = False
+    if fault_trace.fault_injected and target_tool:
+        for e in fault_trace.tool_events:
+            if (
+                e.tool_name == target_tool
+                and not e.success
+                and (target_occurrence is None or e.call_index == target_occurrence)
+            ):
+                exposure_confirmed = True
+                break
+
     exposure_status = (
         ExposureStatus.CONFIRMED
         if exposure_confirmed
@@ -307,14 +324,36 @@ def project_c3_matched_pair_evidence(
         )
     )
     exposure_reasons = (
-        ["Fault injection hook entered and actual failure was observed by caller."]
+        [
+            f"Fault injection hook entered on targeted tool '{target_tool}' and failure observed by caller."
+        ]
         if exposure_confirmed
         else (
             ["Fault hook not triggered."]
             if not fault_trace.fault_injected
-            else ["Fault flag set but failure unconfirmed."]
+            else ["Fault flag set but failure on targeted tool unconfirmed."]
         )
     )
+
+    # Compute retries strictly based on logical-operation identity (do not count unrelated later calls)
+    retries_count = 0
+    if fault_trace.fault_injected:
+        fault_tool_name = target_tool
+        fault_call_idx = target_occurrence
+        if not fault_tool_name or fault_call_idx is None:
+            for e in fault_trace.tool_events:
+                if not e.success:
+                    fault_tool_name = fault_tool_name or e.tool_name
+                    fault_call_idx = fault_call_idx or e.call_index
+                    break
+        if fault_tool_name and fault_call_idx is not None:
+            retries_count = sum(
+                1
+                for e in fault_trace.tool_events
+                if e.tool_name == fault_tool_name and e.call_index > fault_call_idx
+            )
+        else:
+            retries_count = 0
 
     fault_trial = TrialEvidence(
         project_id=project_id,
@@ -337,7 +376,7 @@ def project_c3_matched_pair_evidence(
         final_state_fingerprint=fault_trace.final_state.fingerprint,
         events=fault_events,
         tool_calls_count=len(fault_trace.tool_events),
-        subsequent_calls_count=max(0, len(fault_trace.tool_events) - 1),
+        subsequent_calls_count=retries_count,
         execution_status=ExecutionStatus.COMPLETED
         if fault_trace.is_complete
         else ExecutionStatus.EXECUTION_ERROR,
@@ -378,9 +417,13 @@ def project_c3_matched_pair_evidence(
         exposure_status=exposure_status,
         exposure_reasons=exposure_reasons,
         fixture_comparability=FixtureComparability.EQUIVALENT_LOGICAL_STATE
-        if clean_trace.initial_state.fingerprint
-        == fault_trace.initial_state.fingerprint
-        else FixtureComparability.NOT_EQUIVALENT,
+        if (
+            clean_trace.initial_state.fingerprint
+            and fault_trace.initial_state.fingerprint
+            and clean_trace.initial_state.fingerprint
+            == fault_trace.initial_state.fingerprint
+        )
+        else FixtureComparability.NON_EQUIVALENT,
         clean_qualification=clean_qualification,
         cleanup_status=(
             CleanupStatus.CLEANED_AND_VERIFIED

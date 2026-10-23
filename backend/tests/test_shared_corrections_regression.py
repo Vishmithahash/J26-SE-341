@@ -111,6 +111,9 @@ from app.shared.integration.models import (
 from app.shared.integration.reporting import (
     SharedReportAggregator,
 )
+from app.shared.integration.service import (
+    canonical_json_digest,
+)
 from tests.test_shared_integration import (
     TEST_AUTH_SECRET,
     auth_headers,
@@ -1155,6 +1158,624 @@ def test_tampered_plan_digest_fails_pre_execution_check(
     )
     assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "integrity check failed" in resp.json()["detail"]
+
+
+# ===========================================================================
+# Dedicated Acceptance & Regression Tests for Independent Probes
+# ===========================================================================
+
+import time
+
+from fastapi import HTTPException
+
+from app.components.c2_state_aware_workflow.persistence.models import (
+    C2EvaluationResult,
+    C2TestCase,
+    C2TestSuite,
+    C2WorkflowModel,
+)
+from app.shared.integration.contracts import (
+    C1ConfigReference,
+    ComponentReferencesPlan,
+    ExecutionStartRequest,
+)
+from app.shared.integration.evidence import compute_evidence_digest
+from app.shared.integration.executor import (
+    SharedExecutionCoordinator,
+    dispatch_component_evaluations,
+)
+from app.shared.integration.models import (
+    IntegrationIdentifierMappingModel,
+    IntegrationPublishedContributionModel,
+)
+from app.shared.integration.replay import EvidenceReplayService
+
+
+def test_c1_helpdesk_config_cannot_pass_after_only_order_placement(db_session: Session):
+    """Probe 1: C1 cannot PASS for a helpdesk configuration after only order_placement executed."""
+    project_id = f"proj-c1-hd-{uuid.uuid4().hex[:6]}"
+    user = make_user(db_session, "AliceHD", "alice_hd@example.com")
+    make_project(db_session, project_id, "Helpdesk Proj", user.id)
+
+    frozen_inputs = {
+        "c1": {
+            "case_id": "c1_helpdesk_case_01",
+            "category": "CORRECT_BEHAVIOUR",
+            "expected_tool_calls": [
+                {
+                    "tool_name": "reboot_managed_device",
+                    "min_count": 1,
+                    "max_count": 1,
+                    "is_forbidden": False,
+                }
+            ],
+            "expectations": [
+                {
+                    "tool_name": "reboot_managed_device",
+                    "min_count": 1,
+                    "max_count": 1,
+                    "is_forbidden": False,
+                }
+            ],
+        }
+    }
+
+    primary_trace = ExecutionTrace(
+        trace_id=f"tr-{uuid.uuid4().hex[:8]}",
+        target_mode=TargetMode.CONTROLLED_TEST,
+        tool_events=[
+            RawToolEvent(
+                call_index=1,
+                tool_name="order_placement",
+                arguments={"order_id": "ord-001"},
+                output={"status": "created"},
+                success=True,
+            )
+        ],
+        is_complete=True,
+        caller_outcome="SUCCESS",
+        is_simulation=True,
+        initial_state=StateSnapshot(snapshot_id="s1", fingerprint="fp-init"),
+        final_state=StateSnapshot(snapshot_id="s2", fingerprint="fp-fin"),
+    )
+
+    refs = ComponentReferencesPlan(
+        c1=C1ConfigReference(
+            project_id=project_id, config_id="cfg-helpdesk-01", case_id="case-hd-01"
+        )
+    )
+
+    evaluations = dispatch_component_evaluations(
+        db=db_session,
+        project_id=project_id,
+        execution_id="exec-hd-01",
+        refs=refs,
+        frozen_inputs=frozen_inputs,
+        primary_trace=primary_trace,
+    )
+
+    c1_eval = evaluations.get("C1")
+    assert c1_eval is not None
+    assert c1_eval["verdict"] in ("FAIL", "INCONCLUSIVE", "VIOLATED")
+    assert c1_eval["verdict"] != "PASS"
+
+
+def test_nonexistent_or_unbound_c2_test_cannot_produce_ready_plan(
+    test_client: TestClient, db_session: Session
+):
+    """Probe 2: READY plans referencing nonexistent or unready C2 tests are rejected."""
+    user = make_user(db_session, "BobC2", "bob_c2@example.com")
+    headers = auth_headers(user)
+    project_id = f"proj-c2-val-{uuid.uuid4().hex[:6]}"
+    make_project(db_session, project_id, "C2 Validation Proj", user.id)
+
+    wf_model = C2WorkflowModel(
+        project_id=project_id,
+        model_id="checkout_model",
+        version="1.0.0",
+        name="Checkout Flow",
+        definition={
+            "states": ["INIT", "DONE"],
+            "initial_state": "INIT",
+            "transitions": [],
+        },
+        content_hash="hash-checkout-100",
+        lifecycle_status="APPROVED",
+    )
+    db_session.add(wf_model)
+    db_session.commit()
+
+    plan_req = {
+        "name": "Invalid C2 Plan",
+        "c2_reference": {
+            "project_id": project_id,
+            "model_id": "checkout_model",
+            "model_version": "1.0.0",
+            "test_id": "nonexistent_test_123",
+        },
+    }
+
+    resp = test_client.post(
+        f"/api/v1/projects/{project_id}/integration/plans",
+        json=plan_req,
+        headers=headers,
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    data = resp.json()
+    assert data["lifecycle_status"] in ("NOT_READY", "BLOCKED")
+    assert data["lifecycle_status"] != "READY"
+    report = data["readiness_report"]
+    assert report["is_ready"] is False
+    issue_codes = [issue["issue_code"] for issue in report["blocking_issues"]]
+    assert "TEST_NOT_FOUND" in issue_codes
+
+
+def test_rate_limit_429_and_after_commit_fault_semantics():
+    """Probe 3: RATE_LIMIT_429 and AFTER_COMMIT fault metadata execute real semantics."""
+    adapter = ControlledTestTargetAdapter()
+
+    # RATE_LIMIT_429 returns status 429 without simulated timeout
+    ns_429 = f"ns_429_{uuid.uuid4().hex[:6]}"
+    adapter.prepare_fixture(ns_429)
+    trace_429 = adapter.execute_session(
+        namespace=ns_429,
+        task_prompt="Process order",
+        permitted_tools=["order_placement"],
+        fault_injection_hook={
+            "target_tool": "order_placement",
+            "occurrence": 1,
+            "fault_family": "RATE_LIMIT_429",
+            "interception_hook": "before_tool_execution",
+            "effect_phase": "during_call",
+            "payload": {"status_code": 429, "retry_after": 5},
+        },
+    )
+    assert trace_429.fault_injected is True
+    ev_429 = trace_429.tool_events[0]
+    assert ev_429.success is False
+    assert (ev_429.output or {}).get("status_code") == 429
+    assert "429" in (ev_429.error or "")
+
+    # AFTER_COMMIT commits state before returning error
+    ns_ac = f"ns_ac_{uuid.uuid4().hex[:6]}"
+    adapter.prepare_fixture(ns_ac)
+    trace_ac = adapter.execute_session(
+        namespace=ns_ac,
+        task_prompt="Process order",
+        permitted_tools=["order_placement"],
+        fault_injection_hook={
+            "target_tool": "order_placement",
+            "occurrence": 1,
+            "fault_family": "AFTER_COMMIT",
+            "interception_hook": "after_state_commit",
+            "effect_phase": "after_effect",
+            "payload": {"error": "Connection reset after commit"},
+        },
+    )
+    assert trace_ac.fault_injected is True
+    ev_ac = trace_ac.tool_events[0]
+    assert ev_ac.success is False
+    assert (ev_ac.output or {}).get("state_committed") is True
+    part = adapter.get_partition(ns_ac)
+    assert part is not None
+    assert part["order"]["status"] == "CONFIRMED"
+
+
+def test_unrelated_failed_tool_call_cannot_confirm_exposure():
+    """Probe 4: A fault flag and an unrelated failed tool call cannot confirm exposure."""
+    clean_trace = ExecutionTrace(
+        trace_id=f"tr-cln-{uuid.uuid4().hex[:6]}",
+        target_mode=TargetMode.CONTROLLED_TEST,
+        tool_events=[
+            RawToolEvent(
+                call_index=1,
+                tool_name="order_placement",
+                arguments={},
+                output={"ok": True},
+                success=True,
+            )
+        ],
+        is_complete=True,
+        caller_outcome="SUCCESS",
+        is_simulation=True,
+        initial_state=StateSnapshot(
+            snapshot_id="s1", fingerprint="fp-initial-01", state={}
+        ),
+        final_state=StateSnapshot(
+            snapshot_id="s2",
+            fingerprint="fp-final-01",
+            state={"order": {"order_id": "ord-001"}},
+        ),
+    )
+
+    fault_trace = ExecutionTrace(
+        trace_id=f"tr-flt-{uuid.uuid4().hex[:6]}",
+        target_mode=TargetMode.CONTROLLED_TEST,
+        fault_injected=True,
+        fault_details={"target_tool": "process_refund", "occurrence": 1},
+        tool_events=[
+            RawToolEvent(
+                call_index=1,
+                tool_name="order_placement",
+                arguments={},
+                error="db error",
+                success=False,
+            )
+        ],
+        is_complete=False,
+        caller_outcome="FAILED",
+        is_simulation=True,
+        initial_state=StateSnapshot(
+            snapshot_id="s3", fingerprint="fp-initial-01", state={}
+        ),
+        final_state=StateSnapshot(
+            snapshot_id="s4", fingerprint="fp-initial-01", state={}
+        ),
+    )
+
+    contract = RecoveryContract(
+        contract_id="rec-01",
+        contract_version="1.0.0",
+        permitted_terminal_outcomes=[TerminalOutcome.SUCCESS_CLEAN_RECOVERY],
+        max_task_attempts=3,
+        max_tool_calls_budget=10,
+        max_total_timeout_ms=5000,
+        required_state_assertions=["order_confirmed"],
+    )
+
+    matched_evidence, _ = project_c3_matched_pair_evidence(
+        project_id="proj-exp-01",
+        case_id="case-01",
+        pair_id="pair-01",
+        run_id="run-01",
+        clean_trace=clean_trace,
+        fault_trace=fault_trace,
+        recovery_contract=contract,
+    )
+
+    assert matched_evidence.exposure_status != ExposureStatus.CONFIRMED
+    assert matched_evidence.exposure_status in (
+        ExposureStatus.EXPOSURE_UNKNOWN,
+        ExposureStatus.NOT_TRIGGERED,
+    )
+    assert matched_evidence.exposure_status in (
+        ExposureStatus.EXPOSURE_UNKNOWN,
+        ExposureStatus.NOT_TRIGGERED,
+    )
+
+
+def test_failed_cleanup_updates_retained_evidence_and_response(db_session: Session):
+    """Probe 6: Failed cleanup updates retained evidence and response, preventing reuse."""
+    project_id = f"proj-clean-{uuid.uuid4().hex[:6]}"
+    user = make_user(db_session, "CleanUser", "clean_user@example.com")
+    proj = make_project(db_session, project_id, "Clean Proj", user.id)
+
+    plan_payload = {
+        "execution_inputs_snapshot": {},
+        "component_references": {
+            "c1": {
+                "project_id": project_id,
+                "config_id": "cfg-01",
+                "case_id": "case-01",
+            }
+        },
+    }
+    plan = IntegrationRunPlanModel(
+        id=str(uuid.uuid4()),
+        integration_run_id=f"irun-clean-{uuid.uuid4().hex[:8]}",
+        project_id=project_id,
+        created_by_user_id=user.id,
+        name="Clean Test Plan",
+        lifecycle_status="READY",
+        plan_digest=canonical_json_digest(plan_payload),
+        plan_payload=plan_payload,
+        readiness_report={},
+    )
+    db_session.add(plan)
+    db_session.commit()
+
+    coord = SharedExecutionCoordinator(db_session)
+    req = ExecutionStartRequest(
+        target_mode=TargetMode.CONTROLLED_TEST,
+    )
+
+    orig_cleanup = ControlledTestTargetAdapter.cleanup_fixture
+    try:
+        ControlledTestTargetAdapter.cleanup_fixture = lambda self, ns: (False, False)
+        status_resp = coord.execute_plan(
+            project=proj,
+            user=user,
+            plan_identifier=plan.integration_run_id,
+            request=req,
+        )
+        assert status_resp.cleanup_successful is False
+        assert status_resp.cleanup_reusable is False
+        assert "cleanup failed" in (status_resp.error_message or "").lower()
+
+        exec_rec = (
+            db_session.execute(
+                select(IntegrationExecutionModel).where(
+                    IntegrationExecutionModel.execution_id == status_resp.execution_id
+                )
+            )
+            .scalars()
+            .first()
+        )
+        pt = exec_rec.retained_evidence["primary_trace"]
+        assert pt["cleanup_successful"] is False
+        assert pt["cleanup_reusable"] is False
+    finally:
+        ControlledTestTargetAdapter.cleanup_fixture = orig_cleanup
+
+
+def test_shared_c2_execution_persists_native_history_and_mapping(db_session: Session):
+    """Probe 8: Shared C2 execution creates retrievable native evaluation history and explicit mapping."""
+    project_id = f"proj-c2-hist-{uuid.uuid4().hex[:6]}"
+    user = make_user(db_session, "C2HistUser", "c2_hist@example.com")
+    proj = make_project(db_session, project_id, "C2 Hist Proj", user.id)
+
+    from app.components.c2_state_aware_workflow.examples.ecommerce_workflows import (
+        get_cancellation_workflow_model,
+    )
+
+    efsm_obj = get_cancellation_workflow_model()
+    model_dict = efsm_obj.model_dump()
+    model_dict["project_id"] = project_id
+    model_dict["model_id"] = "order_flow"
+    model_dict["version"] = "1.0.0"
+    model_dict["name"] = "Order Flow"
+
+    wf_model = C2WorkflowModel(
+        project_id=project_id,
+        model_id="order_flow",
+        version="1.0.0",
+        name="Order Flow",
+        definition=model_dict,
+        content_hash="hash-order-100",
+        lifecycle_status="APPROVED",
+    )
+    db_session.add(wf_model)
+    db_session.flush()
+
+    suite = C2TestSuite(
+        project_id=project_id,
+        suite_id="suite-order-01",
+        model_record_id=wf_model.id,
+        model_id="order_flow",
+        model_version="1.0.0",
+        model_content_hash="hash-order-100",
+        config={},
+        diagnostics={},
+        total_cases=1,
+        ready_cases_count=1,
+    )
+    db_session.add(suite)
+    db_session.flush()
+
+    test_case = C2TestCase(
+        suite_record_id=suite.id,
+        project_id=project_id,
+        suite_id=suite.suite_id,
+        test_id="test_order_01",
+        category="VALID",
+        task="Place an order",
+        fixture_ref="fix-01",
+        readiness="TEST_READY",
+        is_ready=True,
+        definition={
+            "test_id": "test_order_01",
+            "project_id": project_id,
+            "suite_id": suite.suite_id,
+            "pinned_model_id": "order_flow",
+            "pinned_model_version": "1.0.0",
+            "model_content_hash": "hash-order-100",
+            "category": "VALID",
+            "task": "Place an order",
+            "fixture_ref": "fix-01",
+            "expected_outcome": "PASS",
+        },
+    )
+    db_session.add(test_case)
+    db_session.flush()
+
+    plan_payload = {
+        "execution_inputs_snapshot": {
+            "c2": {
+                "model_id": "order_flow",
+                "model_version": "1.0.0",
+                "suite_id": suite.suite_id,
+                "test_id": test_case.test_id,
+                "definition": wf_model.definition,
+                "test_definition": test_case.definition,
+            }
+        },
+        "component_references": {
+            "c2": {
+                "project_id": project_id,
+                "model_id": "order_flow",
+                "model_version": "1.0.0",
+                "suite_id": suite.suite_id,
+                "test_id": test_case.test_id,
+            }
+        },
+    }
+    plan = IntegrationRunPlanModel(
+        id=str(uuid.uuid4()),
+        integration_run_id=f"irun-c2-{uuid.uuid4().hex[:8]}",
+        project_id=project_id,
+        created_by_user_id=user.id,
+        name="C2 Native Hist Plan",
+        lifecycle_status="READY",
+        plan_digest=canonical_json_digest(plan_payload),
+        plan_payload=plan_payload,
+        readiness_report={},
+    )
+    db_session.add(plan)
+    db_session.commit()
+
+    coord = SharedExecutionCoordinator(db_session)
+    resp = coord.execute_plan(
+        project=proj,
+        user=user,
+        plan_identifier=plan.integration_run_id,
+        request=ExecutionStartRequest(target_mode=TargetMode.CONTROLLED_TEST),
+    )
+
+    assert resp.lifecycle_status == "COMPLETED"
+    c2_eval = resp.evaluations.get("C2")
+    assert c2_eval is not None
+    native_eval_id = c2_eval.get("evaluation_id")
+    assert native_eval_id is not None
+
+    eval_rec = (
+        db_session.execute(
+            select(C2EvaluationResult).where(C2EvaluationResult.id == native_eval_id)
+        )
+        .scalars()
+        .first()
+    )
+    assert eval_rec is not None
+    assert eval_rec.run_id == resp.execution_id
+
+    mapping_rec = (
+        db_session.execute(
+            select(IntegrationIdentifierMappingModel).where(
+                IntegrationIdentifierMappingModel.project_id == project_id,
+                IntegrationIdentifierMappingModel.component_type == "C2",
+                IntegrationIdentifierMappingModel.native_id == native_eval_id,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert mapping_rec is not None
+    assert mapping_rec.context_json.get("execution_id") == resp.execution_id
+
+
+def test_published_contribution_durable_fresh_session_and_idempotency(
+    db_session: Session,
+):
+    """Probe 7: Published contribution content survives fresh session; duplicate is idempotent; conflict handled."""
+    from app.shared.integration.reporting import AggregatorClientAdapter
+
+    project_id = f"proj-pub-{uuid.uuid4().hex[:6]}"
+    exec_id = f"exec-pub-{uuid.uuid4().hex[:8]}"
+
+    adapter = AggregatorClientAdapter(
+        execution_id=exec_id, db=db_session, project_id=project_id
+    )
+
+    contrib_data = {
+        "evaluation_id": f"eval-{uuid.uuid4().hex[:8]}",
+        "project_id": project_id,
+        "component": "C2",
+        "verdict": "PASS",
+        "details": {"score": 100},
+    }
+
+    # 1. Initial publication
+    token1 = adapter.publish(contrib_data)
+    assert token1.startswith(f"PUB-{exec_id[:8]}-")
+
+    stored = (
+        db_session.execute(
+            select(IntegrationPublishedContributionModel).where(
+                IntegrationPublishedContributionModel.project_id == project_id,
+                IntegrationPublishedContributionModel.contribution_id
+                == contrib_data["evaluation_id"],
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert stored is not None
+    assert stored.publication_token == token1
+    assert stored.payload["verdict"] == "PASS"
+
+    # 2. Duplicate publication is idempotent
+    token2 = adapter.publish(contrib_data)
+    assert token2 == token1
+
+    # 3. Conflicting content with same contribution_id raises HTTP 409
+    conflicting_data = dict(contrib_data)
+    conflicting_data["verdict"] = "VIOLATION"
+    with pytest.raises(HTTPException) as exc_info:
+        adapter.publish(conflicting_data)
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+
+
+def test_replay_rejects_plan_digest_mismatch(db_session: Session):
+    """Probe 9: Replay rejects execution whose recorded plan_digest does not match the plan."""
+    project_id = f"proj-rply-{uuid.uuid4().hex[:6]}"
+    user = make_user(db_session, "ReplayUser", "replay_user@example.com")
+    proj = make_project(db_session, project_id, "Replay Proj", user.id)
+
+    plan_payload = {
+        "execution_inputs_snapshot": {},
+        "component_references": {},
+    }
+    plan = IntegrationRunPlanModel(
+        id=str(uuid.uuid4()),
+        integration_run_id=f"irun-rply-{uuid.uuid4().hex[:8]}",
+        project_id=project_id,
+        created_by_user_id=user.id,
+        name="Replay Plan",
+        lifecycle_status="COMPLETED",
+        plan_digest=canonical_json_digest(plan_payload),
+        plan_payload=plan_payload,
+        readiness_report={},
+    )
+    db_session.add(plan)
+
+    trace_data = {
+        "trace_id": "tr-01",
+        "target_mode": "CONTROLLED_TEST",
+        "tool_events": [],
+        "is_complete": True,
+        "caller_outcome": "SUCCESS",
+        "is_simulation": True,
+        "initial_state": {"snapshot_id": "s1", "fingerprint": "fp-1", "state": {}},
+        "final_state": {"snapshot_id": "s2", "fingerprint": "fp-1", "state": {}},
+    }
+    exec_rec = IntegrationExecutionModel(
+        id=str(uuid.uuid4()),
+        execution_id=f"exec-rply-{uuid.uuid4().hex[:8]}",
+        integration_run_id=plan.integration_run_id,
+        project_id=project_id,
+        lifecycle_status="COMPLETED",
+        target_mode="CONTROLLED_TEST",
+        plan_digest="mismatched_digest_value" + "0" * 41,
+        retained_evidence={"primary_trace": trace_data},
+        retained_evidence_digest=compute_evidence_digest({"primary_trace": trace_data}),
+    )
+    db_session.add(exec_rec)
+    db_session.commit()
+
+    service = EvidenceReplayService(db_session)
+    with pytest.raises(HTTPException) as exc_info:
+        service.replay_execution(
+            project=proj, user=user, execution_id=exec_rec.execution_id
+        )
+    assert exc_info.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert "Plan digest mismatch" in exc_info.value.detail
+
+
+def test_monotonic_deadline_stops_execution_dispatch():
+    """Probe 10: Monotonic deadline halts call dispatch when timeout_seconds exceeded."""
+    adapter = ControlledTestTargetAdapter()
+    ns = f"ns_dl_{uuid.uuid4().hex[:6]}"
+    adapter.prepare_fixture(ns)
+
+    # Deadline in the past
+    past_deadline = time.monotonic() - 1.0
+    trace = adapter.execute_session(
+        namespace=ns,
+        task_prompt="Process order",
+        permitted_tools=["order_placement"],
+        deadline_monotonic=past_deadline,
+    )
+    assert trace.caller_outcome in ("TIMEOUT_EXCEEDED", "CALLER_TIMEOUT_EXCEEDED")
+    assert len(trace.tool_events) == 0
 
 
 from sqlalchemy import event

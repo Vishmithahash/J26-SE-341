@@ -13,8 +13,10 @@ Responsibilities:
 import copy
 import hashlib
 import json
+import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -158,6 +160,8 @@ class BaseTargetAdapter(ABC):
         prompt_injection_payload: str | None = None,
         max_tool_calls: int = 50,
         trial_role: str = "DEFAULT",
+        deadline_monotonic: float | None = None,
+        check_cancellation: Callable[[], bool] | None = None,
     ) -> ExecutionTrace:
         """Execute the tested application/agent once and capture actual trace and observations."""
         ...
@@ -216,6 +220,8 @@ class LiveNexaCartTargetAdapter(BaseTargetAdapter):
         prompt_injection_payload: str | None = None,
         max_tool_calls: int = 50,
         trial_role: str = "DEFAULT",
+        deadline_monotonic: float | None = None,
+        check_cancellation: Callable[[], bool] | None = None,
     ) -> ExecutionTrace:
         raise RuntimeError(
             "Cannot execute session in LIVE_AUT mode: target service is BLOCKED."
@@ -246,6 +252,13 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
     def check_readiness(self) -> tuple[TargetReadinessStatus, list[str]]:
         """Controlled test adapter is always ready for test infrastructure execution."""
         return TargetReadinessStatus.READY, []
+
+    @property
+    def partitions(self) -> dict[str, dict[str, Any]]:
+        return self._partitions
+
+    def get_partition(self, namespace: str) -> dict[str, Any] | None:
+        return self._partitions.get(namespace)
 
     def prepare_fixture(
         self, namespace: str, seed_data: dict[str, Any] | None = None
@@ -282,6 +295,8 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
         prompt_injection_payload: str | None = None,
         max_tool_calls: int = 50,
         trial_role: str = "DEFAULT",
+        deadline_monotonic: float | None = None,
+        check_cancellation: Callable[[], bool] | None = None,
     ) -> ExecutionTrace:
         """Execute one complete trial session with actual trace recording."""
         partition = self._partitions.get(namespace)
@@ -314,10 +329,26 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
                 "delivered_at_utc": datetime.now(UTC).isoformat(),
             }
 
+        call_idx = 0
+
+        def can_dispatch_call() -> bool:
+            nonlocal caller_outcome
+            if check_cancellation and check_cancellation():
+                caller_outcome = "CANCELLED"
+                return False
+            if deadline_monotonic is not None and time.monotonic() > deadline_monotonic:
+                caller_outcome = "CALLER_TIMEOUT_EXCEEDED"
+                return False
+            if call_idx >= max_tool_calls:
+                caller_outcome = "CALL_BUDGET_EXCEEDED"
+                return False
+            return True
+
         # Simulated tool execution plan based on prompt and permitted tools
         # 1. order_lookup or create
-        call_idx = 0
-        if "order_placement" in permitted_tools or "create_order" in permitted_tools:
+        if (
+            "order_placement" in permitted_tools or "create_order" in permitted_tools
+        ) and can_dispatch_call():
             call_idx += 1
             tool_name = (
                 "order_placement"
@@ -339,37 +370,71 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
 
             if should_inject:
                 fault_injected = True
+                ff = fault_injection_hook.get("fault_family", "TIMEOUT_DISCONNECTION")
+                phase = str(
+                    fault_injection_hook.get("effect_phase", "BEFORE_EFFECT")
+                ).upper()
                 fault_details = {
-                    "fault_family": fault_injection_hook.get(
-                        "fault_family", "TIMEOUT_DISCONNECTION"
-                    ),
+                    "fault_family": ff,
                     "injected_at_call_index": call_idx,
                     "target_tool": tool_name,
+                    "effect_phase": phase,
                 }
-                # Simulate timeout or fault error
+
+                is_after_commit = (
+                    "AFTER_COMMIT" in phase
+                    or ff == "AFTER_COMMIT"
+                    or "AFTER_COMMIT"
+                    in str(fault_injection_hook.get("interception_hook", "")).upper()
+                    or "AFTER_STATE_COMMIT"
+                    in str(fault_injection_hook.get("interception_hook", "")).upper()
+                )
+                if is_after_commit:
+                    partition["order"]["status"] = "CONFIRMED"
+                    partition["inventory"]["reserved"] = True
+                    partition["side_effects"]["calls_made"] += 1
+                    side_effect_occurred = True
+                else:
+                    side_effect_occurred = False
+
+                if ff == "RATE_LIMIT_429":
+                    err_msg = "HTTP 429 Too Many Requests (Rate limit exceeded)"
+                    lat = 5.0
+                    fault_output = {"status_code": 429, "error": "Too Many Requests"}
+                elif is_after_commit:
+                    err_msg = "Connection reset after commit"
+                    lat = 10.0
+                    fault_output = {"state_committed": True, "error": err_msg}
+                else:
+                    err_msg = "Simulated network timeout (caller timeout exceeded 50ms)"
+                    lat = 55.0
+                    fault_output = None
+
                 tool_events.append(
                     RawToolEvent(
                         event_id=f"evt_{trace_id}_{call_idx}",
                         call_index=call_idx,
                         tool_name=tool_name,
                         arguments=sanitized_args,
-                        error="Simulated network timeout (caller timeout exceeded 50ms)",
+                        output=fault_output,
+                        error=err_msg,
                         success=False,
-                        latency_ms=55.0,
-                        side_effect_occurred=False,
+                        latency_ms=lat,
+                        side_effect_occurred=side_effect_occurred,
                     )
                 )
 
                 # Agent retry under fault trial
                 if trial_role == "FAULT":
-                    if call_idx >= max_tool_calls:
-                        caller_outcome = "CALLER_TIMEOUT_EXCEEDED"
+                    if not can_dispatch_call():
+                        pass
                     else:
                         call_idx += 1
                         idempotency_key = f"idem-{uuid.uuid4().hex[:8]}"
-                        partition["order"]["status"] = "CONFIRMED"
-                        partition["inventory"]["reserved"] = True
-                        partition["side_effects"]["calls_made"] += 1
+                        if not is_after_commit:
+                            partition["order"]["status"] = "CONFIRMED"
+                            partition["inventory"]["reserved"] = True
+                            partition["side_effects"]["calls_made"] += 1
                         partition["idempotency"]["keys_seen"].append(idempotency_key)
                         tool_events.append(
                             RawToolEvent(
@@ -406,28 +471,175 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
                     )
                 )
 
-        # 2. refund_processing if permitted
-        if (
-            "process_refund" in permitted_tools or "refund_request" in permitted_tools
-        ) and call_idx < max_tool_calls:
+        # 1b. get_order_details if permitted
+        if "get_order_details" in permitted_tools and can_dispatch_call():
             call_idx += 1
-            tool_name = (
-                "process_refund"
-                if "process_refund" in permitted_tools
-                else "refund_request"
-            )
-            args = {"order_id": "ord-001", "amount": 100}
-            partition["refund"]["status"] = "COMPLETED"
-            partition["side_effects"]["calls_made"] += 1
+            tool_name = "get_order_details"
+            args = {"order_id": "ORD-9821"}
             tool_events.append(
                 RawToolEvent(
                     event_id=f"evt_{trace_id}_{call_idx}",
                     call_index=call_idx,
                     tool_name=tool_name,
                     arguments=sanitize_payload(args),
-                    output={"refund_id": "ref-001", "status": "COMPLETED"},
+                    output={
+                        "order_id": "ORD-9821",
+                        "customer_id": "CUST-8831",
+                        "status": "DELIVERED",
+                        "items": {
+                            "ITEM-44": {"name": "Wireless Mouse", "price": 35.00}
+                        },
+                    },
                     success=True,
                     latency_ms=10.0,
+                    side_effect_occurred=False,
+                )
+            )
+
+        # 2. refund_processing if permitted
+        if (
+            "process_refund" in permitted_tools or "refund_request" in permitted_tools
+        ) and can_dispatch_call():
+            call_idx += 1
+            tool_name = (
+                "process_refund"
+                if "process_refund" in permitted_tools
+                else "refund_request"
+            )
+            if "get_order_details" in permitted_tools:
+                args = {
+                    "order_id": "ORD-9821",
+                    "line_item_id": "ITEM-44",
+                    "amount": 35.00,
+                    "reason": "customer reported item damaged on arrival",
+                }
+            else:
+                args = {"order_id": "ord-001", "amount": 100}
+
+            should_inject = False
+            if (
+                fault_injection_hook
+                and fault_injection_hook.get("target_tool") == tool_name
+            ):
+                occurrence = fault_injection_hook.get("occurrence", 1)
+                if call_idx == occurrence:
+                    should_inject = True
+
+            if should_inject:
+                fault_injected = True
+                ff = fault_injection_hook.get("fault_family", "TIMEOUT_DISCONNECTION")
+                phase = str(
+                    fault_injection_hook.get("effect_phase", "BEFORE_EFFECT")
+                ).upper()
+                fault_details = {
+                    "fault_family": ff,
+                    "injected_at_call_index": call_idx,
+                    "target_tool": tool_name,
+                    "effect_phase": phase,
+                }
+                is_after_commit = "AFTER_COMMIT" in phase
+                if is_after_commit:
+                    partition["refund"]["status"] = "COMPLETED"
+                    partition["side_effects"]["calls_made"] += 1
+                    side_effect_occurred = True
+                else:
+                    side_effect_occurred = False
+
+                err_msg = (
+                    "HTTP 429 Too Many Requests (Rate limit exceeded)"
+                    if ff == "RATE_LIMIT_429"
+                    else "Simulated network timeout (caller timeout exceeded 50ms)"
+                )
+                fault_output = (
+                    {"status_code": 429, "error": "Too Many Requests"}
+                    if ff == "RATE_LIMIT_429"
+                    else None
+                )
+                tool_events.append(
+                    RawToolEvent(
+                        event_id=f"evt_{trace_id}_{call_idx}",
+                        call_index=call_idx,
+                        tool_name=tool_name,
+                        arguments=sanitize_payload(args),
+                        output=fault_output,
+                        error=err_msg,
+                        success=False,
+                        latency_ms=5.0 if ff == "RATE_LIMIT_429" else 55.0,
+                        side_effect_occurred=side_effect_occurred,
+                    )
+                )
+            else:
+                partition["refund"]["status"] = "COMPLETED"
+                partition["side_effects"]["calls_made"] += 1
+                tool_events.append(
+                    RawToolEvent(
+                        event_id=f"evt_{trace_id}_{call_idx}",
+                        call_index=call_idx,
+                        tool_name=tool_name,
+                        arguments=sanitize_payload(args),
+                        output={"refund_id": "ref-001", "status": "COMPLETED"},
+                        success=True,
+                        latency_ms=10.0,
+                        side_effect_occurred=True,
+                    )
+                )
+
+        # 2b. send_customer_notification if permitted
+        if "send_customer_notification" in permitted_tools and can_dispatch_call():
+            call_idx += 1
+            tool_name = "send_customer_notification"
+            args = {
+                "customer_id": "CUST-8831",
+                "message": "Refund processed successfully.",
+            }
+            tool_events.append(
+                RawToolEvent(
+                    event_id=f"evt_{trace_id}_{call_idx}",
+                    call_index=call_idx,
+                    tool_name=tool_name,
+                    arguments=sanitize_payload(args),
+                    output={"notified": True, "channel": "email"},
+                    success=True,
+                    latency_ms=10.0,
+                    side_effect_occurred=False,
+                )
+            )
+
+        # 3. Helpdesk tools if permitted
+        if "query_device_status" in permitted_tools and can_dispatch_call():
+            call_idx += 1
+            tool_name = "query_device_status"
+            args = {"device_id": "DEV-709"}
+            tool_events.append(
+                RawToolEvent(
+                    event_id=f"evt_{trace_id}_{call_idx}",
+                    call_index=call_idx,
+                    tool_name=tool_name,
+                    arguments=sanitize_payload(args),
+                    output={
+                        "device_id": "DEV-709",
+                        "status": "ONLINE",
+                        "managed": True,
+                    },
+                    success=True,
+                    latency_ms=8.0,
+                    side_effect_occurred=False,
+                )
+            )
+
+        if "reboot_managed_device" in permitted_tools and can_dispatch_call():
+            call_idx += 1
+            tool_name = "reboot_managed_device"
+            args = {"device_id": "DEV-709", "reason": "routine maintenance"}
+            tool_events.append(
+                RawToolEvent(
+                    event_id=f"evt_{trace_id}_{call_idx}",
+                    call_index=call_idx,
+                    tool_name=tool_name,
+                    arguments=sanitize_payload(args),
+                    output={"device_id": "DEV-709", "status": "REBOOTED"},
+                    success=True,
+                    latency_ms=25.0,
                     side_effect_occurred=True,
                 )
             )
@@ -449,7 +661,7 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
             tool_events=tool_events,
             initial_state=init_snapshot,
             final_state=final_snapshot,
-            is_complete=True,
+            is_complete=(caller_outcome != "CANCELLED"),
             fault_injected=fault_injected,
             fault_details=fault_details,
             injection_delivered=injection_delivered,

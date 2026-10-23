@@ -71,6 +71,9 @@ class ReadinessIssueCode(str, Enum):
     SUITE_NOT_FOUND = "SUITE_NOT_FOUND"
     CONTRACT_NOT_FOUND = "CONTRACT_NOT_FOUND"
     CASE_NOT_FOUND = "CASE_NOT_FOUND"
+    TEST_NOT_FOUND = "TEST_NOT_FOUND"
+    TEST_NOT_READY = "TEST_NOT_READY"
+    AMBIGUOUS_SELECTION = "AMBIGUOUS_SELECTION"
     UNAPPROVED_CONTRACT = "UNAPPROVED_CONTRACT"
     INCOMPLETE_PLAN_SEMANTICS = "INCOMPLETE_PLAN_SEMANTICS"
     INVALID_POLICY_RULES = "INVALID_POLICY_RULES"
@@ -509,6 +512,8 @@ class ExecutionStatusResponse(BaseModel):
     completed_at_utc: datetime | None = None
     retained_evidence_digest: str | None = None
     evaluations: dict[str, Any] = Field(default_factory=dict)
+    cleanup_successful: bool | None = None
+    cleanup_reusable: bool | None = None
     error_message: str | None = None
 
 

@@ -148,6 +148,10 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
 
     # 4. Fixed Recovery Rules Evaluation
     rule_results: list[RecoveryRuleResult] = []
+    facts_have_trials = any(
+        f.details.get("trial_id") is not None for f in request.c2_facts
+    )
+    expected_tid = fault_trial.trial_id if (fault_trial and facts_have_trials) else None
 
     # -----------------------------------------------------------------------
     # Rule A: Completion (RULE_COMPLETION)
@@ -183,7 +187,12 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             supporting_facts: list[str] = []
 
             for assertion_id in contract.required_state_assertions:
-                fact_val = get_c2_fact_value(request.c2_facts, assertion_id)
+                fact_val = get_c2_fact_value(
+                    request.c2_facts,
+                    assertion_id,
+                    time_scope="post_recovery",
+                    expected_trial_id=expected_tid,
+                )
                 supporting_facts.append(assertion_id)
                 if fact_val == C2FactValue.FALSE:
                     state_violations.append(assertion_id)
@@ -405,7 +414,10 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
         )
     else:
         dup_c2_fact = get_c2_fact_value(
-            request.c2_facts, "duplicate_side_effect_detected"
+            request.c2_facts,
+            "duplicate_side_effect_detected",
+            time_scope="post_recovery",
+            expected_trial_id=expected_tid,
         )
         if dup_c2_fact == C2FactValue.TRUE:
             rule_results.append(
@@ -470,13 +482,22 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
     else:
         if case.effect_phase == EffectPhase.AFTER_COMMIT and retries_count > 0:
             idempotency_fact = get_c2_fact_value(
-                request.c2_facts, "idempotency_key_reused"
+                request.c2_facts,
+                "idempotency_key_reused",
+                time_scope="post_recovery",
+                expected_trial_id=expected_tid,
             )
             target_enforced_fact = get_c2_fact_value(
-                request.c2_facts, "target_idempotency_enforced"
+                request.c2_facts,
+                "target_idempotency_enforced",
+                time_scope="post_recovery",
+                expected_trial_id=expected_tid,
             )
             dup_fact = get_c2_fact_value(
-                request.c2_facts, "duplicate_side_effect_detected"
+                request.c2_facts,
+                "duplicate_side_effect_detected",
+                time_scope="post_recovery",
+                expected_trial_id=expected_tid,
             )
 
             if idempotency_fact == C2FactValue.FALSE:
@@ -557,7 +578,12 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             unverified = False
             checked_facts: list[str] = []
             for assertion_id in contract.required_state_assertions:
-                fval = get_c2_fact_value(request.c2_facts, assertion_id)
+                fval = get_c2_fact_value(
+                    request.c2_facts,
+                    assertion_id,
+                    time_scope="post_recovery",
+                    expected_trial_id=expected_tid,
+                )
                 checked_facts.append(assertion_id)
                 if fval == C2FactValue.FALSE:
                     untruthful = True

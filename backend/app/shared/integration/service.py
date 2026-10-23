@@ -11,6 +11,7 @@ Responsibilities:
 
 import hashlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -19,12 +20,20 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
+from app.components.c1_tool_call_correctness.contracts.expectations import (
+    ExpectationSuite,
+)
+from app.components.c1_tool_call_correctness.contracts.generation import (
+    CaseCategory,
+    ExpectedToolCallSpec,
+)
 from app.components.c1_tool_call_correctness.models.persistence import (
     C1ProjectConfigModel,
     C1SuiteVersionModel,
 )
 from app.components.c2_state_aware_workflow.persistence.models import (
     C2TestCase,
+    C2TestSuite,
     C2WorkflowModel,
 )
 from app.components.c3_robustness_recovery.models.persistence import (
@@ -62,11 +71,101 @@ from app.shared.integration.models import (
 )
 from app.shared.projects.models import Project
 
+logger = logging.getLogger(__name__)
+
 
 def canonical_json_digest(data: dict[str, Any]) -> str:
     """Compute a deterministic SHA-256 digest over canonical JSON bytes."""
     serialized = json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def resolve_c1_expectations_from_snapshot(
+    config_expectations: dict[str, Any] | None,
+    tool_constraints: dict[str, Any] | None = None,
+    suite_case: dict[str, Any] | None = None,
+) -> tuple[list[ExpectedToolCallSpec], str | None, list[str], str]:
+    """Resolve declarative C1 expectations and tool constraints into ExpectedToolCallSpecs.
+
+    Reuses C1 native ExpectationSuite and Case structures. Never falls back arbitrarily to order_placement.
+    Returns: (expected_tool_calls, case_id, requirement_refs, category)
+    """
+    if suite_case:
+        raw_specs = suite_case.get("expected_tool_calls", [])
+        expected_calls = [
+            ExpectedToolCallSpec.model_validate(s) if isinstance(s, dict) else s
+            for s in raw_specs
+        ]
+        case_id = suite_case.get("case_id")
+        req_refs = suite_case.get("requirement_refs", [])
+        category = suite_case.get("category", CaseCategory.CORRECT_BEHAVIOUR.value)
+        return expected_calls, case_id, req_refs, category
+
+    tc_dict = tool_constraints or {}
+    max_inv = tc_dict.get("max_invocations", {})
+    forbidden = set(tc_dict.get("forbidden_tools", []))
+    required = set(tc_dict.get("required_tools", []))
+
+    expected_calls = []
+    seen_tools: set[str] = set()
+
+    if config_expectations and isinstance(config_expectations, dict):
+        try:
+            suite = ExpectationSuite.model_validate(config_expectations)
+            for sel in suite.tool_selections:
+                tool_name = sel.tool_name
+                seen_tools.add(tool_name)
+                is_forbid = (tool_name in forbidden) or (
+                    not sel.is_required and sel.max_count == 0
+                )
+                min_c = 0 if is_forbid else (sel.min_count if sel.is_required else 0)
+                max_c = 0 if is_forbid else (max_inv.get(tool_name, sel.max_count))
+                args = suite.argument_constraints.get(tool_name, [])
+                evs = [
+                    ev
+                    for ev in suite.evidence_requirements
+                    if not ev.required_for_checks or tool_name in ev.required_for_checks
+                ]
+                expected_calls.append(
+                    ExpectedToolCallSpec(
+                        tool_name=tool_name,
+                        is_forbidden=is_forbid,
+                        min_count=min_c,
+                        max_count=max_c,
+                        must_precede_tools=sel.must_precede_tools,
+                        argument_constraints=args,
+                        evidence_requirements=evs,
+                        requirement_refs=sel.requirement_refs,
+                    )
+                )
+        except (ValueError, TypeError, KeyError) as exc:
+            logger.warning("Could not parse C1 ExpectationSuite from config: %s", exc)
+
+    for f_tool in forbidden:
+        if f_tool not in seen_tools:
+            seen_tools.add(f_tool)
+            expected_calls.append(
+                ExpectedToolCallSpec(
+                    tool_name=f_tool,
+                    is_forbidden=True,
+                    min_count=0,
+                    max_count=0,
+                )
+            )
+
+    for r_tool in required:
+        if r_tool not in seen_tools:
+            seen_tools.add(r_tool)
+            expected_calls.append(
+                ExpectedToolCallSpec(
+                    tool_name=r_tool,
+                    is_forbidden=False,
+                    min_count=1,
+                    max_count=max_inv.get(r_tool, 1),
+                )
+            )
+
+    return expected_calls, None, [], CaseCategory.CORRECT_BEHAVIOUR.value
 
 
 class IntegrationService:
@@ -187,9 +286,60 @@ class IntegrationService:
                             c1_issues.append(issue)
                             blocking_issues.append(issue)
                         else:
-                            c1_ready = True
+                            cases = c1_suite.cases or []
+                            if c1_ref.case_id:
+                                found_c = any(
+                                    (
+                                        c.get("case_id")
+                                        if isinstance(c, dict)
+                                        else getattr(c, "case_id", None)
+                                    )
+                                    == c1_ref.case_id
+                                    for c in cases
+                                )
+                                if not found_c:
+                                    issue = ComponentReadinessIssue(
+                                        component=ComponentType.C1,
+                                        issue_code=ReadinessIssueCode.CASE_NOT_FOUND,
+                                        message=f"C1 case '{c1_ref.case_id}' not found in suite '{c1_ref.suite_id}'.",
+                                        severity=ReadinessSeverity.BLOCKING,
+                                    )
+                                    c1_issues.append(issue)
+                                    blocking_issues.append(issue)
+                                else:
+                                    c1_ready = True
+                            elif len(cases) == 0:
+                                issue = ComponentReadinessIssue(
+                                    component=ComponentType.C1,
+                                    issue_code=ReadinessIssueCode.EMPTY_SUITE,
+                                    message=f"C1 suite '{c1_ref.suite_id}' contains 0 test cases.",
+                                    severity=ReadinessSeverity.BLOCKING,
+                                )
+                                c1_issues.append(issue)
+                                blocking_issues.append(issue)
+                            elif len(cases) > 1:
+                                issue = ComponentReadinessIssue(
+                                    component=ComponentType.C1,
+                                    issue_code=ReadinessIssueCode.AMBIGUOUS_SELECTION,
+                                    message=f"C1 suite '{c1_ref.suite_id}' contains {len(cases)} cases; specific case_id must be selected.",
+                                    severity=ReadinessSeverity.BLOCKING,
+                                )
+                                c1_issues.append(issue)
+                                blocking_issues.append(issue)
+                            else:
+                                c1_ready = True
                     else:
-                        c1_ready = True
+                        if not config.tools and not config.expectations:
+                            issue = ComponentReadinessIssue(
+                                component=ComponentType.C1,
+                                issue_code=ReadinessIssueCode.EMPTY_SUITE,
+                                message=f"C1 configuration '{config.id}' contains no tools or expectations.",
+                                severity=ReadinessSeverity.BLOCKING,
+                            )
+                            c1_issues.append(issue)
+                            blocking_issues.append(issue)
+                        else:
+                            c1_ready = True
 
         statuses[ComponentType.C1.value] = ComponentReadinessSummary(
             component=ComponentType.C1,
@@ -274,7 +424,141 @@ class IntegrationService:
                         c2_issues.append(issue)
                         blocking_issues.append(issue)
                     else:
-                        c2_ready = True
+                        test_q = (
+                            select(C2TestCase)
+                            .join(
+                                C2TestSuite,
+                                C2TestCase.suite_record_id == C2TestSuite.id,
+                            )
+                            .where(
+                                C2TestCase.project_id == project_id,
+                                C2TestSuite.model_id == c2_ref.model_id,
+                                C2TestSuite.model_version == c2_ref.model_version,
+                            )
+                        )
+                        if c2_ref.suite_id:
+                            test_q = test_q.where(
+                                C2TestCase.suite_id == c2_ref.suite_id
+                            )
+                        if c2_ref.test_id:
+                            test_q = test_q.where(C2TestCase.test_id == c2_ref.test_id)
+
+                        matched_tests = self.db.execute(test_q).scalars().all()
+
+                        if c2_ref.test_id:
+                            if not matched_tests:
+                                issue = ComponentReadinessIssue(
+                                    component=ComponentType.C2,
+                                    issue_code=ReadinessIssueCode.TEST_NOT_FOUND,
+                                    message=(
+                                        f"C2 test '{c2_ref.test_id}' not found for approved model '{c2_ref.model_id}' "
+                                        f"(v{c2_ref.model_version})"
+                                        + (
+                                            f" in suite '{c2_ref.suite_id}'."
+                                            if c2_ref.suite_id
+                                            else "."
+                                        )
+                                    ),
+                                    severity=ReadinessSeverity.BLOCKING,
+                                )
+                                c2_issues.append(issue)
+                                blocking_issues.append(issue)
+                            elif len(matched_tests) > 1:
+                                issue = ComponentReadinessIssue(
+                                    component=ComponentType.C2,
+                                    issue_code=ReadinessIssueCode.AMBIGUOUS_SELECTION,
+                                    message=(
+                                        f"Multiple matching C2 tests found for test_id '{c2_ref.test_id}'. "
+                                        "Specify suite_id to disambiguate."
+                                    ),
+                                    severity=ReadinessSeverity.BLOCKING,
+                                )
+                                c2_issues.append(issue)
+                                blocking_issues.append(issue)
+                            else:
+                                tc = matched_tests[0]
+                                if not tc.is_ready or tc.readiness != "TEST_READY":
+                                    issue = ComponentReadinessIssue(
+                                        component=ComponentType.C2,
+                                        issue_code=ReadinessIssueCode.TEST_NOT_READY,
+                                        message=(
+                                            f"C2 test '{tc.test_id}' is not ready for execution: "
+                                            f"readiness='{tc.readiness}', is_ready={tc.is_ready}."
+                                        ),
+                                        severity=ReadinessSeverity.BLOCKING,
+                                    )
+                                    c2_issues.append(issue)
+                                    blocking_issues.append(issue)
+                                else:
+                                    c2_ref.suite_id = tc.suite_id
+                                    c2_ready = True
+                        elif c2_ref.suite_id:
+                            if not matched_tests:
+                                issue = ComponentReadinessIssue(
+                                    component=ComponentType.C2,
+                                    issue_code=ReadinessIssueCode.TEST_NOT_FOUND,
+                                    message=f"No generated tests found in suite '{c2_ref.suite_id}' for model '{c2_ref.model_id}'.",
+                                    severity=ReadinessSeverity.BLOCKING,
+                                )
+                                c2_issues.append(issue)
+                                blocking_issues.append(issue)
+                            elif len(matched_tests) > 1:
+                                issue = ComponentReadinessIssue(
+                                    component=ComponentType.C2,
+                                    issue_code=ReadinessIssueCode.AMBIGUOUS_SELECTION,
+                                    message=(
+                                        f"C2 suite '{c2_ref.suite_id}' contains {len(matched_tests)} tests. "
+                                        "Specific test_id must be selected."
+                                    ),
+                                    severity=ReadinessSeverity.BLOCKING,
+                                )
+                                c2_issues.append(issue)
+                                blocking_issues.append(issue)
+                            else:
+                                tc = matched_tests[0]
+                                if not tc.is_ready or tc.readiness != "TEST_READY":
+                                    issue = ComponentReadinessIssue(
+                                        component=ComponentType.C2,
+                                        issue_code=ReadinessIssueCode.TEST_NOT_READY,
+                                        message=f"C2 test '{tc.test_id}' is not ready: readiness='{tc.readiness}', is_ready={tc.is_ready}.",
+                                        severity=ReadinessSeverity.BLOCKING,
+                                    )
+                                    c2_issues.append(issue)
+                                    blocking_issues.append(issue)
+                                else:
+                                    c2_ref.test_id = tc.test_id
+                                    c2_ready = True
+                        else:
+                            # Neither test_id nor suite_id provided
+                            if not matched_tests:
+                                c2_ready = True
+                            elif len(matched_tests) > 1:
+                                issue = ComponentReadinessIssue(
+                                    component=ComponentType.C2,
+                                    issue_code=ReadinessIssueCode.AMBIGUOUS_SELECTION,
+                                    message=(
+                                        f"Multiple generated tests ({len(matched_tests)}) exist for model '{c2_ref.model_id}'. "
+                                        "Specific test_id must be selected."
+                                    ),
+                                    severity=ReadinessSeverity.BLOCKING,
+                                )
+                                c2_issues.append(issue)
+                                blocking_issues.append(issue)
+                            else:
+                                tc = matched_tests[0]
+                                if not tc.is_ready or tc.readiness != "TEST_READY":
+                                    issue = ComponentReadinessIssue(
+                                        component=ComponentType.C2,
+                                        issue_code=ReadinessIssueCode.TEST_NOT_READY,
+                                        message=f"C2 test '{tc.test_id}' is not ready: readiness='{tc.readiness}', is_ready={tc.is_ready}.",
+                                        severity=ReadinessSeverity.BLOCKING,
+                                    )
+                                    c2_issues.append(issue)
+                                    blocking_issues.append(issue)
+                                else:
+                                    c2_ref.test_id = tc.test_id
+                                    c2_ref.suite_id = tc.suite_id
+                                    c2_ready = True
 
         statuses[ComponentType.C2.value] = ComponentReadinessSummary(
             component=ComponentType.C2,
@@ -397,6 +681,18 @@ class IntegrationService:
                                 blocking_issues.append(issue)
                             else:
                                 c3_ready = True
+                        elif suite.total_cases > 1:
+                            issue = ComponentReadinessIssue(
+                                component=ComponentType.C3,
+                                issue_code=ReadinessIssueCode.AMBIGUOUS_SELECTION,
+                                message=(
+                                    f"C3 suite '{suite.suite_id}' contains {suite.total_cases} cases. "
+                                    "Specific case_id must be selected."
+                                ),
+                                severity=ReadinessSeverity.BLOCKING,
+                            )
+                            c3_issues.append(issue)
+                            blocking_issues.append(issue)
                         else:
                             c3_ready = True
 
@@ -621,15 +917,76 @@ class IntegrationService:
                 .first()
             )
             if c1_rec:
+                selected_case = None
+                if ref_plan.c1.suite_id:
+                    suite_rec = (
+                        self.db.execute(
+                            select(C1SuiteVersionModel).where(
+                                C1SuiteVersionModel.project_id == project_id,
+                                C1SuiteVersionModel.config_id == c1_rec.id,
+                                C1SuiteVersionModel.suite_id == ref_plan.c1.suite_id,
+                            )
+                        )
+                        .scalars()
+                        .first()
+                    )
+                    if suite_rec and suite_rec.cases:
+                        for c in suite_rec.cases:
+                            c_id = (
+                                c.get("case_id")
+                                if isinstance(c, dict)
+                                else getattr(c, "case_id", None)
+                            )
+                            if (
+                                ref_plan.c1.case_id and c_id == ref_plan.c1.case_id
+                            ) or (
+                                not ref_plan.c1.case_id and len(suite_rec.cases) == 1
+                            ):
+                                selected_case = c
+                                break
+
+                resolved_specs, res_case_id, req_refs, case_cat = (
+                    resolve_c1_expectations_from_snapshot(
+                        config_expectations=c1_rec.expectations,
+                        tool_constraints=c1_rec.tool_constraints,
+                        suite_case=selected_case,
+                    )
+                )
+
                 execution_inputs["c1"] = {
                     "config_id": c1_rec.id,
                     "version": c1_rec.version,
+                    "suite_id": ref_plan.c1.suite_id,
+                    "case_id": res_case_id or ref_plan.c1.case_id,
+                    "category": case_cat,
+                    "requirement_refs": req_refs,
                     "tools": c1_rec.tools,
+                    "permitted_tools": [
+                        t.get("name")
+                        for t in (c1_rec.tools or [])
+                        if isinstance(t, dict)
+                    ],
                     "requirements": c1_rec.requirements,
                     "tool_constraints": c1_rec.tool_constraints,
                     "expectations": c1_rec.expectations,
-                    "expected_tool_calls": c1_rec.expectations,
+                    "expected_tool_calls": [
+                        s.model_dump(mode="json") for s in resolved_specs
+                    ],
                     "agent_connection_ref": c1_rec.agent_connection_ref,
+                    "context_data": {
+                        "fixture_order_9821": {
+                            "order_id": "ORD-9821",
+                            "customer_id": "CUST-8831",
+                            "status": "DELIVERED",
+                            "items": {
+                                "ITEM-44": {
+                                    "name": "Wireless Ergonomic Mouse",
+                                    "price": 35.00,
+                                    "refundable": True,
+                                }
+                            },
+                        }
+                    },
                 }
         if (
             ref_plan.c2
@@ -651,25 +1008,41 @@ class IntegrationService:
             )
             if c2_rec:
                 test_def = None
-                if ref_plan.c2.test_id:
-                    c2_tc = (
-                        self.db.execute(
-                            select(C2TestCase).where(
-                                C2TestCase.project_id == project_id,
-                                C2TestCase.test_id == ref_plan.c2.test_id,
-                            )
-                        )
-                        .scalars()
-                        .first()
+                sel_test_id = ref_plan.c2.test_id
+                sel_suite_id = ref_plan.c2.suite_id
+
+                t_query = (
+                    select(C2TestCase)
+                    .join(
+                        C2TestSuite,
+                        C2TestCase.suite_record_id == C2TestSuite.id,
                     )
-                    if c2_tc and c2_tc.definition:
-                        test_def = c2_tc.definition
+                    .where(
+                        C2TestCase.project_id == project_id,
+                        C2TestSuite.model_id == c2_rec.model_id,
+                        C2TestSuite.model_version == c2_rec.version,
+                    )
+                )
+                if sel_suite_id:
+                    t_query = t_query.where(C2TestCase.suite_id == sel_suite_id)
+                if sel_test_id:
+                    t_query = t_query.where(C2TestCase.test_id == sel_test_id)
+
+                matched = self.db.execute(t_query).scalars().all()
+                if matched:
+                    chosen = matched[0]
+                    test_def = chosen.definition
+                    sel_test_id = chosen.test_id
+                    sel_suite_id = chosen.suite_id
+
                 execution_inputs["c2"] = {
                     "model_id": c2_rec.model_id,
                     "version": c2_rec.version,
                     "definition": c2_rec.definition,
                     "content_hash": c2_rec.content_hash,
                     "lifecycle_status": c2_rec.lifecycle_status,
+                    "suite_id": sel_suite_id,
+                    "test_id": sel_test_id,
                     "test_definition": test_def,
                 }
         if (
@@ -706,6 +1079,7 @@ class IntegrationService:
                         )
                 elif cases_list:
                     sel_case = cases_list[0]
+                    ref_plan.c3.case_id = sel_case.get("case_id")
                 execution_inputs["c3"] = {
                     "suite_id": c3_rec.suite_id,
                     "suite_digest": c3_rec.suite_digest,

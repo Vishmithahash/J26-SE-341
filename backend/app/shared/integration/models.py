@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -284,4 +285,40 @@ class IntegrationReportModel(Base):
     )
     run_plan: Mapped["IntegrationRunPlanModel"] = relationship(
         "IntegrationRunPlanModel", back_populates="reports"
+    )
+
+
+class IntegrationPublishedContributionModel(Base):
+    """Additive persistence for published component evaluation contributions."""
+
+    __tablename__ = "integration_published_contributions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    component_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    contribution_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, index=True
+    )
+    execution_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    publication_token: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, index=True
+    )
+    content_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "contribution_id", name="uq_project_contribution_id"
+        ),
+        Index(
+            "ix_published_contribution_lookup",
+            "project_id",
+            "component_type",
+            "contribution_id",
+        ),
     )

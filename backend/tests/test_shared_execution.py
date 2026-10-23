@@ -45,6 +45,10 @@ from app.components.c1_tool_call_correctness.services.config_service import (
 from app.components.c2_state_aware_workflow.examples.refund_workflow import (
     build_synthetic_refund_efsm,
 )
+from app.components.c2_state_aware_workflow.persistence.models import (
+    C2TestCase,
+    C2TestSuite,
+)
 from app.components.c2_state_aware_workflow.persistence.repository import (
     C2ModelRepository,
 )
@@ -190,6 +194,47 @@ def seed_all_components(
         review_basis="Synthetic specs",
     )
 
+    c2_suite = C2TestSuite(
+        project_id=p_id,
+        suite_id="suite-c2-exec-01",
+        model_record_id=c2_record.id,
+        model_id=c2_efsm.model_id,
+        model_version=c2_efsm.version,
+        model_content_hash=c2_record.content_hash,
+        config={},
+        diagnostics={},
+        total_cases=1,
+        ready_cases_count=1,
+    )
+    db_session.add(c2_suite)
+    db_session.flush()
+
+    c2_case = C2TestCase(
+        suite_record_id=c2_suite.id,
+        project_id=p_id,
+        suite_id=c2_suite.suite_id,
+        test_id="test_c2_exec_01",
+        category="valid",
+        task="Process order and refund workflow",
+        fixture_ref="fix-c2-01",
+        readiness="TEST_READY",
+        is_ready=True,
+        definition={
+            "schema_version": "2026.1",
+            "test_id": "test_c2_exec_01",
+            "project_id": p_id,
+            "suite_id": c2_suite.suite_id,
+            "pinned_model_id": c2_efsm.model_id,
+            "pinned_model_version": c2_efsm.version,
+            "model_content_hash": c2_record.content_hash,
+            "category": "valid",
+            "task": "Process order and refund workflow",
+            "fixture_ref": "fix-c2-01",
+            "expected_outcome": "PASS",
+        },
+    )
+    db_session.add(c2_case)
+
     # 3. C3 Frozen Suite
     c3_suite = C3SuiteModel(
         suite_id="suite-c3-exec-01",
@@ -260,6 +305,8 @@ def seed_all_components(
         "c1": c1_record,
         "c2": c2_record,
         "c2_efsm": c2_efsm,
+        "c2_suite": c2_suite,
+        "c2_case": c2_case,
         "c3": c3_suite,
         "c4": c4_contract,
     }
@@ -284,6 +331,8 @@ def _create_ready_run_plan(
             "project_id": project_id,
             "model_id": components["c2_efsm"].model_id,
             "model_version": components["c2_efsm"].version,
+            "suite_id": "suite-c2-exec-01",
+            "test_id": "test_c2_exec_01",
         },
         "c3_reference": {
             "project_id": project_id,

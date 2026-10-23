@@ -12,6 +12,7 @@ Responsibilities:
 """
 
 import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -31,14 +32,15 @@ from app.components.c2_state_aware_workflow.contracts.efsm_model import (
     EFSMModelDefinition,
 )
 from app.components.c2_state_aware_workflow.contracts.test_definition import (
-    ExpectedOutcomeType,
     GeneratedTestDefinition,
-    TestCategory,
 )
 from app.components.c2_state_aware_workflow.evaluator.engine import (
     ConformanceEvaluationEngine,
 )
 from app.components.c2_state_aware_workflow.persistence.models import (
+    C2EvaluationResult,
+    C2ExecutionEvidence,
+    C2TestCase,
     C2WorkflowModel,
 )
 from app.components.c3_robustness_recovery.contracts.evaluation import (
@@ -94,6 +96,8 @@ from app.shared.integration.evidence import (
 )
 from app.shared.integration.models import (
     IntegrationExecutionModel,
+    IntegrationIdentifierMappingModel,
+    IntegrationPublishedContributionModel,
     IntegrationRunPlanModel,
 )
 from app.shared.integration.service import canonical_json_digest
@@ -113,6 +117,7 @@ def dispatch_component_evaluations(
     frozen_inputs: dict[str, Any],
     primary_trace: ExecutionTrace,
     c3_fault_trace: ExecutionTrace | None = None,
+    is_replay: bool = False,
 ) -> dict[str, Any]:
     """Shared deterministic evaluation dispatcher reused by execution and replay.
 
@@ -137,16 +142,6 @@ def dispatch_component_evaluations(
             elif isinstance(spec, ExpectedToolCallSpec):
                 c1_expectations.append(spec)
 
-        if not c1_expectations:
-            c1_expectations = [
-                ExpectedToolCallSpec(
-                    tool_name="order_placement",
-                    min_count=1,
-                    max_count=2,
-                    is_forbidden=False,
-                )
-            ]
-
         case_cat = CaseCategory.CORRECT_BEHAVIOUR
         raw_cat = c1_inputs.get("category")
         if raw_cat:
@@ -164,7 +159,26 @@ def dispatch_component_evaluations(
             resolved_expectations=c1_expectations,
             captured_events=c1_events,
             trace_completeness=c1_completeness,
-            context_data={"project_id": project_id},
+            context_data={
+                "project_id": project_id,
+                **(
+                    c1_inputs.get("context_data")
+                    or {
+                        "fixture_order_9821": {
+                            "order_id": "ORD-9821",
+                            "customer_id": "CUST-8831",
+                            "status": "DELIVERED",
+                            "items": {
+                                "ITEM-44": {
+                                    "name": "Wireless Ergonomic Mouse",
+                                    "price": 35.00,
+                                    "refundable": True,
+                                }
+                            },
+                        }
+                    }
+                ),
+            },
             requirement_refs=req_refs,
         )
         evaluations["C1"] = {
@@ -209,41 +223,182 @@ def dispatch_component_evaluations(
         if model_def:
             c2_model = EFSMModelDefinition(**model_def)
             test_def_raw = c2_inputs.get("test_definition")
-            if test_def_raw:
-                test_def = GeneratedTestDefinition(**test_def_raw)
+            test_def = None
+            if test_def_raw and isinstance(test_def_raw, dict):
+                td_dict = dict(test_def_raw)
+                if isinstance(td_dict.get("category"), str):
+                    td_dict["category"] = td_dict["category"].lower()
+                test_def = GeneratedTestDefinition(**td_dict)
             else:
-                test_def = GeneratedTestDefinition(
-                    test_id=c2_inputs.get("test_id") or f"c2_test_{execution_id[:8]}",
-                    project_id=project_id,
-                    pinned_model_id=refs.c2.model_id,
-                    pinned_model_version=refs.c2.model_version,
-                    model_content_hash=pinned_hash or "",
-                    category=TestCategory.VALID,
-                    task="Workflow execution",
-                    fixture_ref=f"fix_{execution_id[:8]}",
-                    expected_outcome=ExpectedOutcomeType.PASS,
-                )
+                test_id = c2_inputs.get("test_id")
+                suite_id = refs.c2.suite_id or c2_inputs.get("suite_id")
+                if test_id:
+                    t_query = select(C2TestCase).where(
+                        C2TestCase.project_id == project_id,
+                        C2TestCase.test_id == test_id,
+                    )
+                    if suite_id:
+                        t_query = t_query.where(C2TestCase.suite_id == suite_id)
+                    test_rec = db.execute(t_query).scalars().first()
+                    if test_rec and test_rec.definition:
+                        td_dict = dict(test_rec.definition)
+                        if isinstance(td_dict.get("category"), str):
+                            td_dict["category"] = td_dict["category"].lower()
+                        test_def = GeneratedTestDefinition(**td_dict)
 
-            c2_result = c2_engine.evaluate(
-                model=c2_model,
-                test_def=test_def,
-                evidence=c2_evidence,
-                model_is_approved=(model_status == "APPROVED"),
-                pinned_content_hash=pinned_hash,
-            )
-            evaluations["C2"] = {
-                "component": "C2",
-                "verdict": c2_result.verdict.value,
-                "reasons": c2_result.reasons,
-                "violations_count": len(c2_result.violations),
-                "observed_states": c2_result.observed_states,
-                "violations": [v.model_dump(mode="json") for v in c2_result.violations],
-                "first_divergence": (
-                    c2_result.first_divergence.model_dump(mode="json")
-                    if c2_result.first_divergence
-                    else None
-                ),
-            }
+            if not test_def:
+                evaluations["C2"] = {
+                    "component": "C2",
+                    "verdict": "TEST NOT READY",
+                    "reasons": [
+                        f"Test '{c2_inputs.get('test_id')}' definition not found or unready."
+                    ],
+                }
+            else:
+                c2_result = c2_engine.evaluate(
+                    model=c2_model,
+                    test_def=test_def,
+                    evidence=c2_evidence,
+                    model_is_approved=(model_status == "APPROVED"),
+                    pinned_content_hash=pinned_hash,
+                )
+                eval_id = None
+                evidence_id = None
+                pub_token = None
+                c2_res_rec = None
+                if not is_replay:
+                    suite_id = (
+                        refs.c2.suite_id
+                        or c2_inputs.get("suite_id")
+                        or getattr(test_def, "suite_id", None)
+                        or "default_suite"
+                    )
+                    evidence_digest = (
+                        c2_evidence.canonical_digest()
+                        if hasattr(c2_evidence, "canonical_digest")
+                        else canonical_json_digest(c2_evidence.model_dump(mode="json"))
+                    )
+
+                    c2_ev_rec = C2ExecutionEvidence(
+                        project_id=project_id,
+                        suite_id=suite_id,
+                        test_id=test_def.test_id,
+                        run_id=execution_id,
+                        evidence_digest=evidence_digest,
+                        model_id=refs.c2.model_id,
+                        model_version=refs.c2.model_version,
+                        model_content_hash=pinned_hash or "",
+                        execution_mode=c2_evidence.execution_mode,
+                        runner_id="shared_integration_coordinator",
+                        execution_provenance=c2_evidence.collector_provenance,
+                        evidence_payload=c2_evidence.model_dump(mode="json"),
+                    )
+                    db.add(c2_ev_rec)
+                    db.flush()
+                    evidence_id = c2_ev_rec.id
+
+                    c2_res_rec = C2EvaluationResult(
+                        execution_evidence_id=c2_ev_rec.id,
+                        project_id=project_id,
+                        suite_id=suite_id,
+                        test_id=test_def.test_id,
+                        run_id=execution_id,
+                        model_id=refs.c2.model_id,
+                        model_version=refs.c2.model_version,
+                        model_content_hash=pinned_hash or "",
+                        evaluator_version="c2_evaluator_v1",
+                        verdict=c2_result.verdict.value,
+                        reasons=c2_result.reasons,
+                        violations=[
+                            v.model_dump(mode="json") for v in c2_result.violations
+                        ],
+                        first_divergence=(
+                            c2_result.first_divergence.model_dump(mode="json")
+                            if c2_result.first_divergence
+                            else None
+                        ),
+                        coverage=c2_result.coverage.model_dump(mode="json")
+                        if hasattr(c2_result, "coverage") and c2_result.coverage
+                        else {},
+                        expected_states=c2_result.expected_states,
+                        observed_states=c2_result.observed_states,
+                        evidence_references=c2_result.evidence_references,
+                        evaluator_timing_ms=c2_result.evaluator_timing_ms,
+                    )
+                    db.add(c2_res_rec)
+                    db.flush()
+                    eval_id = c2_res_rec.id
+
+                    plan_rec = (
+                        db.execute(
+                            select(IntegrationExecutionModel.integration_run_id).where(
+                                IntegrationExecutionModel.execution_id == execution_id
+                            )
+                        )
+                        .scalars()
+                        .first()
+                    )
+                    run_id_for_mapping = plan_rec or execution_id
+
+                    mapping_rec = IntegrationIdentifierMappingModel(
+                        integration_run_id=run_id_for_mapping,
+                        project_id=project_id,
+                        component_type="C2",
+                        native_entity_type="evaluation",
+                        native_id=c2_res_rec.id,
+                        context_json={
+                            "execution_id": execution_id,
+                            "suite_id": suite_id,
+                            "test_id": test_def.test_id,
+                            "evidence_id": c2_ev_rec.id,
+                        },
+                    )
+                    db.add(mapping_rec)
+
+                    c2_payload = {
+                        "project_id": project_id,
+                        "component": "C2",
+                        "evaluation_id": eval_id,
+                        "evidence_id": evidence_id,
+                        "verdict": c2_result.verdict.value,
+                        "observed_states": c2_result.observed_states,
+                        "reasons": c2_result.reasons,
+                        "violations": [
+                            v.model_dump(mode="json") for v in c2_result.violations
+                        ],
+                    }
+                    content_digest = canonical_json_digest(c2_payload)
+                    pub_token = f"PUB-{execution_id[:8]}-{content_digest[:8]}"
+                    pub_record = IntegrationPublishedContributionModel(
+                        project_id=project_id,
+                        component_type="C2",
+                        contribution_id=eval_id,
+                        execution_id=execution_id,
+                        publication_token=pub_token,
+                        content_digest=content_digest,
+                        payload=c2_payload,
+                    )
+                    db.add(pub_record)
+
+                pub_token_val = pub_token if c2_res_rec is not None else None
+                evaluations["C2"] = {
+                    "component": "C2",
+                    "verdict": c2_result.verdict.value,
+                    "evaluation_id": eval_id,
+                    "evidence_id": evidence_id,
+                    "publication_token": pub_token_val,
+                    "reasons": c2_result.reasons,
+                    "violations_count": len(c2_result.violations),
+                    "observed_states": c2_result.observed_states,
+                    "violations": [
+                        v.model_dump(mode="json") for v in c2_result.violations
+                    ],
+                    "first_divergence": (
+                        c2_result.first_divergence.model_dump(mode="json")
+                        if c2_result.first_divergence
+                        else None
+                    ),
+                }
         else:
             evaluations["C2"] = {
                 "component": "C2",
@@ -569,11 +724,40 @@ class SharedExecutionCoordinator:
                 or frozen_inputs.get("c1", {}).get("task_prompt")
                 or "Process customer order ord-001 and issue refund if necessary."
             )
+            c1_tools = [
+                t.get("name") if isinstance(t, dict) else getattr(t, "name", "")
+                for t in frozen_inputs.get("c1", {}).get("tools", [])
+            ]
+            c1_permitted = frozen_inputs.get("c1", {}).get("permitted_tools") or [
+                t for t in c1_tools if t
+            ]
+            active_tools = list(c1_permitted)
+            c3_in = frozen_inputs.get("c3", {})
+            c3_case_snap = c3_in.get("case") or c3_in.get("selected_case") or {}
+            c3_tool = (
+                c3_case_snap.get("tool_id")
+                or (refs.c3.target_tool_id if refs.c3 else None)
+                or c3_in.get("tool_id")
+            )
+            if c3_tool and c3_tool not in active_tools:
+                active_tools.append(c3_tool)
+
             permitted_tools = (
                 request.permitted_tools_override
-                or frozen_inputs.get("c1", {}).get("permitted_tools")
+                or (active_tools if active_tools else None)
                 or ["order_placement", "process_refund", "inventory_check"]
             )
+
+            deadline_monotonic = (
+                (time.monotonic() + request.timeout_seconds)
+                if request.timeout_seconds
+                else None
+            )
+
+            def is_cancelled() -> bool:
+                return execution_id in ACTIVE_CANCELLATIONS or self._is_cancelled(
+                    execution_id
+                )
 
             has_c3 = refs.c3 is not None
             primary_trace: ExecutionTrace
@@ -589,10 +773,12 @@ class SharedExecutionCoordinator:
                     permitted_tools=permitted_tools,
                     max_tool_calls=request.max_tool_calls,
                     trial_role="CLEAN",
+                    deadline_monotonic=deadline_monotonic,
+                    check_cancellation=is_cancelled,
                 )
                 primary_trace = clean_trace
 
-                if execution_id in ACTIVE_CANCELLATIONS:
+                if is_cancelled():
                     raise InterruptedError("Execution cancelled by caller.")
 
                 fault_ns = f"ns_fault_{execution_id}"
@@ -601,10 +787,9 @@ class SharedExecutionCoordinator:
                 c3_in = frozen_inputs.get("c3", {})
                 c3_case_snap = c3_in.get("case") or c3_in.get("selected_case") or {}
                 target_tool = (
-                    c3_case_snap.get("target_tool")
+                    c3_case_snap.get("tool_id")
                     or refs.c3.target_tool_id
                     or c3_in.get("tool_id")
-                    or "order_placement"
                 )
                 fault_family = (
                     c3_case_snap.get("fault_family") or "TIMEOUT_DISCONNECTION"
@@ -630,6 +815,8 @@ class SharedExecutionCoordinator:
                     },
                     max_tool_calls=request.max_tool_calls,
                     trial_role="FAULT",
+                    deadline_monotonic=deadline_monotonic,
+                    check_cancellation=is_cancelled,
                 )
             else:
                 trial_ns = f"ns_trial_{execution_id}"
@@ -641,10 +828,43 @@ class SharedExecutionCoordinator:
                     permitted_tools=permitted_tools,
                     max_tool_calls=request.max_tool_calls,
                     trial_role="DEFAULT",
+                    deadline_monotonic=deadline_monotonic,
+                    check_cancellation=is_cancelled,
                 )
 
-            if execution_id in ACTIVE_CANCELLATIONS:
+            if is_cancelled():
                 raise InterruptedError("Execution cancelled by caller.")
+
+            # Perform fixture cleanup and record cleanup outcome on traces BEFORE evaluation and digest computation
+            clean_ok_all = True
+            reusable_all = True
+            for ns in prepared_namespaces:
+                try:
+                    c_ok, c_reusable = adapter.cleanup_fixture(ns)
+                    if not c_ok:
+                        clean_ok_all = False
+                    if not c_reusable:
+                        reusable_all = False
+                except Exception as clean_err:  # noqa: BLE001
+                    logger.warning("Fixture cleanup failed for %s: %s", ns, clean_err)
+                    clean_ok_all = False
+                    reusable_all = False
+
+            primary_trace.cleanup_successful = clean_ok_all
+            primary_trace.cleanup_reusable = reusable_all
+            if c3_fault_trace:
+                c3_fault_trace.cleanup_successful = clean_ok_all
+                c3_fault_trace.cleanup_reusable = reusable_all
+
+            if not clean_ok_all:
+                cleanup_err_msg = (
+                    "Fixture cleanup failed; environment cannot be safely reused."
+                )
+                execution_record.error_message = (
+                    f"{execution_record.error_message}; {cleanup_err_msg}"
+                    if execution_record.error_message
+                    else cleanup_err_msg
+                )
 
             # 5. Route Retained Evidence to Selected Native Evaluators via shared dispatcher
             evaluations = dispatch_component_evaluations(
@@ -657,7 +877,7 @@ class SharedExecutionCoordinator:
                 c3_fault_trace=c3_fault_trace,
             )
 
-            if execution_id in ACTIVE_CANCELLATIONS:
+            if is_cancelled():
                 raise InterruptedError("Execution cancelled by caller.")
 
             retained_evidence_bundle: dict[str, Any] = {
@@ -675,19 +895,37 @@ class SharedExecutionCoordinator:
             retained_digest = compute_evidence_digest(retained_evidence_bundle)
             complete_now = datetime.now(UTC)
 
-            if execution_record.lifecycle_status != "CANCELLED":
-                execution_record.lifecycle_status = "COMPLETED"
-                execution_record.retained_evidence_digest = retained_digest
-                execution_record.retained_evidence = retained_evidence_bundle
-                execution_record.evaluations = evaluations
-                execution_record.completed_at_utc = complete_now
-                execution_record.updated_at_utc = complete_now
+            if not clean_ok_all or not reusable_all:
+                cleanup_msg = "Fixture cleanup failed; fixture marked unreusable."
+                execution_record.error_message = (
+                    (execution_record.error_message + "; " + cleanup_msg)
+                    if execution_record.error_message
+                    else cleanup_msg
+                )
 
-                plan_record.lifecycle_status = IntegrationPlanStatus.COMPLETED.value
-                plan_record.updated_at_utc = complete_now
+            # Guard against overwriting CANCELLED state without wiping pending attributes
+            cancelled_status = self.db.execute(
+                select(IntegrationExecutionModel.lifecycle_status).where(
+                    IntegrationExecutionModel.id == execution_record.id
+                )
+            ).scalar_one_or_none()
+            if cancelled_status == "CANCELLED" or is_cancelled():
+                ACTIVE_CANCELLATIONS.discard(execution_id)
+                execution_record.lifecycle_status = "CANCELLED"
+                return self._to_status_response(execution_record)
 
-                self.db.commit()
-                self.db.refresh(execution_record)
+            execution_record.lifecycle_status = "COMPLETED"
+            execution_record.retained_evidence_digest = retained_digest
+            execution_record.retained_evidence = retained_evidence_bundle
+            execution_record.evaluations = evaluations
+            execution_record.completed_at_utc = complete_now
+            execution_record.updated_at_utc = complete_now
+
+            plan_record.lifecycle_status = IntegrationPlanStatus.COMPLETED.value
+            plan_record.updated_at_utc = complete_now
+
+            self.db.commit()
+            self.db.refresh(execution_record)
 
             return self._to_status_response(execution_record)
 
@@ -718,29 +956,11 @@ class SharedExecutionCoordinator:
             return self._to_status_response(execution_record)
 
         finally:
-            all_clean = True
             for ns in prepared_namespaces:
                 try:
-                    c_ok, c_reusable = adapter.cleanup_fixture(ns)
-                    if not c_ok or not c_reusable:
-                        all_clean = False
-                except Exception as clean_err:  # noqa: BLE001
-                    logger.warning("Fixture cleanup failed for %s: %s", ns, clean_err)
-                    all_clean = False
-            if not all_clean:
-                logger.warning(
-                    "Fixture cleanup failed or marked unreusable for %s", execution_id
-                )
-                try:
-                    execution_record.error_message = (
-                        (execution_record.error_message + "; ")
-                        if execution_record.error_message
-                        else ""
-                    ) + "Fixture cleanup failed; fixture marked unreusable."
-                    self.db.add(execution_record)
-                    self.db.commit()
-                except Exception as save_err:  # noqa: BLE001
-                    logger.debug("Could not record cleanup failure: %s", save_err)
+                    adapter.cleanup_fixture(ns)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Fixture cleanup suppressed error for %s: %s", ns, exc)
 
     def get_execution(
         self,
@@ -884,9 +1104,26 @@ class SharedExecutionCoordinator:
 
         return self._to_status_response(rec)
 
+    def _is_cancelled(self, execution_id: str) -> bool:
+        if execution_id in ACTIVE_CANCELLATIONS:
+            return True
+        st = self.db.execute(
+            select(IntegrationExecutionModel.lifecycle_status).where(
+                IntegrationExecutionModel.execution_id == execution_id
+            )
+        ).scalar_one_or_none()
+        return st == "CANCELLED"
+
     def _to_status_response(
         self, rec: IntegrationExecutionModel
     ) -> ExecutionStatusResponse:
+        cleanup_successful = None
+        cleanup_reusable = None
+        if rec.retained_evidence and isinstance(rec.retained_evidence, dict):
+            pt = rec.retained_evidence.get("primary_trace") or {}
+            cleanup_successful = pt.get("cleanup_successful")
+            cleanup_reusable = pt.get("cleanup_reusable")
+
         return ExecutionStatusResponse(
             execution_id=rec.execution_id,
             integration_run_id=rec.integration_run_id,
@@ -899,4 +1136,6 @@ class SharedExecutionCoordinator:
             retained_evidence_digest=rec.retained_evidence_digest,
             evaluations=rec.evaluations or {},
             error_message=rec.error_message,
+            cleanup_successful=cleanup_successful,
+            cleanup_reusable=cleanup_reusable,
         )

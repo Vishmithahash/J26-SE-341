@@ -46,11 +46,8 @@ NONDETERMINISTIC_EVALUATION_FIELDS = [
     "started_at_utc",
     "completed_at_utc",
     "replayed_at_utc",
-    "run_id",
-    "test_id",
-    "case_id",
-    "pair_id",
-    "execution_id",
+    "evaluator_timing_ms",
+    "finding_id",
 ]
 
 
@@ -102,6 +99,28 @@ class EvidenceReplayService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Execution '{execution_id}' does not belong to plan '{plan_identifier}'.",
+            )
+
+        # Verify execution record's plan digest matches plan record's plan digest
+        if execution_record.plan_digest != plan_record.plan_digest:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Plan digest mismatch for execution '{execution_id}'. "
+                    f"Execution recorded plan digest '{execution_record.plan_digest}', "
+                    f"but plan '{plan_record.integration_run_id}' has '{plan_record.plan_digest}'."
+                ),
+            )
+
+        # Verify plan payload integrity against recorded plan_digest
+        computed_plan_digest = canonical_json_digest(plan_record.plan_payload)
+        if computed_plan_digest != plan_record.plan_digest:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Plan payload integrity check failed for plan '{plan_record.integration_run_id}'. "
+                    f"Recorded digest '{plan_record.plan_digest}', computed '{computed_plan_digest}'."
+                ),
             )
 
         # 3. Retained Evidence Integrity Verification
@@ -161,6 +180,7 @@ class EvidenceReplayService:
             frozen_inputs=frozen_inputs,
             primary_trace=primary_trace,
             c3_fault_trace=c3_fault_trace,
+            is_replay=True,
         )
 
         # 6. Deep Semantic Parity Comparison
@@ -208,50 +228,102 @@ class EvidenceReplayService:
                     f"{comp_name}: reasons changed from {orig_reasons} to {repl_reasons}."
                 )
 
-            # For C1, compare individual tool call check outcomes
+            # For C1, compare individual tool call check outcomes preserving multiplicity
             if comp_name == "C1":
-                orig_checks = {
-                    c.get("check_id") or c.get("tool_name"): c.get("verdict")
+                orig_checks = [
+                    (
+                        c.get("check_id"),
+                        c.get("tool_name"),
+                        c.get("verdict"),
+                        c.get("reason_code"),
+                    )
                     for c in orig_c.get("checks", [])
-                }
-                repl_checks = {
-                    c.get("check_id") or c.get("tool_name"): c.get("verdict")
+                ]
+                repl_checks = [
+                    (
+                        c.get("check_id"),
+                        c.get("tool_name"),
+                        c.get("verdict"),
+                        c.get("reason_code"),
+                    )
                     for c in repl_c.get("checks", [])
-                }
+                ]
                 if orig_checks != repl_checks:
                     is_semantic_parity = False
                     divergence_reasons.append(
-                        f"C1: individual tool check verdicts differ (orig: {orig_checks}, replayed: {repl_checks})."
+                        f"C1: individual tool check sequences differ (orig: {orig_checks}, replayed: {repl_checks})."
                     )
 
-            # For C3, compare rule statuses
+            # For C2, compare violations sequence preserving multiplicity
+            if comp_name == "C2":
+                orig_violations = [
+                    (
+                        v.get("transition_id"),
+                        v.get("violation_type"),
+                        v.get("step_index"),
+                        v.get("message"),
+                    )
+                    for v in orig_c.get("violations", [])
+                ]
+                repl_violations = [
+                    (
+                        v.get("transition_id"),
+                        v.get("violation_type"),
+                        v.get("step_index"),
+                        v.get("message"),
+                    )
+                    for v in repl_c.get("violations", [])
+                ]
+                if orig_violations != repl_violations:
+                    is_semantic_parity = False
+                    divergence_reasons.append(
+                        f"C2: violations sequence differs (orig: {orig_violations}, replayed: {repl_violations})."
+                    )
+
+            # For C3, compare rule statuses and supporting facts preserving multiplicity
             if comp_name == "C3":
-                orig_rules = {
-                    r.get("rule_id"): r.get("status")
+                orig_rules = [
+                    (
+                        r.get("rule_id"),
+                        r.get("status"),
+                        r.get("reason_code"),
+                        tuple(r.get("supporting_fact_ids") or []),
+                    )
                     for r in orig_c.get("rule_results", [])
-                }
-                repl_rules = {
-                    r.get("rule_id"): r.get("status")
+                ]
+                repl_rules = [
+                    (
+                        r.get("rule_id"),
+                        r.get("status"),
+                        r.get("reason_code"),
+                        tuple(r.get("supporting_fact_ids") or []),
+                    )
                     for r in repl_c.get("rule_results", [])
-                }
+                ]
                 if orig_rules != repl_rules:
                     is_semantic_parity = False
                     divergence_reasons.append(
-                        f"C3: rule evaluation statuses differ (orig: {orig_rules}, replayed: {repl_rules})."
+                        f"C3: rule evaluation sequences differ (orig: {orig_rules}, replayed: {repl_rules})."
                     )
 
-            # For C4, compare individual findings
+            # For C4, compare individual findings preserving multiplicity
             if comp_name == "C4":
-                orig_findings = {
-                    f.get("rule_id") or f.get("finding_id"): f.get("status")
-                    or f.get("verdict")
+                orig_findings = [
+                    (
+                        f.get("rule_id"),
+                        f.get("verdict"),
+                        f.get("severity"),
+                    )
                     for f in orig_c.get("findings", [])
-                }
-                repl_findings = {
-                    f.get("rule_id") or f.get("finding_id"): f.get("status")
-                    or f.get("verdict")
+                ]
+                repl_findings = [
+                    (
+                        f.get("rule_id"),
+                        f.get("verdict"),
+                        f.get("severity"),
+                    )
                     for f in repl_c.get("findings", [])
-                }
+                ]
                 if orig_findings != repl_findings:
                     is_semantic_parity = False
                     divergence_reasons.append(

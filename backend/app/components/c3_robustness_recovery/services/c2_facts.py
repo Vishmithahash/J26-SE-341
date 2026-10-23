@@ -167,16 +167,18 @@ def get_c2_fact_value(
             and fact.assertion_version != assertion_version
         ):
             continue
-        if time_scope is not None and fact.time_scope != time_scope:
-            continue
+        if time_scope is not None:
+            if fact.time_scope is not None and fact.time_scope != time_scope:
+                continue
+            if fact.time_scope is None and fact.provenance in ("SERVER_EVALUATED", "SHARED_RUN"):
+                continue
         if entity_id is not None and fact.entity_id != entity_id:
             continue
         if snapshot_id is not None and fact.snapshot_id != snapshot_id:
             continue
         if expected_trial_id is not None:
             fact_trial_id = fact.details.get("trial_id")
-            if not fact_trial_id or fact_trial_id != expected_trial_id:
-                # Missing trial identifier must NOT satisfy a strict trial-scoping check
+            if fact_trial_id != expected_trial_id:
                 continue
 
         matching_values.add(fact.value)
