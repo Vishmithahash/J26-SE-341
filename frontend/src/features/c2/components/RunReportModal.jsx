@@ -26,30 +26,48 @@ export const RunReportModal = ({
 
   const provenance = report.execution_provenance || {};
 
+  // Scope publication receipts and export responses strictly to this report's evaluation
+  const isReceiptForThisReport = Boolean(
+    lastConfirmedReceipt &&
+    (lastConfirmedReceipt.evaluation_id
+      ? lastConfirmedReceipt.evaluation_id === report.evaluation_id
+      : lastConfirmedReceipt.run_id === report.run_id)
+  );
+
+  const isExportStatusForThisReport = Boolean(
+    exportStatus &&
+    (exportStatus.evaluation_id
+      ? exportStatus.evaluation_id === report.evaluation_id
+      : exportStatus.run_id === report.run_id)
+  );
+
   // Determine actual publication state
   let publicationState = 'NOT_PUBLISHED'; // 'CONFIRMED' | 'FAILED' | 'UNAVAILABLE' | 'NOT_PUBLISHED'
   if (exportError) {
     publicationState = 'FAILED';
   } else if (
-    exportStatus?.published_to_shared_aggregator ||
-    exportStatus?.publishing_status === 'PUBLISHED' ||
+    (isExportStatusForThisReport && exportStatus?.published_to_shared_aggregator) ||
+    (isExportStatusForThisReport && exportStatus?.publishing_status === 'PUBLISHED') ||
     report.published_to_shared_aggregator ||
     report.publishing_status === 'PUBLISHED' ||
-    lastConfirmedReceipt
+    isReceiptForThisReport
   ) {
     publicationState = 'CONFIRMED';
   } else if (
     report.publishing_status === 'UNAVAILABLE' ||
     report.publishing_status === 'UNKNOWN' ||
-    exportStatus?.publishing_status === 'UNAVAILABLE' ||
-    exportStatus?.publishing_status === 'UNKNOWN'
+    (isExportStatusForThisReport && (exportStatus?.publishing_status === 'UNAVAILABLE' || exportStatus?.publishing_status === 'UNKNOWN'))
   ) {
     publicationState = 'UNAVAILABLE';
   } else {
     publicationState = 'NOT_PUBLISHED';
   }
 
-  const activeReceipt = lastConfirmedReceipt || (publicationState === 'CONFIRMED' ? exportStatus || report : null);
+  const activeReceipt = isReceiptForThisReport
+    ? lastConfirmedReceipt
+    : publicationState === 'CONFIRMED'
+    ? (isExportStatusForThisReport ? exportStatus : report)
+    : null;
 
   const downloadJSON = () => {
     const filename = `c2_report_${report.evaluation_id || report.run_id}.json`;
@@ -139,7 +157,7 @@ export const RunReportModal = ({
               <p className="text-[10px] text-rose-700 dark:text-rose-400">
                 The report remains preserved and available for local inspection and download.
               </p>
-              {lastConfirmedReceipt && (
+              {isReceiptForThisReport && lastConfirmedReceipt && (
                 <div className="text-[10px] font-mono text-slate-600 dark:text-slate-400 mt-1 pt-1 border-t border-rose-200 dark:border-rose-900/40">
                   Last confirmed receipt preserved: {lastConfirmedReceipt.contribution_id || 'available'}
                 </div>

@@ -104,7 +104,11 @@ DEFAULT_C2_TO_C3_MAPPINGS: list[C2ToC3AssertionMapping] = [
 ]
 
 
-def validate_c2_facts(facts: list[C2AssertionFact]) -> tuple[bool, list[str]]:
+def validate_c2_facts(
+    facts: list[C2AssertionFact],
+    expected_project_id: str | None = None,
+    expected_pair_id: str | None = None,
+) -> tuple[bool, list[str]]:
     """Validate a collection of C2 assertion facts for internal consistency and scope conflicts.
 
     Rules:
@@ -112,6 +116,7 @@ def validate_c2_facts(facts: list[C2AssertionFact]) -> tuple[bool, list[str]]:
     - Conflicting truth values (e.g. TRUE and FALSE) within the identical
       (assertion_id, entity_id, snapshot_id, time_scope, assertion_version) scope are rejected as conflicting evidence.
     - Contradictory assertion versions or conflicting values within an applicable scope prevent unjustified passes.
+    - Scope mismatches against expected project or pair identities prevent invalid cross-boundary fact injection.
     """
     conflicts: list[str] = []
     scoped_values: dict[
@@ -119,6 +124,20 @@ def validate_c2_facts(facts: list[C2AssertionFact]) -> tuple[bool, list[str]]:
     ] = defaultdict(set)
 
     for fact in facts:
+        # Check project mismatch if expected project is provided
+        fact_pid = fact.details.get("project_id")
+        if expected_project_id is not None and fact_pid is not None and fact_pid != expected_project_id:
+            conflicts.append(
+                f"Cross-project C2 fact rejected: fact project '{fact_pid}' does not match expected '{expected_project_id}'."
+            )
+
+        # Check pair mismatch if expected pair is provided
+        fact_pair = fact.details.get("pair_id")
+        if expected_pair_id is not None and fact_pair is not None and fact_pair != expected_pair_id:
+            conflicts.append(
+                f"Mismatched pair C2 fact rejected: fact pair '{fact_pair}' does not match expected '{expected_pair_id}'."
+            )
+
         scope_key = (
             fact.assertion_id,
             fact.assertion_version,
@@ -149,12 +168,15 @@ def get_c2_fact_value(
     snapshot_id: str | None = None,
     assertion_version: str | None = None,
     expected_trial_id: str | None = None,
+    expected_project_id: str | None = None,
+    expected_pair_id: str | None = None,
+    require_strict_scope: bool = False,
 ) -> C2FactValue:
-    """Retrieve the discrete truth value of a specific assertion fact.
+    """Retrieve the discrete truth value of a specific assertion fact under strict scope enforcement.
 
-    Returns C2FactValue.UNKNOWN if no matching fact is provided or if conflicting
-    matching facts exist within the applicable scope (prevents choosing a convenient
-    fact to manufacture an unjustified pass).
+    Returns C2FactValue.UNKNOWN if no matching fact is provided or if conflicting/wrong-scope
+    facts exist within the applicable scope (prevents choosing a convenient fact to manufacture
+    an unjustified pass).
     Does not compute or infer missing domain workflow state.
     """
     matching_values: set[C2FactValue] = set()
@@ -167,18 +189,53 @@ def get_c2_fact_value(
             and fact.assertion_version != assertion_version
         ):
             continue
-        if time_scope is not None:
-            if fact.time_scope is not None and fact.time_scope != time_scope:
-                continue
-            if fact.time_scope is None and fact.provenance in ("SERVER_EVALUATED", "SHARED_RUN"):
-                continue
-        if entity_id is not None and fact.entity_id != entity_id:
+
+        is_offline_demo_fact = fact.provenance in (
+            "C2_FIXTURE",
+            "C2_DEMO_FIXTURE",
+            "TEST_FIXTURE",
+            "OFFLINE_DEMO",
+            "OFFLINE_EXPORT",
+            "SYNTHETIC",
+            "FALLBACK_OFFLINE",
+        )
+
+        is_fact_authoritative = (
+            require_strict_scope and not is_offline_demo_fact
+        ) or fact.provenance in ("SERVER_EVALUATED", "SHARED_RUN", "C2_EVALUATOR_BRIDGE")
+
+        # Trial scope enforcement: do not disable trial checks because supplied facts omit trial IDs
+        if expected_trial_id is not None and fact.details.get("trial_id") != expected_trial_id:
             continue
-        if snapshot_id is not None and fact.snapshot_id != snapshot_id:
+
+        # Project scope enforcement
+        if expected_project_id is not None and fact.details.get("project_id") != expected_project_id:
             continue
-        if expected_trial_id is not None:
-            fact_trial_id = fact.details.get("trial_id")
-            if fact_trial_id != expected_trial_id:
+
+        # Pair scope enforcement
+        if expected_pair_id is not None and fact.details.get("pair_id") != expected_pair_id:
+            continue
+
+        if is_fact_authoritative:
+            # Strict scope enforcement for authoritative shared-execution facts
+            if time_scope is not None and fact.time_scope != time_scope:
+                continue
+            if entity_id is not None and fact.entity_id != entity_id:
+                continue
+            if snapshot_id is not None and fact.snapshot_id != snapshot_id:
+                continue
+            if expected_trial_id is not None and (
+                not fact.supporting_evidence_refs
+                or expected_trial_id not in fact.supporting_evidence_refs
+            ):
+                continue
+        else:
+            # Preserve compatibility for explicitly labelled offline/demo fact workflows
+            if time_scope is not None and fact.time_scope is not None and fact.time_scope != time_scope:
+                continue
+            if entity_id is not None and fact.entity_id is not None and fact.entity_id != entity_id:
+                continue
+            if snapshot_id is not None and fact.snapshot_id is not None and fact.snapshot_id != snapshot_id:
                 continue
 
         matching_values.add(fact.value)

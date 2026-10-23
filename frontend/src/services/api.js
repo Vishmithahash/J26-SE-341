@@ -152,6 +152,58 @@ export const api = {
   getToken() {
     return getStoredToken();
   },
+
+  downloadFile(path, options) {
+    return downloadFile(path, options);
+  },
 };
+
+export async function downloadFile(path, options = {}) {
+  const token = getStoredToken();
+  const headers = {
+    ...options.headers,
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers,
+    });
+  } catch {
+    throw new ApiError(0, 'Unable to connect to the server. Please check your network connection.');
+  }
+
+  if (response.status === 401) {
+    setStoredToken(null);
+    if (onUnauthorizedCallback) {
+      onUnauthorizedCallback();
+    }
+  }
+
+  if (!response.ok) {
+    let errorData = null;
+    try {
+      errorData = await response.json();
+    } catch {
+      // Body not JSON
+    }
+    const message = parseFastAPIError(
+      errorData,
+      response.status === 401
+        ? 'Session expired. Please log in again.'
+        : `Request failed with status ${response.status}`
+    );
+    throw new ApiError(response.status, message, errorData);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('content-disposition');
+  return { blob, disposition, headers: response.headers };
+}
 
 export { ApiError, request };

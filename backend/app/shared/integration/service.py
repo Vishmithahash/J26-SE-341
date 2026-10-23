@@ -953,6 +953,14 @@ class IntegrationService:
                     )
                 )
 
+                c1_prompt = None
+                c1_context = None
+                if selected_case and isinstance(selected_case, dict):
+                    c1_prompt = selected_case.get("task_prompt") or selected_case.get("prompt")
+                    c1_context = selected_case.get("context_data")
+                if not c1_prompt and hasattr(c1_rec, "task_prompt"):
+                    c1_prompt = c1_rec.task_prompt
+
                 execution_inputs["c1"] = {
                     "config_id": c1_rec.id,
                     "version": c1_rec.version,
@@ -960,6 +968,7 @@ class IntegrationService:
                     "case_id": res_case_id or ref_plan.c1.case_id,
                     "category": case_cat,
                     "requirement_refs": req_refs,
+                    "task_prompt": c1_prompt,
                     "tools": c1_rec.tools,
                     "permitted_tools": [
                         t.get("name")
@@ -973,7 +982,7 @@ class IntegrationService:
                         s.model_dump(mode="json") for s in resolved_specs
                     ],
                     "agent_connection_ref": c1_rec.agent_connection_ref,
-                    "context_data": {
+                    "context_data": c1_context or {
                         "fixture_order_9821": {
                             "order_id": "ORD-9821",
                             "customer_id": "CUST-8831",

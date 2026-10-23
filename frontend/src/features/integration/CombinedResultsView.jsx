@@ -379,6 +379,19 @@ export const CombinedResultsView = () => {
           <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
           <span className="text-xs text-slate-400">Loading project integration results...</span>
         </div>
+      ) : error && plans.length === 0 ? (
+        /* Failed Request State */
+        <div className="p-12 text-center rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+          <div className="mx-auto w-12 h-12 rounded-2xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center mb-3">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <h2 className="text-sm font-bold text-slate-800 dark:text-white">
+            Failed to Load Integration Results
+          </h2>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
+            {error}
+          </p>
+        </div>
       ) : plans.length === 0 ? (
         /* Genuine Empty State */
         <div className="p-12 text-center rounded-2xl bg-white dark:bg-slate-900 border border-dashed border-slate-200 dark:border-slate-800">
@@ -451,6 +464,10 @@ export const CombinedResultsView = () => {
               {isLoadingExecutions ? (
                 <div className="flex items-center justify-center py-6 text-xs text-slate-400">
                   <RefreshCw className="w-3.5 h-3.5 animate-spin mr-1.5" /> Loading...
+                </div>
+              ) : error && executions.length === 0 ? (
+                <div className="p-4 text-center text-xs text-rose-500 border border-dashed border-rose-200 dark:border-rose-900 rounded-xl">
+                  Unable to load plan executions.
                 </div>
               ) : executions.length === 0 ? (
                 <div className="p-4 text-center text-xs text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">

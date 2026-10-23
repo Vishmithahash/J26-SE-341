@@ -116,8 +116,12 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
         is_eligible = False
         non_eval_reasons.append(f"Evidence linkage violation: {exc}")
 
-    # Validate C2 facts consistency
-    c2_valid, c2_conflicts = validate_c2_facts(request.c2_facts)
+    # Validate C2 facts consistency and project/pair boundaries
+    c2_valid, c2_conflicts = validate_c2_facts(
+        request.c2_facts,
+        expected_project_id=request.project_id,
+        expected_pair_id=evidence.pair_id,
+    )
     if not c2_valid:
         is_eligible = False
         non_eval_reasons.extend(c2_conflicts)
@@ -148,10 +152,44 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
 
     # 4. Fixed Recovery Rules Evaluation
     rule_results: list[RecoveryRuleResult] = []
-    facts_have_trials = any(
-        f.details.get("trial_id") is not None for f in request.c2_facts
+
+    is_authoritative = (
+        fault_trial.target_mode != TargetMode.DEMONSTRATION
+        or any(
+            f.provenance in ("C2_EVALUATOR_BRIDGE", "SERVER_EVALUATED", "SHARED_RUN")
+            for f in request.c2_facts
+        )
     )
-    expected_tid = fault_trial.trial_id if (fault_trial and facts_have_trials) else None
+
+    if is_authoritative:
+        expected_pid = request.project_id
+        expected_pair_id = evidence.pair_id
+        expected_tid = fault_trial.trial_id if fault_trial else None
+    else:
+        expected_pid = None
+        expected_pair_id = None
+        expected_tid = None
+
+    # Derive expected scope from frozen configuration and correlated observations
+    expected_entity = None
+    expected_snapshot = None
+    target_tool_id = getattr(case, "tool_id", None)
+    if fault_trial and fault_trial.events and target_tool_id:
+        for ev in fault_trial.events:
+            if ev.tool_id == target_tool_id:
+                det = getattr(ev, "details", {}) or {}
+                if det.get("order_id"):
+                    expected_entity = str(det.get("order_id"))
+                    break
+                if det.get("entity_id"):
+                    expected_entity = str(det.get("entity_id"))
+                    break
+    if not expected_entity and hasattr(contract, "expected_entity_id"):
+        expected_entity = contract.expected_entity_id
+    if not expected_entity and hasattr(case, "expected_entity_id"):
+        expected_entity = case.expected_entity_id
+
+    expected_version = "1.0.0"
 
     # -----------------------------------------------------------------------
     # Rule A: Completion (RULE_COMPLETION)
@@ -191,7 +229,13 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                     request.c2_facts,
                     assertion_id,
                     time_scope="post_recovery",
+                    entity_id=expected_entity,
+                    snapshot_id=expected_snapshot,
+                    assertion_version=expected_version,
                     expected_trial_id=expected_tid,
+                    expected_project_id=expected_pid,
+                    expected_pair_id=expected_pair_id,
+                    require_strict_scope=is_authoritative,
                 )
                 supporting_facts.append(assertion_id)
                 if fact_val == C2FactValue.FALSE:
@@ -417,7 +461,13 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             request.c2_facts,
             "duplicate_side_effect_detected",
             time_scope="post_recovery",
+            entity_id=expected_entity,
+            snapshot_id=expected_snapshot,
+            assertion_version=expected_version,
             expected_trial_id=expected_tid,
+            expected_project_id=expected_pid,
+            expected_pair_id=expected_pair_id,
+            require_strict_scope=is_authoritative,
         )
         if dup_c2_fact == C2FactValue.TRUE:
             rule_results.append(
@@ -485,19 +535,37 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                 request.c2_facts,
                 "idempotency_key_reused",
                 time_scope="post_recovery",
+                entity_id=expected_entity,
+                snapshot_id=expected_snapshot,
+                assertion_version=expected_version,
                 expected_trial_id=expected_tid,
+                expected_project_id=expected_pid,
+                expected_pair_id=expected_pair_id,
+                require_strict_scope=is_authoritative,
             )
             target_enforced_fact = get_c2_fact_value(
                 request.c2_facts,
                 "target_idempotency_enforced",
                 time_scope="post_recovery",
+                entity_id=expected_entity,
+                snapshot_id=expected_snapshot,
+                assertion_version=expected_version,
                 expected_trial_id=expected_tid,
+                expected_project_id=expected_pid,
+                expected_pair_id=expected_pair_id,
+                require_strict_scope=is_authoritative,
             )
             dup_fact = get_c2_fact_value(
                 request.c2_facts,
                 "duplicate_side_effect_detected",
                 time_scope="post_recovery",
+                entity_id=expected_entity,
+                snapshot_id=expected_snapshot,
+                assertion_version=expected_version,
                 expected_trial_id=expected_tid,
+                expected_project_id=expected_pid,
+                expected_pair_id=expected_pair_id,
+                require_strict_scope=is_authoritative,
             )
 
             if idempotency_fact == C2FactValue.FALSE:
@@ -582,7 +650,13 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                     request.c2_facts,
                     assertion_id,
                     time_scope="post_recovery",
+                    entity_id=expected_entity,
+                    snapshot_id=expected_snapshot,
+                    assertion_version=expected_version,
                     expected_trial_id=expected_tid,
+                    expected_project_id=expected_pid,
+                    expected_pair_id=expected_pair_id,
+                    require_strict_scope=is_authoritative,
                 )
                 checked_facts.append(assertion_id)
                 if fval == C2FactValue.FALSE:

@@ -413,6 +413,14 @@ def dispatch_component_evaluations(
         c3_inputs = frozen_inputs.get("c3", {})
         pair_id = f"pair-{execution_id[:8]}"
 
+        is_demo_c3 = (
+            frozen_inputs.get("is_demonstration")
+            or frozen_inputs.get("is_demo")
+            or "demo" in (refs.c3.suite_id or "").lower()
+            or "demo" in (c3_inputs.get("task_id") or refs.c3.task_id or "").lower()
+            or (refs.c3.suite_digest and refs.c3.suite_digest == "a" * 64)
+        )
+
         contract_raw = c3_inputs.get("recovery_contract") or c3_inputs.get(
             "recovery_contract_snapshot"
         )
@@ -422,7 +430,7 @@ def dispatch_component_evaluations(
             and contract_raw.get("contract_id")
         ):
             contract = RecoveryContract(**contract_raw)
-        else:
+        elif is_demo_c3:
             contract = RecoveryContract(
                 contract_id="rec-shared-01",
                 contract_version="1.0.0",
@@ -436,30 +444,23 @@ def dispatch_component_evaluations(
                 allow_duplicate_side_effects=False,
                 require_truthful_completion_reporting=True,
             )
-
-        expected_entity_id = c3_inputs.get("expected_entity_id") or "ord-001"
-        matched_evidence, c2_facts = project_c3_matched_pair_evidence(
-            project_id=project_id,
-            case_id=c3_inputs.get("case_id") or f"c3_case_{execution_id[:8]}",
-            pair_id=pair_id,
-            run_id=execution_id,
-            clean_trace=primary_trace,
-            fault_trace=c3_fault_trace,
-            recovery_contract=contract,
-            expected_entity_id=expected_entity_id,
-        )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Execution evaluation prevented: missing required C3 recovery contract in frozen execution inputs.",
+            )
 
         case_raw = c3_inputs.get("case") or c3_inputs.get("selected_case")
         if case_raw and isinstance(case_raw, dict) and case_raw.get("case_id"):
             case = CandidateFaultCase(**case_raw)
-        else:
+        elif is_demo_c3:
             case = CandidateFaultCase(
                 schema_version="2026.1",
                 project_id=project_id,
                 case_id=c3_inputs.get("case_id") or f"c3_case_{execution_id[:8]}",
                 case_family_id="fam-timeout-01",
                 domain="ecommerce",
-                task_id="task-checkout-demo",
+                task_id=refs.c3.task_id or "task-checkout-demo",
                 task_version="1.0.0",
                 tool_id=refs.c3.target_tool_id or "refund_tool",
                 tool_version="1.0.0",
@@ -486,6 +487,25 @@ def dispatch_component_evaluations(
                 caller_timeout_ms=3000,
                 reproducibility_seed=42,
             )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Execution evaluation prevented: missing required C3 candidate fault case in frozen execution inputs.",
+            )
+
+        expected_entity_id = c3_inputs.get("expected_entity_id") or (
+            "ord-001" if is_demo_c3 else None
+        )
+        matched_evidence, c2_facts = project_c3_matched_pair_evidence(
+            project_id=project_id,
+            case_id=case.case_id,
+            pair_id=pair_id,
+            run_id=execution_id,
+            clean_trace=primary_trace,
+            fault_trace=c3_fault_trace,
+            recovery_contract=contract,
+            expected_entity_id=expected_entity_id,
+        )
 
         c3_req = RecoveryEvaluationRequest(
             project_id=project_id,
@@ -677,6 +697,76 @@ class SharedExecutionCoordinator:
         else:
             adapter = ControlledTestTargetAdapter()
 
+        # Validate required pinned execution inputs before dispatching
+        ref_payload = plan_record.plan_payload.get("component_references", {})
+        refs = ComponentReferencesPlan(**ref_payload)
+        frozen_inputs = plan_record.plan_payload.get("execution_inputs_snapshot", {})
+
+        is_demo = (
+            frozen_inputs.get("is_demonstration")
+            or frozen_inputs.get("is_demo")
+            or "demo" in (plan_record.name or "").lower()
+            or (
+                isinstance(frozen_inputs.get("c1"), dict)
+                and frozen_inputs.get("c1", {}).get("agent_connection_ref")
+                == "conn_nexacart_staging_agent"
+            )
+            or (refs.c3 and refs.c3.task_id and "demo" in refs.c3.task_id.lower())
+            or (refs.c3 and refs.c3.suite_id and "demo" in refs.c3.suite_id.lower())
+            or (refs.c3 and refs.c3.suite_digest and refs.c3.suite_digest == "a" * 64)
+        )
+
+        has_c1 = (refs.c1 is not None) or ("c1" in frozen_inputs)
+        c1_inputs = frozen_inputs.get("c1")
+
+        resolved_prompt = (
+            request.task_prompt_override
+            or (c1_inputs.get("task_prompt") if isinstance(c1_inputs, dict) else None)
+        )
+        if not resolved_prompt:
+            if has_c1 and c1_inputs is not None and not is_demo:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Execution dispatch prevented: missing required task prompt in frozen execution inputs.",
+                )
+            resolved_prompt = (
+                "Process customer order ord-001 and issue refund if necessary."
+            )
+        default_prompt = resolved_prompt
+
+        c1_tools = [
+            t.get("name") if isinstance(t, dict) else getattr(t, "name", "")
+            for t in (c1_inputs.get("tools", []) if isinstance(c1_inputs, dict) else [])
+        ]
+        c1_permitted = (
+            (c1_inputs.get("permitted_tools") if isinstance(c1_inputs, dict) else None)
+            or [t for t in c1_tools if t]
+        )
+        active_tools = list(c1_permitted)
+        c3_in = frozen_inputs.get("c3", {})
+        c3_case_snap = c3_in.get("case") or c3_in.get("selected_case") or {}
+        c3_tool = (
+            c3_case_snap.get("tool_id")
+            or (refs.c3.target_tool_id if refs.c3 else None)
+            or c3_in.get("tool_id")
+        )
+        if c3_tool and c3_tool not in active_tools:
+            active_tools.append(c3_tool)
+
+        if not request.permitted_tools_override and not active_tools:
+            if has_c1 and c1_inputs is not None and not is_demo:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Execution dispatch prevented: missing required tool configuration in frozen execution inputs.",
+                )
+            permitted_tools = ["order_placement", "process_refund", "inventory_check"]
+        else:
+            permitted_tools = (
+                request.permitted_tools_override
+                or (active_tools if active_tools else None)
+                or ["order_placement", "process_refund", "inventory_check"]
+            )
+
         # 3. Create and persist execution intent before dispatch
         execution_id = f"exec-{uuid.uuid4().hex[:12]}"
         now_utc = datetime.now(UTC)
@@ -712,41 +802,6 @@ class SharedExecutionCoordinator:
                 execution_record.completed_at_utc = datetime.now(UTC)
                 self.db.commit()
                 return self._to_status_response(execution_record)
-
-            ref_payload = plan_record.plan_payload.get("component_references", {})
-            refs = ComponentReferencesPlan(**ref_payload)
-            frozen_inputs = plan_record.plan_payload.get(
-                "execution_inputs_snapshot", {}
-            )
-
-            default_prompt = (
-                request.task_prompt_override
-                or frozen_inputs.get("c1", {}).get("task_prompt")
-                or "Process customer order ord-001 and issue refund if necessary."
-            )
-            c1_tools = [
-                t.get("name") if isinstance(t, dict) else getattr(t, "name", "")
-                for t in frozen_inputs.get("c1", {}).get("tools", [])
-            ]
-            c1_permitted = frozen_inputs.get("c1", {}).get("permitted_tools") or [
-                t for t in c1_tools if t
-            ]
-            active_tools = list(c1_permitted)
-            c3_in = frozen_inputs.get("c3", {})
-            c3_case_snap = c3_in.get("case") or c3_in.get("selected_case") or {}
-            c3_tool = (
-                c3_case_snap.get("tool_id")
-                or (refs.c3.target_tool_id if refs.c3 else None)
-                or c3_in.get("tool_id")
-            )
-            if c3_tool and c3_tool not in active_tools:
-                active_tools.append(c3_tool)
-
-            permitted_tools = (
-                request.permitted_tools_override
-                or (active_tools if active_tools else None)
-                or ["order_placement", "process_refund", "inventory_check"]
-            )
 
             deadline_monotonic = (
                 (time.monotonic() + request.timeout_seconds)

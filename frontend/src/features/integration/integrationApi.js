@@ -1,4 +1,4 @@
-import { request, api } from '../../services/api.js';
+import { request, api, downloadFile } from '../../services/api.js';
 
 /**
  * Shared Integration API Client
@@ -89,32 +89,12 @@ export const integrationApi = {
   /**
    * Authenticated export of the combined QA report as JSON or CSV.
    * Downloads the file directly in the browser without exposing tokens in URLs.
+   * Reuses existing expired-session handling (clears session and invokes unauthorized callback on 401).
    */
   async exportReportFile(projectId, planId, executionId, format = 'json') {
-    const token = api.getToken();
-    const headers = {};
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
     const url = `/api/v1/projects/${encodeURIComponent(projectId)}/integration/plans/${encodeURIComponent(planId)}/executions/${encodeURIComponent(executionId)}/report/export?format=${encodeURIComponent(format)}`;
-    const response = await fetch(url, { headers });
+    const { blob, disposition } = await downloadFile(url, { method: 'GET' });
 
-    if (!response.ok) {
-      let message = `Export failed with status ${response.status}`;
-      try {
-        const errJson = await response.json();
-        if (errJson?.detail) {
-          message = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
-        }
-      } catch {
-        // Response not JSON
-      }
-      throw new Error(message);
-    }
-
-    const blob = await response.blob();
-    const disposition = response.headers.get('content-disposition');
     let filename = `report_${executionId}.${format}`;
     if (disposition) {
       const match = disposition.match(/filename="?([^";]+)"?/);

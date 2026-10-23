@@ -27,12 +27,6 @@ import uuid
 from collections.abc import Generator
 
 import pytest
-from fastapi import status
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-from starlette.testclient import TestClient
-
 from app.components.c1_tool_call_correctness.examples import (
     get_nexacart_refund_example_config,
 )
@@ -114,6 +108,11 @@ from app.shared.integration.reporting import (
 from app.shared.integration.service import (
     canonical_json_digest,
 )
+from fastapi import status
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+from starlette.testclient import TestClient
 from tests.test_shared_integration import (
     TEST_AUTH_SECRET,
     auth_headers,
@@ -1166,8 +1165,6 @@ def test_tampered_plan_digest_fails_pre_execution_check(
 
 import time
 
-from fastapi import HTTPException
-
 from app.components.c2_state_aware_workflow.persistence.models import (
     C2EvaluationResult,
     C2TestCase,
@@ -1189,6 +1186,7 @@ from app.shared.integration.models import (
     IntegrationPublishedContributionModel,
 )
 from app.shared.integration.replay import EvidenceReplayService
+from fastapi import HTTPException
 
 
 def test_c1_helpdesk_config_cannot_pass_after_only_order_placement(db_session: Session):
@@ -1776,6 +1774,319 @@ def test_monotonic_deadline_stops_execution_dispatch():
     )
     assert trace.caller_outcome in ("TIMEOUT_EXCEEDED", "CALLER_TIMEOUT_EXCEEDED")
     assert len(trace.tool_events) == 0
+
+
+def test_wrong_scope_c2_facts_cannot_satisfy_c3_recovery():
+    """Verify that wrong project, trial, entity, snapshot, and assertion version cannot satisfy required recovery assertions."""
+    from app.components.c3_robustness_recovery.contracts.evaluation import (
+        RecoveryEvaluationRequest,
+    )
+    from app.components.c3_robustness_recovery.contracts.schemas import (
+        CandidateFaultCase,
+        EffectPhase,
+        FaultFamily,
+        InterceptionHook,
+        ReleaseRule,
+        ReleaseRuleType,
+        TimeoutDisconnectionMode,
+        TimeoutDisconnectionPayload,
+    )
+    from app.components.c3_robustness_recovery.runtime.evidence import (
+        CleanQualification,
+        ExposureStatus,
+        MatchedPairEvidence,
+        TrialEvidence,
+        TrialRole,
+    )
+    from app.components.c3_robustness_recovery.services.recovery_evaluation import (
+        evaluate_recovery,
+    )
+
+    proj_id = "proj-scope-01"
+    pair_id = "pair-scope-01"
+    trial_id = "trial-fault-01"
+    entity_id = "ord-001"
+    snapshot_id = "snap-post-01"
+
+    contract = RecoveryContract(
+        contract_id="rec-scope-01",
+        contract_version="1.0.0",
+        permitted_terminal_outcomes=[TerminalOutcome.SUCCESS_CLEAN_RECOVERY],
+        initial_invocation_counts_as_attempt=True,
+        max_task_attempts=3,
+        max_retries=2,
+        max_tool_calls_budget=10,
+        max_total_timeout_ms=10000,
+        required_state_assertions=["order_created"],
+        allow_duplicate_side_effects=False,
+        require_truthful_completion_reporting=True,
+    )
+
+    case = CandidateFaultCase(
+        schema_version="2026.1",
+        project_id=proj_id,
+        case_id="case-scope-01",
+        case_family_id="fam-01",
+        domain="ecommerce",
+        task_id="task-01",
+        task_version="1.0.0",
+        tool_id="order_placement",
+        tool_version="1.0.0",
+        fixture_id="fix-01",
+        fixture_version="1.0.0",
+        adapter_id="adapter-01",
+        adapter_version="1.0.0",
+        recovery_contract_id=contract.contract_id,
+        recovery_contract_version=contract.contract_version,
+        occurrence=1,
+        interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
+        fault_family=FaultFamily.TIMEOUT_DISCONNECTION,
+        effect_phase=EffectPhase.BEFORE_EFFECT,
+        payload=TimeoutDisconnectionPayload(
+            mode=TimeoutDisconnectionMode.CALLER_TIMEOUT_EXCEEDED,
+            timing_ms=5000,
+        ),
+        release_rule=ReleaseRule(
+            rule_type=ReleaseRuleType.ATTEMPT_BOUNDED,
+            max_fault_count=1,
+        ),
+        required_assertions=["order_created"],
+        required_observations=["network_latency_ms"],
+    )
+
+    from app.components.c3_robustness_recovery.runtime.adapter import (
+        TargetMode as C3TargetMode,
+    )
+    from app.components.c3_robustness_recovery.runtime.evidence import (
+        CleanupStatus,
+        ExecutionStatus,
+        FixtureComparability,
+        ReadinessStatus,
+    )
+
+    clean_trial = TrialEvidence(
+        project_id=proj_id,
+        case_id=case.case_id,
+        pair_id=pair_id,
+        trial_id="trial-clean-01",
+        run_id="run-scope-01",
+        trial_role=TrialRole.CLEAN,
+        target_mode=C3TargetMode.DEMONSTRATION,
+        caller_identity=CallerIdentity.SCRIPTED_CALLER,
+        recovery_actor=RecoveryActor.SCRIPTED_CALLER,
+        fixture_namespace="ns-clean",
+        initial_state_fingerprint="fp-init",
+        final_state_fingerprint="fp-fin",
+        events=[],
+        tool_calls_count=1,
+        subsequent_calls_count=0,
+        execution_status=ExecutionStatus.COMPLETED,
+        caller_outcome="SUCCESS",
+        cleanup_status=CleanupStatus.CLEANED_AND_VERIFIED,
+    )
+
+    fault_trial = TrialEvidence(
+        project_id=proj_id,
+        case_id=case.case_id,
+        pair_id=pair_id,
+        trial_id=trial_id,
+        run_id="run-scope-01",
+        trial_role=TrialRole.FAULT,
+        target_mode=C3TargetMode.DEMONSTRATION,
+        caller_identity=CallerIdentity.SCRIPTED_CALLER,
+        recovery_actor=RecoveryActor.SCRIPTED_CALLER,
+        fixture_namespace="ns-fault",
+        initial_state_fingerprint="fp-init",
+        final_state_fingerprint="fp-fin",
+        events=[],
+        tool_calls_count=2,
+        subsequent_calls_count=1,
+        execution_status=ExecutionStatus.COMPLETED,
+        caller_outcome="SUCCESS_CLEAN_RECOVERY",
+        cleanup_status=CleanupStatus.CLEANED_AND_VERIFIED,
+    )
+
+    matched_evidence = MatchedPairEvidence(
+        project_id=proj_id,
+        case_id=case.case_id,
+        pair_id=pair_id,
+        run_id="run-scope-01",
+        readiness_status=ReadinessStatus.READY,
+        target_mode=C3TargetMode.DEMONSTRATION,
+        caller_identity=CallerIdentity.SCRIPTED_CALLER,
+        configuration_snapshot={"is_simulation": True},
+        clean_trial=clean_trial,
+        fault_trial=fault_trial,
+        fixture_comparability=FixtureComparability.EQUIVALENT_LOGICAL_STATE,
+        clean_qualification=CleanQualification.QUALIFIED,
+        exposure_assessed=True,
+        exposure_status=ExposureStatus.CONFIRMED,
+        cleanup_status=CleanupStatus.CLEANED_AND_VERIFIED,
+    )
+
+    def eval_with_fact(fact: C2AssertionFact):
+        req = RecoveryEvaluationRequest(
+            project_id=proj_id,
+            case_id=case.case_id,
+            candidate_case=case,
+            recovery_contract=contract,
+            matched_evidence=matched_evidence,
+            c2_facts=[fact],
+        )
+        return evaluate_recovery(req)
+
+    from app.components.c3_robustness_recovery.contracts.evaluation import (
+        RecoveryVerdict,
+    )
+
+    # 1. Wrong project fact cannot satisfy recovery
+    fact_wrong_project = C2AssertionFact(
+        assertion_id="order_created",
+        assertion_version="1.0.0",
+        value=C2FactValue.TRUE,
+        entity_id=entity_id,
+        snapshot_id=snapshot_id,
+        time_scope="post_recovery",
+        provenance="C2_EVALUATOR_BRIDGE",
+        supporting_evidence_refs=[trial_id, snapshot_id],
+        details={"project_id": "proj-INTRUDER-99", "pair_id": pair_id, "trial_id": trial_id},
+    )
+    res_wrong_proj = eval_with_fact(fact_wrong_project)
+    assert res_wrong_proj.recovery_verdict != RecoveryVerdict.PASS_COMPLETED
+    assert res_wrong_proj.recovery_verdict is None or "INCONCLUSIVE" in str(res_wrong_proj.recovery_verdict)
+
+    # 2. Wrong trial fact cannot satisfy recovery
+    fact_wrong_trial = C2AssertionFact(
+        assertion_id="order_created",
+        assertion_version="1.0.0",
+        value=C2FactValue.TRUE,
+        entity_id=entity_id,
+        snapshot_id=snapshot_id,
+        time_scope="post_recovery",
+        provenance="C2_EVALUATOR_BRIDGE",
+        supporting_evidence_refs=["trial-WRONG-99", snapshot_id],
+        details={"project_id": proj_id, "pair_id": pair_id, "trial_id": "trial-WRONG-99"},
+    )
+    res_wrong_trial = eval_with_fact(fact_wrong_trial)
+    assert res_wrong_trial.recovery_verdict != RecoveryVerdict.PASS_COMPLETED
+
+    # 3. Wrong entity fact cannot satisfy recovery when entity_id scoped
+    assert get_c2_fact_value(
+        [
+            C2AssertionFact(
+                assertion_id="order_created",
+                assertion_version="1.0.0",
+                value=C2FactValue.TRUE,
+                entity_id="ord-DIFFERENT-999",
+                snapshot_id=snapshot_id,
+                time_scope="post_recovery",
+                provenance="C2_EVALUATOR_BRIDGE",
+                supporting_evidence_refs=[trial_id],
+                details={"project_id": proj_id, "pair_id": pair_id, "trial_id": trial_id},
+            )
+        ],
+        "order_created",
+        entity_id="ord-001",
+        expected_trial_id=trial_id,
+    ) == C2FactValue.UNKNOWN
+
+    # 4. Wrong snapshot fact cannot satisfy recovery when snapshot_id scoped
+    assert get_c2_fact_value(
+        [
+            C2AssertionFact(
+                assertion_id="order_created",
+                assertion_version="1.0.0",
+                value=C2FactValue.TRUE,
+                entity_id=entity_id,
+                snapshot_id="snap-OTHER",
+                time_scope="post_recovery",
+                provenance="C2_EVALUATOR_BRIDGE",
+                supporting_evidence_refs=[trial_id],
+                details={"project_id": proj_id, "pair_id": pair_id, "trial_id": trial_id},
+            )
+        ],
+        "order_created",
+        snapshot_id=snapshot_id,
+        expected_trial_id=trial_id,
+    ) == C2FactValue.UNKNOWN
+
+    # 5. Wrong assertion version cannot satisfy recovery
+    assert get_c2_fact_value(
+        [
+            C2AssertionFact(
+                assertion_id="order_created",
+                assertion_version="2.0.0",
+                value=C2FactValue.TRUE,
+                entity_id=entity_id,
+                snapshot_id=snapshot_id,
+                time_scope="post_recovery",
+                provenance="C2_EVALUATOR_BRIDGE",
+                supporting_evidence_refs=[trial_id],
+                details={"project_id": proj_id, "pair_id": pair_id, "trial_id": trial_id},
+            )
+        ],
+        "order_created",
+        assertion_version="1.0.0",
+        expected_trial_id=trial_id,
+    ) == C2FactValue.UNKNOWN
+
+    # 6. Correctly scoped fact DOES satisfy recovery
+    fact_correct = C2AssertionFact(
+        assertion_id="order_created",
+        assertion_version="1.0.0",
+        value=C2FactValue.TRUE,
+        entity_id=entity_id,
+        snapshot_id=snapshot_id,
+        time_scope="post_recovery",
+        provenance="C2_EVALUATOR_BRIDGE",
+        supporting_evidence_refs=[trial_id, snapshot_id],
+        details={"project_id": proj_id, "pair_id": pair_id, "trial_id": trial_id},
+    )
+    res_correct = eval_with_fact(fact_correct)
+    assert res_correct.recovery_verdict == RecoveryVerdict.PASS_COMPLETED
+
+
+def test_missing_selected_inputs_block_execution_instead_of_generic_defaults(
+    test_client: TestClient, db_session: Session
+):
+    """Verify that execution dispatch is prevented (HTTP 422) if required inputs are missing without explicit demo config."""
+    user = make_user(db_session, "StrictExecUser", "strict_exec@example.com")
+    headers = auth_headers(user)
+    project_id = f"proj-strict-{uuid.uuid4().hex[:6]}"
+    make_project(db_session, project_id, "Strict Inputs Proj", user.id)
+
+    # 1. Non-demonstration plan missing task prompt and tools
+    plan_payload = {
+        "execution_inputs_snapshot": {
+            "c1": {
+                # Notice task_prompt and tools are missing
+            }
+        },
+        "component_references": {},
+    }
+    plan = IntegrationRunPlanModel(
+        id=str(uuid.uuid4()),
+        integration_run_id=f"irun-strict-{uuid.uuid4().hex[:8]}",
+        project_id=project_id,
+        created_by_user_id=user.id,
+        name="Production Live Inspection Plan",  # No "demo" keyword
+        lifecycle_status="READY",
+        plan_digest=canonical_json_digest(plan_payload),
+        plan_payload=plan_payload,
+        readiness_report={},
+    )
+    db_session.add(plan)
+    db_session.commit()
+
+    # Attempt to dispatch execution without prompt
+    resp = test_client.post(
+        f"/api/v1/projects/{project_id}/integration/plans/{plan.integration_run_id}/execute",
+        json={"target_mode": "CONTROLLED_TEST"},
+        headers=headers,
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert "Execution dispatch prevented" in resp.json()["detail"]
+    assert "missing required task prompt" in resp.json()["detail"]
 
 
 from sqlalchemy import event
