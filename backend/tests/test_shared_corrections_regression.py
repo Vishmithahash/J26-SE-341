@@ -28,7 +28,7 @@ from collections.abc import Generator
 
 import pytest
 from fastapi import status
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 from starlette.testclient import TestClient
@@ -53,6 +53,10 @@ from app.components.c3_robustness_recovery.contracts.evaluation import (
 from app.components.c3_robustness_recovery.contracts.schemas import (
     RecoveryContract,
     TerminalOutcome,
+)
+from app.components.c3_robustness_recovery.models.persistence import (
+    C3CaseModel,
+    C3SuiteModel,
 )
 from app.components.c3_robustness_recovery.runtime.adapter import (
     CallerIdentity,
@@ -917,6 +921,240 @@ def test_wrong_plan_nested_urls_rejected(test_client: TestClient, db_session: Se
         headers=headers,
     )
     assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+def test_two_call_retry_budget_executes_second_call():
+    """Verify that a 2-call budget executes the retry call (fixing the double-increment defect)."""
+    from app.shared.integration.adapters import ControlledTestTargetAdapter
+
+    adapter = ControlledTestTargetAdapter()
+    ns = "ns_retry_budget_test"
+    adapter.prepare_fixture(ns)
+
+    trace = adapter.execute_session(
+        namespace=ns,
+        task_prompt="Submit order",
+        permitted_tools=["order_placement"],
+        fault_injection_hook={
+            "target_tool": "order_placement",
+            "occurrence": 1,
+            "fault_family": "TIMEOUT_DISCONNECTION",
+        },
+        max_tool_calls=2,
+        trial_role="FAULT",
+    )
+
+    # With double increment bug fixed, call 1 is the fault, call 2 is the retry!
+    assert len(trace.tool_events) == 2
+    assert trace.tool_events[0].success is False
+    assert trace.tool_events[1].success is True
+    assert trace.caller_outcome in ("SUCCESS_AFTER_RETRY", "SUCCESS_CLEAN_RECOVERY")
+
+
+def test_c3_contradictory_suite_id_rejected(
+    test_client: TestClient, db_session: Session
+):
+    """Verify that a contradictory suite_id is rejected rather than silently overwritten."""
+    user = make_user(db_session, "AliceContra", "alice_contra@example.com")
+    headers = auth_headers(user)
+    project_id = f"proj-c3-contra-{uuid.uuid4().hex[:6]}"
+    make_project(db_session, project_id, "Contra Proj", user.id)
+
+    # Seed C3 suite
+    suite = C3SuiteModel(
+        project_id=project_id,
+        suite_id="suite-c3-legit",
+        suite_digest="c3dig" + "0" * 59,
+        task_id="task-01",
+        tool_id="order_placement",
+        domain="e-commerce",
+        schema_version="2026.1",
+        generator_version="1.0.0",
+        total_cases=1,
+        policy_snapshot={},
+        adapter_manifest_snapshot={},
+        task_fixture_metadata_snapshot={},
+        recovery_contract_snapshot={"contract_id": "rec-01"},
+        suite_snapshot={},
+    )
+    db_session.add(suite)
+    db_session.commit()
+
+    # Pass contradictory suite_id
+    payload = {
+        "c3_reference": {
+            "project_id": project_id,
+            "suite_id": "suite-c3-CONTRADICTORY",
+            "suite_digest": suite.suite_digest,
+        }
+    }
+    resp = test_client.post(
+        f"/api/v1/projects/{project_id}/integration/plans/validate-readiness",
+        json=payload,
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["is_ready"] is False
+    issues = [iss["issue_code"] for iss in data["blocking_issues"]]
+    assert "SUITE_NOT_FOUND" in issues
+
+
+def test_c3_invalid_case_id_rejected_no_fallback(
+    test_client: TestClient, db_session: Session
+):
+    """Verify that an invalid case_id returns CASE_NOT_FOUND instead of falling back to case 0."""
+    user = make_user(db_session, "BobInvalidCase", "bob_case@example.com")
+    headers = auth_headers(user)
+    project_id = f"proj-c3-case-{uuid.uuid4().hex[:6]}"
+    make_project(db_session, project_id, "Case Proj", user.id)
+
+    suite = C3SuiteModel(
+        project_id=project_id,
+        suite_id="suite-c3-cases",
+        suite_digest="c3digcases" + "0" * 54,
+        task_id="task-01",
+        tool_id="order_placement",
+        domain="e-commerce",
+        schema_version="2026.1",
+        generator_version="1.0.0",
+        total_cases=1,
+        policy_snapshot={},
+        adapter_manifest_snapshot={},
+        task_fixture_metadata_snapshot={},
+        recovery_contract_snapshot={"contract_id": "rec-01"},
+        suite_snapshot={},
+    )
+    db_session.add(suite)
+    db_session.flush()
+
+    c_case = C3CaseModel(
+        case_id="case-valid-01",
+        suite_digest="c3digcases" + "0" * 54,
+        case_fingerprint="fp" + "0" * 62,
+        content_digest="cd" + "0" * 62,
+        project_id=project_id,
+        case_family_id="fam-01",
+        fault_family="TIMEOUT_DISCONNECTION",
+        effect_phase="INVOCATION",
+        interception_hook="pre_tool_call",
+        target_tool_id="order_placement",
+        case_order=0,
+        case_snapshot={"case_id": "case-valid-01"},
+    )
+    db_session.add(c_case)
+    db_session.commit()
+
+    payload = {
+        "c3_reference": {
+            "project_id": project_id,
+            "suite_id": suite.suite_id,
+            "suite_digest": suite.suite_digest,
+            "case_id": "case-NON-EXISTENT",
+        }
+    }
+    resp = test_client.post(
+        f"/api/v1/projects/{project_id}/integration/plans/validate-readiness",
+        json=payload,
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["is_ready"] is False
+    issues = [iss["issue_code"] for iss in data["blocking_issues"]]
+    assert "CASE_NOT_FOUND" in issues
+
+
+def test_inflight_report_not_permanently_cached(db_session: Session):
+    """Verify that requesting a report for a RUNNING execution does not cache it in DB."""
+    from app.shared.integration.models import IntegrationReportModel
+    from app.shared.integration.reporting import SharedReportAggregator
+
+    user = make_user(db_session, "CharlieInflight", "charlie_inflight@example.com")
+    project_id = f"proj-inflight-{uuid.uuid4().hex[:6]}"
+    proj = make_project(db_session, project_id, "Inflight Test", user.id)
+
+    plan = IntegrationRunPlanModel(
+        id=str(uuid.uuid4()),
+        integration_run_id=f"irun-{uuid.uuid4().hex[:8]}",
+        project_id=project_id,
+        created_by_user_id=user.id,
+        name="Inflight Plan",
+        lifecycle_status="RUNNING",
+        plan_digest="p" * 64,
+        plan_payload={"component_references": {}},
+        readiness_report={},
+    )
+    db_session.add(plan)
+    db_session.flush()
+
+    execution_id = f"exec-{uuid.uuid4().hex[:8]}"
+    exec_rec = IntegrationExecutionModel(
+        id=str(uuid.uuid4()),
+        execution_id=execution_id,
+        integration_run_id=plan.integration_run_id,
+        project_id=project_id,
+        triggered_by_user_id=user.id,
+        lifecycle_status="RUNNING",
+        target_mode="CONTROLLED_TEST_FIXTURE",
+        plan_digest="p" * 64,
+        evaluations={},
+    )
+    db_session.add(exec_rec)
+    db_session.commit()
+
+    aggregator = SharedReportAggregator(db_session)
+    report = aggregator.generate_report(proj, execution_id, persist=True)
+    assert report.execution_id == execution_id
+
+    # Crucial check: IntegrationReportModel MUST NOT exist for this execution!
+    persisted = (
+        db_session.execute(
+            select(IntegrationReportModel).where(
+                IntegrationReportModel.project_id == project_id,
+                IntegrationReportModel.execution_id == execution_id,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert persisted is None
+
+
+def test_tampered_plan_digest_fails_pre_execution_check(
+    test_client: TestClient, db_session: Session
+):
+    """Verify that tampered execution inputs digest triggers HTTP 422 before dispatch."""
+    user = make_user(db_session, "DaveTamper", "dave_tamper@example.com")
+    headers = auth_headers(user)
+    project_id = f"proj-tamper-{uuid.uuid4().hex[:6]}"
+    make_project(db_session, project_id, "Tamper Proj", user.id)
+
+    plan = IntegrationRunPlanModel(
+        id=str(uuid.uuid4()),
+        integration_run_id=f"irun-tamper-{uuid.uuid4().hex[:8]}",
+        project_id=project_id,
+        created_by_user_id=user.id,
+        name="Tampered Plan",
+        lifecycle_status="READY",
+        plan_digest="legit" + "0" * 59,
+        plan_payload={
+            "execution_inputs_snapshot": {"c1": {"some": "data"}},
+            "execution_inputs_digest": "TAMPERED_INCORRECT_DIGEST",
+            "component_references": {},
+        },
+        readiness_report={},
+    )
+    db_session.add(plan)
+    db_session.commit()
+
+    resp = test_client.post(
+        f"/api/v1/projects/{project_id}/integration/plans/{plan.integration_run_id}/execute",
+        json={"target_mode": "CONTROLLED_TEST_FIXTURE"},
+        headers=headers,
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert "integrity check failed" in resp.json()["detail"]
 
 
 from sqlalchemy import event

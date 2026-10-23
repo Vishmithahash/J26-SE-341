@@ -24,6 +24,7 @@ from app.components.c1_tool_call_correctness.models.persistence import (
     C1SuiteVersionModel,
 )
 from app.components.c2_state_aware_workflow.persistence.models import (
+    C2TestCase,
     C2WorkflowModel,
 )
 from app.components.c3_robustness_recovery.models.persistence import (
@@ -339,24 +340,65 @@ class IntegrationService:
                     c3_issues.append(issue)
                     blocking_issues.append(issue)
                 else:
-                    c3_ref_id = suite.suite_id
-                    c3_digest = suite.suite_digest
-                    c3_ref.suite_id = suite.suite_id
-                    c3_ref.task_id = suite.task_id
-                    c3_ref.target_tool_id = suite.tool_id
-                    c3_ref.total_cases = suite.total_cases
-
-                    if suite.total_cases <= 0:
+                    if c3_ref.suite_id and c3_ref.suite_id != suite.suite_id:
                         issue = ComponentReadinessIssue(
                             component=ComponentType.C3,
-                            issue_code=ReadinessIssueCode.EMPTY_SUITE,
-                            message=f"C3 suite '{suite.suite_id}' contains 0 test cases.",
+                            issue_code=ReadinessIssueCode.SUITE_NOT_FOUND,
+                            message=(
+                                f"Contradictory C3 suite reference: supplied suite_id '{c3_ref.suite_id}' "
+                                f"does not match suite '{suite.suite_id}' found for digest '{c3_ref.suite_digest}'."
+                            ),
                             severity=ReadinessSeverity.BLOCKING,
                         )
                         c3_issues.append(issue)
                         blocking_issues.append(issue)
                     else:
-                        c3_ready = True
+                        c3_ref_id = suite.suite_id
+                        c3_digest = suite.suite_digest
+                        c3_ref.suite_id = suite.suite_id
+                        c3_ref.task_id = suite.task_id
+                        c3_ref.target_tool_id = suite.tool_id
+                        c3_ref.total_cases = suite.total_cases
+
+                        if suite.total_cases <= 0:
+                            issue = ComponentReadinessIssue(
+                                component=ComponentType.C3,
+                                issue_code=ReadinessIssueCode.EMPTY_SUITE,
+                                message=f"C3 suite '{suite.suite_id}' contains 0 test cases.",
+                                severity=ReadinessSeverity.BLOCKING,
+                            )
+                            c3_issues.append(issue)
+                            blocking_issues.append(issue)
+                        elif c3_ref.case_id:
+                            found_case = False
+                            if suite.cases:
+                                for c in suite.cases:
+                                    c_snap = (
+                                        c.case_snapshot
+                                        if hasattr(c, "case_snapshot")
+                                        else {}
+                                    )
+                                    c_id = (
+                                        c_snap.get("case_id")
+                                        if isinstance(c_snap, dict)
+                                        else getattr(c, "case_id", None)
+                                    )
+                                    if c_id == c3_ref.case_id:
+                                        found_case = True
+                                        break
+                            if not found_case:
+                                issue = ComponentReadinessIssue(
+                                    component=ComponentType.C3,
+                                    issue_code=ReadinessIssueCode.CASE_NOT_FOUND,
+                                    message=f"C3 case '{c3_ref.case_id}' not found in suite '{suite.suite_id}'.",
+                                    severity=ReadinessSeverity.BLOCKING,
+                                )
+                                c3_issues.append(issue)
+                                blocking_issues.append(issue)
+                            else:
+                                c3_ready = True
+                        else:
+                            c3_ready = True
 
         statuses[ComponentType.C3.value] = ComponentReadinessSummary(
             component=ComponentType.C3,
@@ -586,6 +628,7 @@ class IntegrationService:
                     "requirements": c1_rec.requirements,
                     "tool_constraints": c1_rec.tool_constraints,
                     "expectations": c1_rec.expectations,
+                    "expected_tool_calls": c1_rec.expectations,
                     "agent_connection_ref": c1_rec.agent_connection_ref,
                 }
         if (
@@ -607,12 +650,27 @@ class IntegrationService:
                 .first()
             )
             if c2_rec:
+                test_def = None
+                if ref_plan.c2.test_id:
+                    c2_tc = (
+                        self.db.execute(
+                            select(C2TestCase).where(
+                                C2TestCase.project_id == project_id,
+                                C2TestCase.test_id == ref_plan.c2.test_id,
+                            )
+                        )
+                        .scalars()
+                        .first()
+                    )
+                    if c2_tc and c2_tc.definition:
+                        test_def = c2_tc.definition
                 execution_inputs["c2"] = {
                     "model_id": c2_rec.model_id,
                     "version": c2_rec.version,
                     "definition": c2_rec.definition,
                     "content_hash": c2_rec.content_hash,
                     "lifecycle_status": c2_rec.lifecycle_status,
+                    "test_definition": test_def,
                 }
         if (
             ref_plan.c3
@@ -641,16 +699,23 @@ class IntegrationService:
                         if c_snap.get("case_id") == ref_plan.c3.case_id:
                             sel_case = c_snap
                             break
-                if not sel_case and cases_list:
+                    if not sel_case:
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail=f"Specified C3 case_id '{ref_plan.c3.case_id}' not found in suite '{c3_rec.suite_id}'.",
+                        )
+                elif cases_list:
                     sel_case = cases_list[0]
                 execution_inputs["c3"] = {
                     "suite_id": c3_rec.suite_id,
                     "suite_digest": c3_rec.suite_digest,
                     "task_id": c3_rec.task_id,
                     "tool_id": c3_rec.tool_id,
+                    "case": sel_case,
+                    "selected_case": sel_case,
+                    "recovery_contract": c3_rec.recovery_contract_snapshot,
                     "recovery_contract_snapshot": c3_rec.recovery_contract_snapshot,
                     "task_fixture_metadata_snapshot": c3_rec.task_fixture_metadata_snapshot,
-                    "selected_case": sel_case,
                     "expected_entity_id": ref_plan.c3.expected_entity_id,
                 }
         if (
@@ -676,6 +741,7 @@ class IntegrationService:
                     "contract_id": c4_rec.contract_id,
                     "version": c4_rec.version,
                     "lifecycle_state": c4_rec.lifecycle_state,
+                    "rules": c4_rec.rules_data,
                     "rules_data": c4_rec.rules_data,
                     "content_hash": c4_rec.content_hash,
                     "referenced_artifact_versions": c4_rec.referenced_artifact_versions,

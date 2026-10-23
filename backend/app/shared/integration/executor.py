@@ -69,9 +69,6 @@ from app.components.c4_policy_aware_safety.contracts.rules import (
 from app.components.c4_policy_aware_safety.evaluator.engine import (
     DeterministicPolicyEvaluator,
 )
-from app.components.c4_policy_aware_safety.persistence.models import (
-    C4ContractModel,
-)
 from app.shared.auth.models import User
 from app.shared.integration.adapters import (
     BaseTargetAdapter,
@@ -99,6 +96,7 @@ from app.shared.integration.models import (
     IntegrationExecutionModel,
     IntegrationRunPlanModel,
 )
+from app.shared.integration.service import canonical_json_digest
 from app.shared.projects.models import Project
 
 logger = logging.getLogger(__name__)
@@ -129,7 +127,9 @@ def dispatch_component_evaluations(
         c1_events, c1_completeness = project_c1_evidence(primary_trace)
         c1_evaluator = DeterministicCorrectnessEvaluator()
 
-        raw_specs = c1_inputs.get("expected_tool_calls") or []
+        raw_specs = (
+            c1_inputs.get("expected_tool_calls") or c1_inputs.get("expectations") or []
+        )
         c1_expectations: list[ExpectedToolCallSpec] = []
         for spec in raw_specs:
             if isinstance(spec, dict):
@@ -258,7 +258,9 @@ def dispatch_component_evaluations(
         c3_inputs = frozen_inputs.get("c3", {})
         pair_id = f"pair-{execution_id[:8]}"
 
-        contract_raw = c3_inputs.get("recovery_contract")
+        contract_raw = c3_inputs.get("recovery_contract") or c3_inputs.get(
+            "recovery_contract_snapshot"
+        )
         if (
             contract_raw
             and isinstance(contract_raw, dict)
@@ -292,7 +294,7 @@ def dispatch_component_evaluations(
             expected_entity_id=expected_entity_id,
         )
 
-        case_raw = c3_inputs.get("case")
+        case_raw = c3_inputs.get("case") or c3_inputs.get("selected_case")
         if case_raw and isinstance(case_raw, dict) and case_raw.get("case_id"):
             case = CandidateFaultCase(**case_raw)
         else:
@@ -384,23 +386,13 @@ def dispatch_component_evaluations(
         c4_evaluator = DeterministicPolicyEvaluator()
 
         rules: list[PolicyRule] = []
-        rules_data = c4_inputs.get("rules")
+        rules_data = (
+            c4_inputs.get("rules")
+            if c4_inputs.get("rules") is not None
+            else c4_inputs.get("rules_data")
+        )
         content_hash = refs.c4.frozen_content_hash or c4_inputs.get("content_hash", "")
         referenced_artifacts = c4_inputs.get("referenced_artifact_versions", {})
-
-        if rules_data is None:
-            contract_query = select(C4ContractModel).where(
-                C4ContractModel.project_id == project_id,
-                C4ContractModel.contract_id == refs.c4.contract_id,
-                C4ContractModel.version == contract_version,
-            )
-            c4_rec = db.execute(contract_query).scalars().first()
-            if c4_rec:
-                rules_data = c4_rec.rules_data or []
-                content_hash = content_hash or c4_rec.content_hash
-                referenced_artifacts = (
-                    referenced_artifacts or c4_rec.referenced_artifact_versions or {}
-                )
 
         if rules_data is not None:
             for r in rules_data:
@@ -491,6 +483,25 @@ class SharedExecutionCoordinator:
                     "Resolve blocking issues before launching execution."
                 ),
             )
+
+        # Verify plan content digest and execution inputs digest before dispatch
+        plan_payload = plan_record.plan_payload or {}
+        inputs_snapshot = plan_payload.get("execution_inputs_snapshot", {})
+        expected_inputs_digest = plan_payload.get("execution_inputs_digest")
+        if expected_inputs_digest:
+            actual_inputs_digest = canonical_json_digest(inputs_snapshot)
+            if actual_inputs_digest != expected_inputs_digest:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"Plan execution inputs integrity check failed: digest mismatch ({actual_inputs_digest} != {expected_inputs_digest}).",
+                )
+        if plan_record.plan_digest:
+            actual_plan_digest = canonical_json_digest(plan_payload)
+            if actual_plan_digest != plan_record.plan_digest:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"Plan content integrity check failed: digest mismatch ({actual_plan_digest} != {plan_record.plan_digest}).",
+                )
 
         # 2. Enforce Honest Target Readiness
         target_mode_enum = TargetMode(request.target_mode)
@@ -587,19 +598,35 @@ class SharedExecutionCoordinator:
                 fault_ns = f"ns_fault_{execution_id}"
                 prepared_namespaces.append(fault_ns)
                 adapter.prepare_fixture(fault_ns)
+                c3_in = frozen_inputs.get("c3", {})
+                c3_case_snap = c3_in.get("case") or c3_in.get("selected_case") or {}
                 target_tool = (
-                    refs.c3.target_tool_id
-                    or frozen_inputs.get("c3", {}).get("target_tool_id")
+                    c3_case_snap.get("target_tool")
+                    or refs.c3.target_tool_id
+                    or c3_in.get("tool_id")
                     or "order_placement"
                 )
+                fault_family = (
+                    c3_case_snap.get("fault_family") or "TIMEOUT_DISCONNECTION"
+                )
+                occurrence = c3_case_snap.get("occurrence", 1)
+                interception_hook = (
+                    c3_case_snap.get("interception_hook") or "before_tool_execution"
+                )
+                effect_phase = c3_case_snap.get("effect_phase") or "during_call"
+                payload = c3_case_snap.get("payload") or {}
+
                 c3_fault_trace = adapter.execute_session(
                     namespace=fault_ns,
                     task_prompt=default_prompt,
                     permitted_tools=permitted_tools,
                     fault_injection_hook={
                         "target_tool": target_tool,
-                        "occurrence": 1,
-                        "fault_family": "TIMEOUT_DISCONNECTION",
+                        "occurrence": occurrence,
+                        "fault_family": fault_family,
+                        "interception_hook": interception_hook,
+                        "effect_phase": effect_phase,
+                        "payload": payload,
                     },
                     max_tool_calls=request.max_tool_calls,
                     trial_role="FAULT",
@@ -691,11 +718,29 @@ class SharedExecutionCoordinator:
             return self._to_status_response(execution_record)
 
         finally:
+            all_clean = True
             for ns in prepared_namespaces:
                 try:
-                    adapter.cleanup_fixture(ns)
+                    c_ok, c_reusable = adapter.cleanup_fixture(ns)
+                    if not c_ok or not c_reusable:
+                        all_clean = False
                 except Exception as clean_err:  # noqa: BLE001
                     logger.warning("Fixture cleanup failed for %s: %s", ns, clean_err)
+                    all_clean = False
+            if not all_clean:
+                logger.warning(
+                    "Fixture cleanup failed or marked unreusable for %s", execution_id
+                )
+                try:
+                    execution_record.error_message = (
+                        (execution_record.error_message + "; ")
+                        if execution_record.error_message
+                        else ""
+                    ) + "Fixture cleanup failed; fixture marked unreusable."
+                    self.db.add(execution_record)
+                    self.db.commit()
+                except Exception as save_err:  # noqa: BLE001
+                    logger.debug("Could not record cleanup failure: %s", save_err)
 
     def get_execution(
         self,

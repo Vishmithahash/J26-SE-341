@@ -1522,12 +1522,40 @@ def export_c2_report_contribution(
     report_service = C2ReportExportService(db)
     try:
         report = report_service.build_run_report(project_id, evaluation_id)
-        publisher = C2ReportPublisher()
+        aggregator_client = None
+        published_shared = False
+        from sqlalchemy import select
+
+        from app.shared.integration.models import IntegrationExecutionModel
+        from app.shared.integration.reporting import AggregatorClientAdapter
+
+        exec_rec = (
+            db.execute(
+                select(IntegrationExecutionModel).where(
+                    IntegrationExecutionModel.project_id == project_id,
+                    (
+                        (IntegrationExecutionModel.execution_id == evaluation_id)
+                        | (IntegrationExecutionModel.id == evaluation_id)
+                    ),
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if exec_rec:
+            aggregator_client = AggregatorClientAdapter(
+                execution_id=exec_rec.execution_id,
+                db=db,
+                project_id=project_id,
+            )
+            published_shared = True
+
+        publisher = C2ReportPublisher(aggregator_client=aggregator_client)
         pub_status = publisher.publish_component_finding(report)
         return {
             "evaluation_id": evaluation_id,
             "project_id": project_id,
-            "published_to_shared_aggregator": False,
+            "published_to_shared_aggregator": published_shared,
             "publishing_status": pub_status,
             "report_contribution": report.model_dump(mode="json"),
         }

@@ -34,6 +34,7 @@ from app.shared.integration.models import (
     IntegrationExecutionModel,
     IntegrationRunPlanModel,
 )
+from app.shared.integration.service import canonical_json_digest
 from app.shared.projects.models import Project
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,21 @@ class EvidenceReplayService:
                 ),
             )
 
+        # Verify plan execution inputs digest
+        plan_payload = plan_record.plan_payload or {}
+        inputs_snapshot = plan_payload.get("execution_inputs_snapshot", {})
+        expected_inputs_digest = plan_payload.get("execution_inputs_digest")
+        if expected_inputs_digest:
+            actual_inputs_digest = canonical_json_digest(inputs_snapshot)
+            if actual_inputs_digest != expected_inputs_digest:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"Plan execution inputs integrity check failed during replay for execution '{execution_id}'. "
+                        f"Expected digest '{expected_inputs_digest}', computed '{actual_inputs_digest}'."
+                    ),
+                )
+
         # Reconstruct primary and fault traces
         primary_trace_data = retained_bundle.get("primary_trace", {})
         primary_trace = ExecutionTrace(**primary_trace_data)
@@ -192,6 +208,22 @@ class EvidenceReplayService:
                     f"{comp_name}: reasons changed from {orig_reasons} to {repl_reasons}."
                 )
 
+            # For C1, compare individual tool call check outcomes
+            if comp_name == "C1":
+                orig_checks = {
+                    c.get("check_id") or c.get("tool_name"): c.get("verdict")
+                    for c in orig_c.get("checks", [])
+                }
+                repl_checks = {
+                    c.get("check_id") or c.get("tool_name"): c.get("verdict")
+                    for c in repl_c.get("checks", [])
+                }
+                if orig_checks != repl_checks:
+                    is_semantic_parity = False
+                    divergence_reasons.append(
+                        f"C1: individual tool check verdicts differ (orig: {orig_checks}, replayed: {repl_checks})."
+                    )
+
             # For C3, compare rule statuses
             if comp_name == "C3":
                 orig_rules = {
@@ -206,6 +238,24 @@ class EvidenceReplayService:
                     is_semantic_parity = False
                     divergence_reasons.append(
                         f"C3: rule evaluation statuses differ (orig: {orig_rules}, replayed: {repl_rules})."
+                    )
+
+            # For C4, compare individual findings
+            if comp_name == "C4":
+                orig_findings = {
+                    f.get("rule_id") or f.get("finding_id"): f.get("status")
+                    or f.get("verdict")
+                    for f in orig_c.get("findings", [])
+                }
+                repl_findings = {
+                    f.get("rule_id") or f.get("finding_id"): f.get("status")
+                    or f.get("verdict")
+                    for f in repl_c.get("findings", [])
+                }
+                if orig_findings != repl_findings:
+                    is_semantic_parity = False
+                    divergence_reasons.append(
+                        f"C4: individual policy rule findings differ (orig: {orig_findings}, replayed: {repl_findings})."
                     )
 
         now_utc = datetime.now(UTC)

@@ -292,3 +292,27 @@ Following source review of the integration boundaries, the following correctness
 - **Cooperative Cancellation**: Active executions can be safely cancelled; completed executions are guarded and reject cancellation with HTTP 409 Conflict.
 - **Nested Route Validation**: All sub-resources strictly validate `project -> plan -> execution` hierarchy, returning HTTP 404 on mismatched paths.
 - **Bounded Pagination**: Implemented `page` and `page_size` pagination on plan and execution listings.
+
+### 11.7 Internal Backend Integration Corrections & Completion (Increment 2)
+The following internal corrections were applied directly to disk and verified under comprehensive regression tests:
+- **Snapshot Contract Key Alignment**:
+  - C3: Dual-persisted `case` / `selected_case` and `recovery_contract` / `recovery_contract_snapshot`.
+  - C1: Dual-persisted `expectations` / `expected_tool_calls` alongside `tools` and `tool_constraints`.
+  - C2: Resolved real `test_definition` from `C2TestCase` during planning and persisted in snapshot.
+  - C4: Dual-persisted `rules` / `rules_data` in snapshot; eliminated live database fallback query in `executor.py`.
+- **Strict Selection & Validation**:
+  - C3 Suite ID & Digest: Validated jointly; contradictory `suite_id` returns `SUITE_NOT_FOUND` blocking readiness issue instead of silent overwrite.
+  - C3 Case ID: Validated against suite cases; invalid `case_id` returns `CASE_NOT_FOUND` blocking readiness issue instead of silent fallback to case 0.
+- **Dispatch Hook & Retry Budget Alignment**:
+  - Corrected call index increment in `adapters.py` retry loop: single increment ensures a 2-call budget executes its legitimate second call, while a 1-call budget halts at timeout.
+  - Bound actual selected case fault parameters (`fault_family`, `occurrence`, `interception_hook`, `effect_phase`, `payload`) into dispatch hooks rather than hardcoded timeout defaults.
+- **Fixture Cleanup Enforcement**:
+  - Captured `(success, reusable)` from `adapter.cleanup_fixture()`. Failed cleanups propagate into execution evidence and mark fixtures unreusable.
+- **Cryptographic Digest Verification**:
+  - Pre-execution and replay verify canonical SHA-256 digests of `execution_inputs_snapshot` and `plan_payload` (HTTP 422 on tampering).
+- **Durable Publication & Report Protection**:
+  - Connected `AggregatorClientAdapter.publish()` to persistent execution evaluations.
+  - Connected C2 normal export route (`export_c2_report_contribution`) to shared publisher when linked to an execution.
+  - Guarded report caching: `generate_report()` only caches completed terminal executions; in-flight reports are generated dynamically without polluting the persistent cache.
+- **Replay Semantic Divergence**:
+  - Extended replay comparison to individual tool checks (C1) and policy findings (C4) to detect check-level divergences even when total counts and overall verdicts match.

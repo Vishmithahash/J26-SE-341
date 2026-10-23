@@ -366,10 +366,6 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
                         caller_outcome = "CALLER_TIMEOUT_EXCEEDED"
                     else:
                         call_idx += 1
-                    if call_idx >= max_tool_calls:
-                        caller_outcome = "CALLER_TIMEOUT_EXCEEDED"
-                    else:
-                        call_idx += 1
                         idempotency_key = f"idem-{uuid.uuid4().hex[:8]}"
                         partition["order"]["status"] = "CONFIRMED"
                         partition["inventory"]["reserved"] = True

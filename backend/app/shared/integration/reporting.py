@@ -83,7 +83,23 @@ class AggregatorClientAdapter:
     def publish(self, evaluation: Any) -> str:
         """Record published evaluation and return confirmed publication token."""
         self.published_payloads.append(evaluation)
-        return f"PUB-{self.execution_id[:8]}-C2-OK"
+        token = f"PUB-{self.execution_id[:8]}-C2-OK"
+        if self.db and self.project_id:
+            exec_stmt = select(IntegrationExecutionModel).where(
+                IntegrationExecutionModel.project_id == self.project_id,
+                IntegrationExecutionModel.execution_id == self.execution_id,
+            )
+            exec_rec = self.db.execute(exec_stmt).scalars().first()
+            if exec_rec:
+                evals = dict(exec_rec.evaluations or {})
+                c2_data = dict(evals.get("C2") or {})
+                c2_data["publication_token"] = token
+                c2_data["published_to_shared_aggregator"] = True
+                evals["C2"] = c2_data
+                exec_rec.evaluations = evals
+                self.db.add(exec_rec)
+                self.db.commit()
+        return token
 
 
 class SharedReportAggregator:
@@ -135,7 +151,11 @@ class SharedReportAggregator:
             IntegrationReportModel.execution_id == execution_id,
         )
         existing_report = self.db.execute(existing_report_stmt).scalars().first()
-        if existing_report:
+        if existing_report and execution_record.lifecycle_status in (
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+        ):
             # Return existing immutable report without overwriting or generating duplicate history
             return CombinedQAReport.model_validate(existing_report.report_payload)
 
@@ -636,24 +656,30 @@ class SharedReportAggregator:
 
         report = CombinedQAReport.model_validate(report_dict)
 
-        # 10. Persist Report Idempotently
-        if persist:
-            report_model = IntegrationReportModel(
-                id=str(uuid.uuid4()),
-                report_id=report_id,
-                integration_run_id=execution_record.integration_run_id,
-                execution_id=execution_id,
-                project_id=project.project_id,
-                published_by_user_id=user.id if user else None,
-                report_status="PUBLISHED",
-                raw_finding_count=len(deduped_findings),
-                grouped_defect_count=len(correlated_defect_groups),
-                report_digest=report_digest,
-                report_payload=report.model_dump(mode="json"),
-                created_at_utc=now_utc,
-            )
-            self.db.add(report_model)
-            self.db.commit()
+        # 10. Persist Report Idempotently ONLY if execution has reached a terminal lifecycle state
+        if persist and execution_record.lifecycle_status in (
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+        ):
+            existing_rep = self.db.execute(existing_report_stmt).scalars().first()
+            if not existing_rep:
+                report_model = IntegrationReportModel(
+                    id=str(uuid.uuid4()),
+                    report_id=report_id,
+                    integration_run_id=execution_record.integration_run_id,
+                    execution_id=execution_id,
+                    project_id=project.project_id,
+                    published_by_user_id=user.id if user else None,
+                    report_status="PUBLISHED",
+                    raw_finding_count=len(deduped_findings),
+                    grouped_defect_count=len(correlated_defect_groups),
+                    report_digest=report_digest,
+                    report_payload=report.model_dump(mode="json"),
+                    created_at_utc=now_utc,
+                )
+                self.db.add(report_model)
+                self.db.commit()
 
         return report
 
