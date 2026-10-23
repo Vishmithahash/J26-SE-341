@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
@@ -295,6 +296,7 @@ class SharedExecutionCoordinator:
                     ),
                     "trace_completeness": c1_completeness.value,
                     "evaluator_version": c1_evaluator.EVALUATOR_VERSION,
+                    "checks": [c.model_dump(mode="json") for c in c1_checks],
                 }
 
             # --- Component 2 Evaluation ---
@@ -341,6 +343,14 @@ class SharedExecutionCoordinator:
                         "reasons": c2_result.reasons,
                         "violations_count": len(c2_result.violations),
                         "observed_states": c2_result.observed_states,
+                        "violations": [
+                            v.model_dump(mode="json") for v in c2_result.violations
+                        ],
+                        "first_divergence": (
+                            c2_result.first_divergence.model_dump(mode="json")
+                            if c2_result.first_divergence
+                            else None
+                        ),
                     }
                 else:
                     evaluations["C2"] = {
@@ -433,6 +443,9 @@ class SharedExecutionCoordinator:
                     "c2_facts_provenance": list({f.provenance for f in c2_facts}),
                     "clean_qualification": matched_evidence.clean_qualification.value,
                     "non_evaluation_reasons": c3_result.non_evaluation_reasons,
+                    "rule_results": [
+                        r.model_dump(mode="json") for r in c3_result.rule_results
+                    ],
                 }
 
             # --- Component 4 Evaluation ---
@@ -452,9 +465,17 @@ class SharedExecutionCoordinator:
                 )
                 c4_rec = self.db.execute(contract_query).scalars().first()
                 if c4_rec:
-                    rules = [
-                        PolicyRule.model_validate(r) for r in (c4_rec.rules_data or [])
-                    ]
+                    rules: list[PolicyRule] = []
+                    for r in c4_rec.rules_data or []:
+                        try:
+                            rules.append(PolicyRule.model_validate(r))
+                        except (
+                            ValidationError,
+                            ValueError,
+                            TypeError,
+                            KeyError,
+                        ) as exc:
+                            logger.debug("Skipping unparseable policy rule: %s", exc)
                     state_str = str(c4_rec.lifecycle_state)
                     if state_str.upper() in ("APPROVED", "ACCEPTED"):
                         c4_state = ContractLifecycleState.ACCEPTED
@@ -480,6 +501,9 @@ class SharedExecutionCoordinator:
                         "verdict": c4_report.overall_verdict.value,
                         "findings_count": len(c4_report.findings),
                         "summary": c4_report.summary,
+                        "findings": [
+                            f.model_dump(mode="json") for f in c4_report.findings
+                        ],
                     }
                 else:
                     evaluations["C4"] = {

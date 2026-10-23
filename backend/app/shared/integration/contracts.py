@@ -499,3 +499,224 @@ class ExecutionListResponse(BaseModel):
 
     items: list[ExecutionStatusResponse] = Field(default_factory=list)
     total: int = Field(default=0)
+
+
+# ---------------------------------------------------------------------------
+# Combined QA Reporting, Finding Linkage, and Evidence Replay Contracts
+# ---------------------------------------------------------------------------
+
+
+class ComponentContribution(BaseModel):
+    """Standardized component contribution within a combined QA report."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    component: ComponentType = Field(..., description="Component identifier")
+    native_entity_id: str = Field(..., description="Referenced entity ID")
+    evaluation_version: str = Field(
+        default="2026.1", description="Evaluation contract/schema version"
+    )
+    evaluator_version: str = Field(
+        default="1.0.0", description="Evaluator engine version"
+    )
+    status: str = Field(
+        ...,
+        description="Status: EVALUATED, NOT_EVALUATED, NOT_READY, BLOCKED, FAILED",
+    )
+    native_verdict: str | None = Field(
+        default=None,
+        description="Native component verdict without flattening into generic PASS/FAIL",
+    )
+    checks_or_rules_count: int = Field(
+        default=0, description="Total checks or rules executed"
+    )
+    violations_or_findings_count: int = Field(
+        default=0, description="Total violations or findings recorded"
+    )
+    native_details: dict[str, Any] = Field(
+        default_factory=dict, description="Detailed component-specific results"
+    )
+    evidence_references: list[str] = Field(
+        default_factory=list, description="Sanitized evidence identifiers"
+    )
+    non_evaluation_reasons: list[str] = Field(
+        default_factory=list, description="Reasons if component was not evaluated"
+    )
+
+
+class UnifiedFinding(BaseModel):
+    """An individual finding or violation recorded by a component."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    finding_id: str = Field(
+        ..., description="Deterministic unique identifier for deduplication"
+    )
+    component: ComponentType = Field(
+        ..., description="Originating component (C1, C2, C3, C4)"
+    )
+    rule_or_check_id: str = Field(..., description="Check, rule, or transition ID")
+    native_verdict: str = Field(..., description="Native component verdict")
+    severity: str = Field(
+        default="VIOLATION",
+        description="Severity: INFO, WARNING, VIOLATION, CRITICAL",
+    )
+    event_id: str | None = Field(default=None, description="Correlated event reference")
+    tool_call_id: str | None = Field(
+        default=None, description="Correlated tool call identifier"
+    )
+    entity_id: str | None = Field(
+        default=None, description="Correlated domain entity ID"
+    )
+    message: str = Field(..., description="Finding description or failure reason")
+    supporting_evidence: dict[str, Any] | None = Field(
+        default=None, description="Supporting evidence excerpt"
+    )
+
+
+class CorrelatedFindingGroup(BaseModel):
+    """Group of distinct component findings linked through shared event or entity references."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    group_id: str = Field(..., description="Unique cluster ID")
+    correlation_key: str = Field(
+        ..., description="Correlation key e.g. event:<id> or entity:<id>"
+    )
+    shared_entity_or_event_ref: str = Field(
+        ..., description="Shared entity or event reference"
+    )
+    finding_ids: list[str] = Field(
+        default_factory=list, description="IDs of linked findings"
+    )
+    involved_components: list[ComponentType] = Field(
+        default_factory=list, description="Components involved in this group"
+    )
+    findings: list[UnifiedFinding] = Field(
+        default_factory=list, description="Distinct individual findings (uncollapsed)"
+    )
+    correlation_explanation: str = Field(
+        ..., description="Explanation of why these findings are correlated"
+    )
+
+
+class ReportCompletenessSummary(BaseModel):
+    """Completeness metrics and component coverage breakdown for the run."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    requested_components: list[ComponentType] = Field(
+        default_factory=list, description="Components requested in run plan"
+    )
+    evaluated_components: list[ComponentType] = Field(
+        default_factory=list, description="Components that actually evaluated evidence"
+    )
+    not_ready_components: list[ComponentType] = Field(
+        default_factory=list, description="Components that failed readiness"
+    )
+    blocked_components: list[ComponentType] = Field(
+        default_factory=list, description="Components blocked from running"
+    )
+    failed_execution_components: list[ComponentType] = Field(
+        default_factory=list, description="Components that failed during execution"
+    )
+    not_evaluated_components: list[ComponentType] = Field(
+        default_factory=list, description="Components in plan that were not evaluated"
+    )
+    pending_or_missing_evidence: list[str] = Field(
+        default_factory=list, description="Identified missing evidence or gaps"
+    )
+    per_component_verdicts: dict[str, str] = Field(
+        default_factory=dict, description="Native verdict per component"
+    )
+    per_component_counts: dict[str, int] = Field(
+        default_factory=dict, description="Total checks count per component"
+    )
+    overall_verdict: str = Field(
+        ...,
+        description="Overall verdict (PASSED, FAILED, PARTIAL, BLOCKED, NOT_EVALUATED)",
+    )
+
+
+class CombinedQAReport(BaseModel):
+    """Combined cross-component QA report consolidating all evaluated findings."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    report_id: str = Field(..., description="Unique report identifier")
+    integration_run_id: str = Field(..., description="Shared integration run ID")
+    execution_id: str = Field(..., description="Execution identifier")
+    project_id: str = Field(..., description="Project scoping identifier")
+    target_mode: str = Field(
+        default="CONTROLLED_TEST",
+        description="Execution mode (CONTROLLED_TEST/LIVE_AUT)",
+    )
+    provenance: dict[str, Any] = Field(
+        default_factory=dict, description="Runner, environment, and provenance details"
+    )
+    generated_at_utc: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        description="Report generation timestamp in UTC",
+    )
+    completeness: ReportCompletenessSummary = Field(
+        ..., description="Completeness summary"
+    )
+    component_contributions: dict[str, ComponentContribution] = Field(
+        default_factory=dict, description="Per-component contributions"
+    )
+    raw_finding_count: int = Field(
+        default=0, description="Raw total count of individual findings"
+    )
+    grouped_defect_count: int = Field(
+        default=0,
+        description="Count of distinct defect groups / correlated incident clusters",
+    )
+    findings: list[UnifiedFinding] = Field(
+        default_factory=list, description="Uncollapsed individual findings"
+    )
+    correlated_defect_groups: list[CorrelatedFindingGroup] = Field(
+        default_factory=list, description="Correlated finding groups"
+    )
+    report_digest: str = Field(
+        ..., description="Deterministic SHA256 content digest of combined report"
+    )
+
+
+class ReplayComparisonResponse(BaseModel):
+    """Deterministic comparison between original execution evaluation and evidence replay."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    execution_id: str = Field(..., description="Execution ID replayed")
+    is_semantically_identical: bool = Field(
+        ..., description="True if semantic verdicts and counts match exactly"
+    )
+    original_evaluations: dict[str, Any] = Field(
+        default_factory=dict, description="Evaluations stored in original run"
+    )
+    replayed_evaluations: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Evaluations produced by replaying retained evidence",
+    )
+    semantic_diffs: list[str] = Field(
+        default_factory=list, description="Differences found if any"
+    )
+    nondeterministic_fields_ignored: list[str] = Field(
+        default_factory=list,
+        description="Non-deterministic fields excluded from equality comparison",
+    )
+    replayed_at_utc: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        description="Timestamp of replay in UTC",
+    )
+
+
+class IntegrationReportListResponse(BaseModel):
+    """Paginated list of combined QA reports."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[CombinedQAReport] = Field(default_factory=list)
+    total: int = Field(default=0)
+    page: int = Field(default=1)
+    page_size: int = Field(default=20)

@@ -9,7 +9,6 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.shared.auth.dependencies import require_active_user
 from app.shared.auth.models import User, UserRole
 from app.shared.projects.models import Project

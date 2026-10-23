@@ -5,6 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.components.c4_policy_aware_safety.api.dependencies import (
+    get_authorized_c4_project,
+)
 from app.components.c4_policy_aware_safety.contracts.artifacts import (
     ArtifactCreate,
     ArtifactVersionRecord,
@@ -116,9 +119,6 @@ from app.components.c4_policy_aware_safety.validation.case_validator import (
 )
 from app.components.c4_policy_aware_safety.validation.validator import (
     PolicyContractValidator,
-)
-from app.components.c4_policy_aware_safety.api.dependencies import (
-    get_authorized_c4_project,
 )
 from app.database import get_db
 from app.shared.auth.dependencies import require_active_user

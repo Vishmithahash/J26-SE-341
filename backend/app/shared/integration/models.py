@@ -95,6 +95,12 @@ class IntegrationRunPlanModel(Base):
         cascade="all, delete-orphan",
         order_by="IntegrationExecutionModel.created_at_utc.desc()",
     )
+    reports: Mapped[list["IntegrationReportModel"]] = relationship(
+        "IntegrationReportModel",
+        back_populates="run_plan",
+        cascade="all, delete-orphan",
+        order_by="IntegrationReportModel.created_at_utc.desc()",
+    )
 
 
 class IntegrationIdentifierMappingModel(Base):
@@ -214,4 +220,68 @@ class IntegrationExecutionModel(Base):
 
     run_plan: Mapped["IntegrationRunPlanModel"] = relationship(
         "IntegrationRunPlanModel", back_populates="executions"
+    )
+    reports: Mapped[list["IntegrationReportModel"]] = relationship(
+        "IntegrationReportModel",
+        back_populates="execution",
+        cascade="all, delete-orphan",
+        order_by="IntegrationReportModel.created_at_utc.desc()",
+    )
+
+
+class IntegrationReportModel(Base):
+    """Additive persistence for combined cross-component QA reports."""
+
+    __tablename__ = "integration_reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    report_id: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
+    )
+    execution_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("integration_executions.execution_id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    integration_run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("integration_run_plans.integration_run_id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    published_by_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    report_status: Mapped[str] = mapped_column(
+        String(32), default="PUBLISHED", index=True, nullable=False
+    )
+    report_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_finding_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    grouped_defect_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    report_payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
+
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    execution: Mapped["IntegrationExecutionModel"] = relationship(
+        "IntegrationExecutionModel", back_populates="reports"
+    )
+    run_plan: Mapped["IntegrationRunPlanModel"] = relationship(
+        "IntegrationRunPlanModel", back_populates="reports"
     )

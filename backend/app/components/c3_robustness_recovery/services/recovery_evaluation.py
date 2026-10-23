@@ -18,7 +18,10 @@ from app.components.c3_robustness_recovery.contracts.evaluation import (
     RecoveryVerdict,
     RuleEvaluationStatus,
 )
-from app.components.c3_robustness_recovery.contracts.schemas import EffectPhase, TerminalOutcome
+from app.components.c3_robustness_recovery.contracts.schemas import (
+    EffectPhase,
+    TerminalOutcome,
+)
 from app.components.c3_robustness_recovery.runtime.adapter import (
     CleanupStatus,
     RecoveryActor,

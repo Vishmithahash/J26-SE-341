@@ -10,24 +10,29 @@ Enforces:
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.shared.auth.dependencies import require_active_user
 from app.shared.auth.models import User
 from app.shared.integration.contracts import (
+    CombinedQAReport,
     ComponentReferencesPlan,
     ExecutionListResponse,
     ExecutionStartRequest,
     ExecutionStatusResponse,
     IntegrationPlanListResponse,
     IntegrationReadinessReport,
+    IntegrationReportListResponse,
     IntegrationRunPlanCreateRequest,
     IntegrationRunPlanResponse,
     ReadinessCheckRequest,
+    ReplayComparisonResponse,
 )
 from app.shared.integration.executor import SharedExecutionCoordinator
+from app.shared.integration.replay import EvidenceReplayService
+from app.shared.integration.reporting import SharedReportAggregator
 from app.shared.integration.service import IntegrationService
 from app.shared.projects.models import Project
 from app.shared.projects.service import get_project
@@ -217,3 +222,125 @@ def cancel_execution(
     """Cancel an active execution."""
     coordinator = SharedExecutionCoordinator(db)
     return coordinator.cancel_execution(project, plan_id, execution_id)
+
+
+@router.get(
+    "/plans/{plan_id}/executions/{execution_id}/report",
+    response_model=CombinedQAReport,
+    status_code=status.HTTP_200_OK,
+    summary="Retrieve or generate a combined cross-component QA report",
+    description=(
+        "Consumes persisted component findings and verdicts for the execution. "
+        "Links related findings across shared events/entities without collapsing distinct defects. "
+        "Deduplicates repeated publications using stable hashes."
+    ),
+)
+def get_combined_report(
+    project_id: str,
+    plan_id: str,
+    execution_id: str,
+    current_user: Annotated[User, Depends(require_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+    project: Annotated[Project, Depends(get_authorized_project)],
+) -> CombinedQAReport:
+    """Retrieve or generate combined QA report."""
+    aggregator = SharedReportAggregator(db)
+    return aggregator.generate_report(
+        project, execution_id, user=current_user, persist=True
+    )
+
+
+@router.get(
+    "/plans/{plan_id}/executions/{execution_id}/report/export",
+    status_code=status.HTTP_200_OK,
+    summary="Export combined QA report as JSON or CSV",
+    description="Exports the combined QA report in formatted JSON or structured CSV format.",
+)
+def export_combined_report(
+    project_id: str,
+    plan_id: str,
+    execution_id: str,
+    format: str = Query(
+        default="json", pattern="^(json|csv)$", description="Export format"
+    ),
+    current_user: Annotated[User, Depends(require_active_user)] = None,
+    db: Annotated[Session, Depends(get_db)] = None,
+    project: Annotated[Project, Depends(get_authorized_project)] = None,
+) -> Response:
+    """Export combined QA report."""
+    aggregator = SharedReportAggregator(db)
+    report = aggregator.generate_report(
+        project, execution_id, user=current_user, persist=False
+    )
+    if format == "csv":
+        csv_data = aggregator.export_report_csv(report)
+        return Response(
+            content=csv_data,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="report_{execution_id}.csv"'
+            },
+        )
+    else:
+        json_data = aggregator.export_report_json(report)
+        return Response(
+            content=json_data,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="report_{execution_id}.json"'
+            },
+        )
+
+
+@router.post(
+    "/plans/{plan_id}/executions/{execution_id}/replay",
+    response_model=ReplayComparisonResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Replay evaluation from retained evidence without target execution",
+    description=(
+        "Replays stored execution evidence through pinned component evaluators. "
+        "Strictly verifies deterministic semantic equality without re-executing target services."
+    ),
+)
+def replay_evaluation(
+    project_id: str,
+    plan_id: str,
+    execution_id: str,
+    current_user: Annotated[User, Depends(require_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+    project: Annotated[Project, Depends(get_authorized_project)],
+) -> ReplayComparisonResponse:
+    """Replay retained evidence evaluation."""
+    replay_service = EvidenceReplayService(db)
+    return replay_service.replay_execution(project, current_user, execution_id)
+
+
+@router.get(
+    "/reports",
+    response_model=IntegrationReportListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List published combined QA reports for a project",
+    description="Returns a paginated list of published combined QA reports with optional component, verdict, and execution mode filters.",
+)
+def list_reports(
+    project_id: str,
+    project: Annotated[Project, Depends(get_authorized_project)],
+    db: Annotated[Session, Depends(get_db)],
+    component: str | None = Query(default=None, description="Filter by component"),
+    verdict: str | None = Query(default=None, description="Filter by overall verdict"),
+    execution_mode: str | None = Query(
+        default=None, description="Filter by target mode"
+    ),
+    page: int = Query(default=1, ge=1, description="Page number"),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
+) -> IntegrationReportListResponse:
+    """List combined reports for project."""
+    aggregator = SharedReportAggregator(db)
+    return aggregator.list_reports(
+        project=project,
+        component=component,
+        verdict=verdict,
+        execution_mode=execution_mode,
+        page=page,
+        page_size=page_size,
+    )

@@ -1189,16 +1189,17 @@ python -m pip check
 
 ---
 
-## Shared Integration & Architecture Design Notes (Design Only)
+## Shared Backend Integration (Parts 1–3 Implemented & Verified)
 
-The following integration agreements are documented for team alignment and will be finalized prior to component implementation:
-1. **Identifier Conventions**: Uniform format for shared identifiers: `project_id`, `case_id`, `run_id`, and `event_id`.
-2. **C3 Matched Trials**: Pairwise identifiers explicitly linking matched baseline (clean) and fault-injected trials for differential evaluation.
-3. **Traceability Metadata**: Versioned tracking for test tasks, environment fixtures, tool adapters, agent/LLM models, contract schemas, and evaluation heuristics.
-4. **Distinct Verdict Semantics**: Strict conceptual separation between test *readiness*, execution *health*, fault *exposure*, and individual component *verdicts*.
-5. **Component Boundary (C2 & C3)**: C2 owns multi-step state machine modeling and workflow state assertions; C3 consumes discrete `true` / `false` / `unknown` state facts to evaluate recovery behavior without re-implementing state checking.
-6. **Decoupled Evaluation Rules**: Each research component maintains authoritative ownership of its specialized generation algorithms and evaluation rules.
-7. **Unified Execution Infrastructure**: Shared execution orchestration, target fixture/state reset, and evidence transport designed once as a shared capability rather than re-invented across components.
-8. **Deduplicated Findings**: Vulnerabilities, faults, and failures reference shared `event_id` traces without multiplying counts for a single root cause.
-9. **Database Boundary**: QA framework test metadata, evidence, and run results remain strictly partitioned in the QA framework database, completely isolated from Application-Under-Test (AUT) databases.
-10. **Shared Code & Migration Coordination**: Clear code ownership across shared foundations (`app/database.py`, `app/config.py`, `alembic/`) with synchronized Alembic migration reviews across component teams.
+The shared integration infrastructure unites the four research components (C1, C2, C3, C4) into an end-to-end, project-scoped QA execution and reporting pipeline.
+
+### Core Capabilities:
+1. **Intake & Run Planning**: Authenticated project scoping, pinned configuration versions, and immutable run plans (`IntegrationRunPlanModel`).
+2. **Coordinated Shared Execution**: Isolated fixture namespaces, clean/fault matched trial execution (`SharedExecutionCoordinator`), and unified trace capture.
+3. **C2-to-C3 Named State Facts**: C2 EFSM state assertions project into C3 recovery evaluation via `AssertionBridgeFacade` preserving provenance.
+4. **Combined QA Reporting**: `SharedReportAggregator` consumes authentic component findings, connects C2's publisher (`IntegrationStatus.CONNECTED`), deduplicates repeated findings via stable SHA-256 identities, links related events, and exposes raw vs. grouped defect counts.
+5. **Deterministic Evidence Replay**: `EvidenceReplayService` re-evaluates stored trace evidence against pinned configurations without invoking the target application.
+6. **Project-Scoped API & Export**: Endpoints under `/api/v1/projects/{project_id}/integration/*` for execution, reporting, JSON/CSV exports, and bounded pagination.
+
+For the full architectural specification, API/CLI references, and operational matrix, see [docs/backend_integration.md](docs/backend_integration.md).
+
