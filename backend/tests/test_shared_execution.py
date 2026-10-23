@@ -1,3 +1,17 @@
+from app.components.c4_policy_aware_safety.contracts.enums import (
+    ContractLifecycleState,
+    EvaluationBoundary,
+    PolicyFamily,
+    PolicyRequirement,
+    Severity,
+)
+from app.components.c4_policy_aware_safety.contracts.predicates import (
+    CompoundOperator,
+    CompoundPredicate,
+)
+from app.components.c4_policy_aware_safety.contracts.rules import PolicyRule
+from app.shared.integration.models import IntegrationExecutionModel
+
 """Comprehensive integration test suite for Backend Integration — Part 2:
 Shared execution coordination, correlated evidence, and multi-evaluator routing.
 
@@ -18,7 +32,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -212,13 +226,32 @@ def seed_all_components(
     )
     db_session.add(c3_case)
 
-    # 4. C4 Approved Contract
+    # 4. C4 Accepted Contract
+    valid_c4_rule = PolicyRule(
+        project_id=p_id,
+        rule_id="pol_exec_01",
+        rule_version=1,
+        policy_family=PolicyFamily.AUTHORIZATION,
+        principal_selector="*",
+        action_selector="*",
+        resource_selector="*",
+        policy_requirement=PolicyRequirement.REQUIRE,
+        compliance_conditions=CompoundPredicate(
+            operator=CompoundOperator.ALL, conditions=[]
+        ),
+        evaluation_boundary=EvaluationBoundary.ATTEMPTED_ACTION,
+        required_evidence=["trace"],
+        severity=Severity.HIGH,
+        source_references=[],
+    ).model_dump(mode="json")
+
     c4_contract = C4ContractModel(
         project_id=p_id,
         contract_id="contract-c4-refund",
         version=1,
-        lifecycle_state="APPROVED",
+        lifecycle_state=ContractLifecycleState.ACCEPTED.value,
         content_hash="d" * 64,
+        rules_data=[valid_c4_rule],
     )
     db_session.add(c4_contract)
     db_session.commit()
@@ -436,6 +469,7 @@ def test_safe_execution_cancellation(
     seed_project: Project,
     user_auth_headers: dict[str, str],
     seed_all_components: dict[str, Any],
+    db_session: Session,
 ):
     """Verify safe cancellation sets lifecycle_status to CANCELLED without corrupting state."""
     p_id = seed_project.project_id
@@ -451,6 +485,19 @@ def test_safe_execution_cancellation(
         headers=user_auth_headers,
     )
     exec_id = exec_resp.json()["execution_id"]
+
+    # Simulate an active in-flight execution prior to cancellation
+    exec_record = (
+        db_session.execute(
+            select(IntegrationExecutionModel).where(
+                IntegrationExecutionModel.execution_id == exec_id
+            )
+        )
+        .scalars()
+        .first()
+    )
+    exec_record.lifecycle_status = "RUNNING"
+    db_session.commit()
 
     # Cancel execution
     cancel_resp = test_client.post(
@@ -508,3 +555,13 @@ def test_developer_cli_execution_and_status(
         db=db_session,
     )
     assert code == 0
+
+
+from sqlalchemy import event
+
+
+@event.listens_for(test_engine, "connect")
+def _set_sqlite_fk(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON;")
+    cursor.close()

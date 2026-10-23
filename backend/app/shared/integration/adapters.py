@@ -42,6 +42,7 @@ class RawToolEvent(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    event_id: str = Field(default_factory=lambda: f"evt_{uuid.uuid4().hex[:12]}")
     call_index: int
     tool_name: str
     arguments: dict[str, Any]
@@ -348,6 +349,7 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
                 # Simulate timeout or fault error
                 tool_events.append(
                     RawToolEvent(
+                        event_id=f"evt_{trace_id}_{call_idx}",
                         call_index=call_idx,
                         tool_name=tool_name,
                         arguments=sanitized_args,
@@ -360,29 +362,36 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
 
                 # Agent retry under fault trial
                 if trial_role == "FAULT":
-                    call_idx += 1
-                    idempotency_key = f"idem-{uuid.uuid4().hex[:8]}"
-                    partition["order"]["status"] = "CONFIRMED"
-                    partition["inventory"]["reserved"] = True
-                    partition["side_effects"]["calls_made"] += 1
-                    partition["idempotency"]["keys_seen"].append(idempotency_key)
-
-                    tool_events.append(
-                        RawToolEvent(
-                            call_index=call_idx,
-                            tool_name=tool_name,
-                            arguments={
-                                **sanitized_args,
-                                "idempotency_key": idempotency_key,
-                            },
-                            output={"order_id": "ord-001", "status": "CONFIRMED"},
-                            success=True,
-                            latency_ms=12.0,
-                            side_effect_occurred=True,
-                            idempotency_key=idempotency_key,
+                    if call_idx >= max_tool_calls:
+                        caller_outcome = "CALLER_TIMEOUT_EXCEEDED"
+                    else:
+                        call_idx += 1
+                    if call_idx >= max_tool_calls:
+                        caller_outcome = "CALLER_TIMEOUT_EXCEEDED"
+                    else:
+                        call_idx += 1
+                        idempotency_key = f"idem-{uuid.uuid4().hex[:8]}"
+                        partition["order"]["status"] = "CONFIRMED"
+                        partition["inventory"]["reserved"] = True
+                        partition["side_effects"]["calls_made"] += 1
+                        partition["idempotency"]["keys_seen"].append(idempotency_key)
+                        tool_events.append(
+                            RawToolEvent(
+                                event_id=f"evt_{trace_id}_{call_idx}",
+                                call_index=call_idx,
+                                tool_name=tool_name,
+                                arguments={
+                                    **sanitized_args,
+                                    "idempotency_key": idempotency_key,
+                                },
+                                output={"order_id": "ord-001", "status": "CONFIRMED"},
+                                success=True,
+                                latency_ms=12.0,
+                                side_effect_occurred=True,
+                                idempotency_key=idempotency_key,
+                            )
                         )
-                    )
-                    caller_outcome = "SUCCESS_CLEAN_RECOVERY"
+                        caller_outcome = "SUCCESS_CLEAN_RECOVERY"
             else:
                 # Normal execution without fault
                 partition["order"]["status"] = "CONFIRMED"
@@ -390,6 +399,7 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
                 partition["side_effects"]["calls_made"] += 1
                 tool_events.append(
                     RawToolEvent(
+                        event_id=f"evt_{trace_id}_{call_idx}",
                         call_index=call_idx,
                         tool_name=tool_name,
                         arguments=sanitized_args,
@@ -401,7 +411,9 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
                 )
 
         # 2. refund_processing if permitted
-        if "process_refund" in permitted_tools or "refund_request" in permitted_tools:
+        if (
+            "process_refund" in permitted_tools or "refund_request" in permitted_tools
+        ) and call_idx < max_tool_calls:
             call_idx += 1
             tool_name = (
                 "process_refund"
@@ -413,6 +425,7 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
             partition["side_effects"]["calls_made"] += 1
             tool_events.append(
                 RawToolEvent(
+                    event_id=f"evt_{trace_id}_{call_idx}",
                     call_index=call_idx,
                     tool_name=tool_name,
                     arguments=sanitize_payload(args),

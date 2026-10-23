@@ -4,13 +4,15 @@ Component: Shared Integration Foundation (Part 1)
 Enforces:
 - Authenticated platform access via require_active_user.
 - Strict project scoping and safe authorization via get_project.
-- Prevention of cross-project references.
-- Retrieval and creation of frozen run plans.
+- Nested route hierarchy verification: project -> plan -> execution -> report.
+- Prevention of cross-project and wrong-plan identifier leakage.
+- Bounded pagination for both plans and executions.
 """
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -31,6 +33,10 @@ from app.shared.integration.contracts import (
     ReplayComparisonResponse,
 )
 from app.shared.integration.executor import SharedExecutionCoordinator
+from app.shared.integration.models import (
+    IntegrationExecutionModel,
+    IntegrationRunPlanModel,
+)
 from app.shared.integration.replay import EvidenceReplayService
 from app.shared.integration.reporting import SharedReportAggregator
 from app.shared.integration.service import IntegrationService
@@ -53,6 +59,42 @@ def get_authorized_project(
     Fails closed with HTTP 404 if project is missing or owned by another user.
     """
     return get_project(db, current_user, project_id)
+
+
+def verify_nested_plan_execution(
+    project_id: str,
+    plan_id: str,
+    execution_id: str,
+    db: Session,
+) -> tuple[IntegrationRunPlanModel, IntegrationExecutionModel]:
+    """Verify that execution exists and strictly belongs to the specified plan within project."""
+    plan_query = select(IntegrationRunPlanModel).where(
+        IntegrationRunPlanModel.project_id == project_id,
+        (
+            (IntegrationRunPlanModel.id == plan_id)
+            | (IntegrationRunPlanModel.integration_run_id == plan_id)
+        ),
+    )
+    plan = db.execute(plan_query).scalars().first()
+    if not plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Integration run plan '{plan_id}' not found in project '{project_id}'.",
+        )
+
+    exec_query = select(IntegrationExecutionModel).where(
+        IntegrationExecutionModel.project_id == project_id,
+        IntegrationExecutionModel.execution_id == execution_id,
+        IntegrationExecutionModel.integration_run_id == plan.integration_run_id,
+    )
+    execution = db.execute(exec_query).scalars().first()
+    if not execution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found under plan '{plan_id}'.",
+        )
+
+    return plan, execution
 
 
 @router.post(
@@ -120,41 +162,44 @@ def get_integration_plan(
     "/plans/validate-readiness",
     response_model=IntegrationReadinessReport,
     status_code=status.HTTP_200_OK,
-    summary="Validate integration readiness for candidate component references",
-    description=(
-        "Performs ad-hoc deterministic readiness evaluation for candidate component references "
-        "without persisting a run plan. Detects unapproved models, unfrozen suites, and missing configs."
-    ),
+    summary="Pre-validate component readiness without creating a plan",
+    description="Simulates plan creation checks and returns readiness status, gate results, and missing configuration details.",
 )
-def validate_readiness(
+def validate_component_readiness(
     project_id: str,
     payload: ReadinessCheckRequest,
     project: Annotated[Project, Depends(get_authorized_project)],
     db: Annotated[Session, Depends(get_db)],
 ) -> IntegrationReadinessReport:
-    """Validate readiness for candidate component references."""
+    """Evaluate readiness without freezing a plan."""
     service = IntegrationService(db)
-    references = ComponentReferencesPlan(
+    refs = ComponentReferencesPlan(
         c1=payload.c1_reference,
         c2=payload.c2_reference,
         c3=payload.c3_reference,
         c4=payload.c4_reference,
     )
-    return service.check_readiness(project_id, references)
+    return service.check_readiness(project.project_id, refs)
 
 
+@router.post(
+    "/plans/{plan_id}/executions",
+    response_model=ExecutionStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute a validated integration run plan",
+)
 @router.post(
     "/plans/{plan_id}/execute",
     response_model=ExecutionStatusResponse,
     status_code=status.HTTP_200_OK,
-    summary="Execute a frozen integration run plan",
+    summary="Execute a validated integration run plan",
     description=(
-        "Launches coordinated execution of the validated run plan. "
-        "Executes the application once per trial, captures retained evidence, "
-        "and evaluates the evidence using C1, C2, C3, and C4 evaluators."
+        "Dispatches execution against the selected target (CONTROLLED_TEST_FIXTURE or LIVE_AUT). "
+        "Enforces honest readiness: rejects LIVE_AUT mode when target service is BLOCKED without falling back to simulation. "
+        "Retains correlated traces, evaluates against all planned components, and computes evidence digest."
     ),
 )
-def execute_plan(
+def execute_integration_plan(
     project_id: str,
     plan_id: str,
     payload: ExecutionStartRequest,
@@ -172,17 +217,19 @@ def execute_plan(
     response_model=ExecutionListResponse,
     status_code=status.HTTP_200_OK,
     summary="List executions for an integration run plan",
-    description="Returns all executions and evaluations performed for this plan.",
+    description="Returns all executions and evaluations performed for this plan with bounded pagination.",
 )
 def list_executions(
     project_id: str,
     plan_id: str,
     project: Annotated[Project, Depends(get_authorized_project)],
     db: Annotated[Session, Depends(get_db)],
+    page: int = Query(default=1, ge=1, description="Page number"),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
 ) -> ExecutionListResponse:
-    """List executions for a plan."""
+    """List executions for a plan with bounded pagination."""
     coordinator = SharedExecutionCoordinator(db)
-    return coordinator.list_executions(project, plan_id)
+    return coordinator.list_executions(project, plan_id, page=page, page_size=page_size)
 
 
 @router.get(
@@ -209,7 +256,7 @@ def get_execution(
     response_model=ExecutionStatusResponse,
     status_code=status.HTTP_200_OK,
     summary="Cancel an ongoing execution",
-    description="Safely requests execution cancellation with bounded settling.",
+    description="Safely requests execution cancellation with bounded settling. Rejects cancellation of completed executions with HTTP 409.",
 )
 def cancel_execution(
     project_id: str,
@@ -232,7 +279,7 @@ def cancel_execution(
     description=(
         "Consumes persisted component findings and verdicts for the execution. "
         "Links related findings across shared events/entities without collapsing distinct defects. "
-        "Deduplicates repeated publications using stable hashes."
+        "Report retrieval is idempotent and does not overwrite published history."
     ),
 )
 def get_combined_report(
@@ -244,6 +291,7 @@ def get_combined_report(
     project: Annotated[Project, Depends(get_authorized_project)],
 ) -> CombinedQAReport:
     """Retrieve or generate combined QA report."""
+    verify_nested_plan_execution(project.project_id, plan_id, execution_id, db)
     aggregator = SharedReportAggregator(db)
     return aggregator.generate_report(
         project, execution_id, user=current_user, persist=True
@@ -268,6 +316,7 @@ def export_combined_report(
     project: Annotated[Project, Depends(get_authorized_project)] = None,
 ) -> Response:
     """Export combined QA report."""
+    verify_nested_plan_execution(project.project_id, plan_id, execution_id, db)
     aggregator = SharedReportAggregator(db)
     report = aggregator.generate_report(
         project, execution_id, user=current_user, persist=False
@@ -311,8 +360,11 @@ def replay_evaluation(
     project: Annotated[Project, Depends(get_authorized_project)],
 ) -> ReplayComparisonResponse:
     """Replay retained evidence evaluation."""
+    verify_nested_plan_execution(project.project_id, plan_id, execution_id, db)
     replay_service = EvidenceReplayService(db)
-    return replay_service.replay_execution(project, current_user, execution_id)
+    return replay_service.replay_execution(
+        project, current_user, execution_id, plan_identifier=plan_id
+    )
 
 
 @router.get(

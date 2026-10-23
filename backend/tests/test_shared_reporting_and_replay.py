@@ -1,3 +1,17 @@
+from app.components.c4_policy_aware_safety.contracts.enums import (
+    ContractLifecycleState,
+    EvaluationBoundary,
+    PolicyFamily,
+    PolicyRequirement,
+    Severity,
+)
+from app.components.c4_policy_aware_safety.contracts.predicates import (
+    CompoundOperator,
+    CompoundPredicate,
+)
+from app.components.c4_policy_aware_safety.contracts.rules import PolicyRule
+from app.shared.integration.models import IntegrationExecutionModel
+
 """Comprehensive integration and acceptance test suite for Backend Integration — Part 3:
 Combined QA reporting, finding linkage, evidence replay, and final integration verification.
 
@@ -62,9 +76,6 @@ from app.shared.integration.contracts import (
     C3SuiteReference,
     C4PolicyReference,
     IntegrationRunPlanCreateRequest,
-)
-from app.shared.integration.models import (
-    IntegrationExecutionModel,
 )
 from app.shared.integration.reporting import SharedReportAggregator
 from app.shared.integration.service import IntegrationService
@@ -225,20 +236,31 @@ def _seed_valid_components(
     db.add(c3_case)
 
     # 4. C4
+    valid_c4_rep_rule = PolicyRule(
+        project_id=project_id,
+        rule_id="POL-NO-DIRECT-REFUND",
+        rule_version=1,
+        policy_family=PolicyFamily.AUTHORIZATION,
+        principal_selector="*",
+        action_selector="*",
+        resource_selector="*",
+        policy_requirement=PolicyRequirement.REQUIRE,
+        compliance_conditions=CompoundPredicate(
+            operator=CompoundOperator.ALL, conditions=[]
+        ),
+        evaluation_boundary=EvaluationBoundary.ATTEMPTED_ACTION,
+        required_evidence=["trace"],
+        severity=Severity.HIGH,
+        source_references=[],
+    ).model_dump(mode="json")
+
     c4_contract = C4ContractModel(
         project_id=project_id,
         contract_id="contract-c4-refund",
         version=1,
-        lifecycle_state="APPROVED",
+        lifecycle_state=ContractLifecycleState.ACCEPTED.value,
         content_hash="d" * 64,
-        rules_data=[
-            {
-                "rule_id": "POL-NO-DIRECT-REFUND",
-                "rule_type": "ACTION_RESTRICTION",
-                "severity": "HIGH",
-                "parameters": {"forbidden_tool": "unauthorized_refund"},
-            }
-        ],
+        rules_data=[valid_c4_rep_rule],
     )
     db.add(c4_contract)
     db.commit()
@@ -802,3 +824,13 @@ def test_cross_project_isolation_on_reports_and_replay(
         f"/api/v1/projects/{test_project.project_id}/integration/plans/{plan.plan_id}/executions/{exec_record.execution_id}/report"
     )
     assert unauth_resp.status_code == 401
+
+
+from sqlalchemy import event
+
+
+@event.listens_for(test_engine, "connect")
+def _set_sqlite_fk(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON;")
+    cursor.close()

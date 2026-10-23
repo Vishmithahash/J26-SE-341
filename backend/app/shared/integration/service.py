@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.components.c1_tool_call_correctness.models.persistence import (
     C1ProjectConfigModel,
+    C1SuiteVersionModel,
 )
 from app.components.c2_state_aware_workflow.persistence.models import (
     C2WorkflowModel,
@@ -28,9 +29,14 @@ from app.components.c2_state_aware_workflow.persistence.models import (
 from app.components.c3_robustness_recovery.models.persistence import (
     C3SuiteModel,
 )
+from app.components.c4_policy_aware_safety.contracts.enums import (
+    ContractLifecycleState,
+)
+from app.components.c4_policy_aware_safety.contracts.rules import (
+    PolicyRule,
+)
 from app.components.c4_policy_aware_safety.persistence.models import (
     C4ContractModel,
-    C4TestCaseModel,
 )
 from app.shared.auth.models import User
 from app.shared.integration.contracts import (
@@ -117,18 +123,13 @@ class IntegrationService:
                 c1_issues.append(issue)
                 blocking_issues.append(issue)
             else:
-                # Query C1 config
+                # Query C1 config strictly matching project, config_id, and version together
                 config = (
                     self.db.execute(
                         select(C1ProjectConfigModel).where(
-                            (C1ProjectConfigModel.id == c1_ref.config_id)
-                            | (
-                                (C1ProjectConfigModel.project_id == project_id)
-                                & (
-                                    C1ProjectConfigModel.version
-                                    == c1_ref.config_version
-                                )
-                            )
+                            C1ProjectConfigModel.project_id == project_id,
+                            C1ProjectConfigModel.id == c1_ref.config_id,
+                            C1ProjectConfigModel.version == c1_ref.config_version,
                         )
                     )
                     .scalars()
@@ -163,7 +164,31 @@ class IntegrationService:
                         for t in (config.tools or [])
                         if isinstance(t, dict)
                     ]
-                    c1_ready = True
+
+                    if c1_ref.suite_id:
+                        suite_q = select(C1SuiteVersionModel).where(
+                            C1SuiteVersionModel.project_id == project_id,
+                            C1SuiteVersionModel.config_id == config.id,
+                            C1SuiteVersionModel.suite_id == c1_ref.suite_id,
+                        )
+                        if c1_ref.suite_version is not None:
+                            suite_q = suite_q.where(
+                                C1SuiteVersionModel.version == c1_ref.suite_version
+                            )
+                        c1_suite = self.db.execute(suite_q).scalars().first()
+                        if not c1_suite:
+                            issue = ComponentReadinessIssue(
+                                component=ComponentType.C1,
+                                issue_code=ReadinessIssueCode.SUITE_NOT_FOUND,
+                                message=f"C1 suite '{c1_ref.suite_id}' not found for config '{config.id}'.",
+                                severity=ReadinessSeverity.BLOCKING,
+                            )
+                            c1_issues.append(issue)
+                            blocking_issues.append(issue)
+                        else:
+                            c1_ready = True
+                    else:
+                        c1_ready = True
 
         statuses[ComponentType.C1.value] = ComponentReadinessSummary(
             component=ComponentType.C1,
@@ -373,42 +398,32 @@ class IntegrationService:
                 c4_issues.append(issue)
                 blocking_issues.append(issue)
             else:
-                contract = None
-                if c4_ref.contract_id:
+                if c4_ref.contract_id and c4_ref.contract_version is None:
+                    issue = ComponentReadinessIssue(
+                        component=ComponentType.C4,
+                        issue_code=ReadinessIssueCode.INCOMPLETE_PLAN_SEMANTICS,
+                        message="C4 contract reference requires an explicit pinned contract_version.",
+                        severity=ReadinessSeverity.BLOCKING,
+                    )
+                    c4_issues.append(issue)
+                    blocking_issues.append(issue)
+                    contract = None
+                elif c4_ref.contract_id:
                     query = select(C4ContractModel).where(
                         C4ContractModel.project_id == project_id,
                         C4ContractModel.contract_id == c4_ref.contract_id,
+                        C4ContractModel.version == c4_ref.contract_version,
                     )
-                    if c4_ref.contract_version is not None:
-                        query = query.where(
-                            C4ContractModel.version == c4_ref.contract_version
-                        )
                     contract = self.db.execute(query).scalars().first()
+                else:
+                    contract = None
 
-                if not contract and c4_ref.suite_id:
-                    # Alternative: check frozen test cases
-                    c4_case = (
-                        self.db.execute(
-                            select(C4TestCaseModel).where(
-                                C4TestCaseModel.project_id == project_id,
-                                C4TestCaseModel.case_id == c4_ref.suite_id,
-                            )
-                        )
-                        .scalars()
-                        .first()
-                    )
-                    if c4_case:
-                        c4_ref_id = c4_case.case_id
-                        c4_digest = c4_case.content_hash
-                        c4_ref.frozen_content_hash = c4_case.content_hash
-                        c4_ready = True
-
-                if not contract and not c4_ready:
+                if not contract and not c4_issues:
                     issue = ComponentReadinessIssue(
                         component=ComponentType.C4,
                         issue_code=ReadinessIssueCode.CONTRACT_NOT_FOUND,
                         message=(
-                            f"C4 policy contract '{c4_ref.contract_id}' "
+                            f"C4 policy contract '{c4_ref.contract_id}' (v{c4_ref.contract_version}) "
                             f"not found in project '{project_id}'."
                         ),
                         severity=ReadinessSeverity.BLOCKING,
@@ -421,20 +436,39 @@ class IntegrationService:
                     c4_ref.frozen_content_hash = contract.content_hash
                     c4_ref.lifecycle_state = contract.lifecycle_state
 
-                    if contract.lifecycle_state not in ("APPROVED", "ACTIVE"):
+                    if (
+                        contract.lifecycle_state
+                        != ContractLifecycleState.ACCEPTED.value
+                    ):
                         issue = ComponentReadinessIssue(
                             component=ComponentType.C4,
-                            issue_code=ReadinessIssueCode.UNAPPROVED_CONTRACT,
+                            issue_code=ReadinessIssueCode.UNACCEPTED_CONTRACT,
                             message=(
                                 f"C4 policy contract '{contract.contract_id}' has lifecycle state "
-                                f"'{contract.lifecycle_state}'. Must be APPROVED or ACTIVE."
+                                f"'{contract.lifecycle_state}'. Must be in ACCEPTED state."
                             ),
                             severity=ReadinessSeverity.BLOCKING,
                         )
                         c4_issues.append(issue)
                         blocking_issues.append(issue)
                     else:
-                        c4_ready = True
+                        invalid_rules = []
+                        for r in contract.rules_data or []:
+                            try:
+                                PolicyRule.model_validate(r)
+                            except Exception as exc:  # noqa: BLE001
+                                invalid_rules.append(str(exc))
+                        if invalid_rules:
+                            issue = ComponentReadinessIssue(
+                                component=ComponentType.C4,
+                                issue_code=ReadinessIssueCode.INVALID_POLICY_RULES,
+                                message=f"C4 contract '{contract.contract_id}' contains invalid policy rules: {'; '.join(invalid_rules)}",
+                                severity=ReadinessSeverity.BLOCKING,
+                            )
+                            c4_issues.append(issue)
+                            blocking_issues.append(issue)
+                        else:
+                            c4_ready = True
 
         statuses[ComponentType.C4.value] = ComponentReadinessSummary(
             component=ComponentType.C4,
@@ -524,7 +558,131 @@ class IntegrationService:
         plan_id = str(uuid.uuid4())
         integration_run_id = f"irun-{uuid.uuid4().hex[:12]}"
 
-        # 4. Freeze plan payload and calculate deterministic plan digest
+        # 4. Freeze deep execution inputs snapshot
+        execution_inputs = {}
+        if (
+            ref_plan.c1
+            and readiness.component_statuses.get(
+                ComponentType.C1.value,
+                ComponentReadinessSummary(component=ComponentType.C1, is_ready=False),
+            ).is_ready
+        ):
+            c1_rec = (
+                self.db.execute(
+                    select(C1ProjectConfigModel).where(
+                        C1ProjectConfigModel.project_id == project_id,
+                        C1ProjectConfigModel.id == ref_plan.c1.config_id,
+                        C1ProjectConfigModel.version == ref_plan.c1.config_version,
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if c1_rec:
+                execution_inputs["c1"] = {
+                    "config_id": c1_rec.id,
+                    "version": c1_rec.version,
+                    "tools": c1_rec.tools,
+                    "requirements": c1_rec.requirements,
+                    "tool_constraints": c1_rec.tool_constraints,
+                    "expectations": c1_rec.expectations,
+                    "agent_connection_ref": c1_rec.agent_connection_ref,
+                }
+        if (
+            ref_plan.c2
+            and readiness.component_statuses.get(
+                ComponentType.C2.value,
+                ComponentReadinessSummary(component=ComponentType.C2, is_ready=False),
+            ).is_ready
+        ):
+            c2_rec = (
+                self.db.execute(
+                    select(C2WorkflowModel).where(
+                        C2WorkflowModel.project_id == project_id,
+                        C2WorkflowModel.model_id == ref_plan.c2.model_id,
+                        C2WorkflowModel.version == ref_plan.c2.model_version,
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if c2_rec:
+                execution_inputs["c2"] = {
+                    "model_id": c2_rec.model_id,
+                    "version": c2_rec.version,
+                    "definition": c2_rec.definition,
+                    "content_hash": c2_rec.content_hash,
+                    "lifecycle_status": c2_rec.lifecycle_status,
+                }
+        if (
+            ref_plan.c3
+            and readiness.component_statuses.get(
+                ComponentType.C3.value,
+                ComponentReadinessSummary(component=ComponentType.C3, is_ready=False),
+            ).is_ready
+        ):
+            c3_rec = (
+                self.db.execute(
+                    select(C3SuiteModel).where(
+                        C3SuiteModel.project_id == project_id,
+                        C3SuiteModel.suite_digest == ref_plan.c3.suite_digest,
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if c3_rec:
+                cases_list = (
+                    [c.case_snapshot for c in c3_rec.cases] if c3_rec.cases else []
+                )
+                sel_case = None
+                if ref_plan.c3.case_id:
+                    for c_snap in cases_list:
+                        if c_snap.get("case_id") == ref_plan.c3.case_id:
+                            sel_case = c_snap
+                            break
+                if not sel_case and cases_list:
+                    sel_case = cases_list[0]
+                execution_inputs["c3"] = {
+                    "suite_id": c3_rec.suite_id,
+                    "suite_digest": c3_rec.suite_digest,
+                    "task_id": c3_rec.task_id,
+                    "tool_id": c3_rec.tool_id,
+                    "recovery_contract_snapshot": c3_rec.recovery_contract_snapshot,
+                    "task_fixture_metadata_snapshot": c3_rec.task_fixture_metadata_snapshot,
+                    "selected_case": sel_case,
+                    "expected_entity_id": ref_plan.c3.expected_entity_id,
+                }
+        if (
+            ref_plan.c4
+            and readiness.component_statuses.get(
+                ComponentType.C4.value,
+                ComponentReadinessSummary(component=ComponentType.C4, is_ready=False),
+            ).is_ready
+        ):
+            c4_rec = (
+                self.db.execute(
+                    select(C4ContractModel).where(
+                        C4ContractModel.project_id == project_id,
+                        C4ContractModel.contract_id == ref_plan.c4.contract_id,
+                        C4ContractModel.version == ref_plan.c4.contract_version,
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if c4_rec:
+                execution_inputs["c4"] = {
+                    "contract_id": c4_rec.contract_id,
+                    "version": c4_rec.version,
+                    "lifecycle_state": c4_rec.lifecycle_state,
+                    "rules_data": c4_rec.rules_data,
+                    "content_hash": c4_rec.content_hash,
+                    "referenced_artifact_versions": c4_rec.referenced_artifact_versions,
+                }
+
+        inputs_digest = canonical_json_digest(execution_inputs)
+
         frozen_payload = {
             "integration_run_id": integration_run_id,
             "project_id": project_id,
@@ -533,6 +691,8 @@ class IntegrationService:
             "schema_version": "2026.1",
             "component_references": ref_plan.model_dump(mode="json"),
             "metadata": data.metadata,
+            "execution_inputs_snapshot": execution_inputs,
+            "execution_inputs_digest": inputs_digest,
         }
         plan_digest = canonical_json_digest(frozen_payload)
 

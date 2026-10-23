@@ -252,3 +252,43 @@ alembic upgrade 20261023_integration_executions:20261023_integration_reports --s
 - **Level B (Controlled end-to-end integration verified)**: **COMPLETE & VERIFIED** (555 passing unit and integration tests).
 - **Level C (PostgreSQL acceptance)**: **OFFLINE DDL VERIFIED / LIVE BLOCKED** (Alembic static DDL verified; live execution requires external PostgreSQL instance).
 - **Level D (Live NexaCart/agent acceptance)**: **HONESTLY BLOCKED** (live target infrastructure is external to this repository).
+
+---
+
+## 11. Shared Backend Integration - Correction and Completion Baseline (2026.1)
+
+Following source review of the integration boundaries, the following correctness defects were remediated and verified under comprehensive regression tests:
+
+### 11.1 Configuration Binding & Cross-Project Isolation
+- **Strict Tuple Matching**: C1 references now strictly require `project_id`, `config_id`, and `version` to match concurrently in database queries. Cross-project lookups fail closed with `CONFIG_NOT_FOUND` or `CROSS_PROJECT_REFERENCE`.
+- **C4 Accepted Lifecycle Semantics**: Replaced invented `APPROVED` / `ACTIVE` checks with native `ContractLifecycleState.ACCEPTED`. Contracts with unaccepted states or invalid policy rules are blocked immediately at readiness check time (`UNACCEPTED_CONTRACT`, `INVALID_POLICY_RULES`).
+- **Elimination of Generic Substitutions**: Removed hardcoded production-path defaults (e.g. fixed task prompts, hardcoded tool lists, fixed order IDs). The shared execution engine deep-freezes actual pinned definitions into `execution_inputs_snapshot` and validates content digests before dispatch.
+
+### 11.2 Provenance & Stable Event Identities
+- **Event ID Preservation**: Runtime events capture stable deterministic event IDs (e.g., `ev-exec_id-001`) that survive across all four component projections (C1, C2, C3, C4) without random UUID regeneration.
+- **Intermediate Observations in C2**: Intermediate steps retain empty/observed states without copying final state snapshots. Controlled execution explicitly tags `execution_mode="synthetic_evaluator"` with `has_db_diffs=False` and `confirmed_agent_termination=False`.
+- **C4 Security Evidence**: Removed fabricated `aut_default_user` customer roles. Authentic observed caller principals and authorization boundaries are preserved. Missing evidence remains explicitly unavailable.
+
+### 11.3 C3 Matched-Pair & Fault Exposure Integrity
+- **Honest Exposure Tracking**: Tool occurrence alone or boolean fault flags do not confirm exposure. Exposure is tagged `ExposureStatus.CONFIRMED` only when tool invocation fails after interception hook injection; otherwise `ExposureStatus.EXPOSURE_UNKNOWN`.
+- **Caller Identity**: Scripted harness calls are strictly labeled `CallerIdentity.SCRIPTED_CALLER` and `RecoveryActor.SCRIPTED_CALLER`, never `ACTUAL_AGENT`.
+- **Clean Qualification & Retry Accounting**: Clean qualification requires identical initial state fingerprints and zero fault injections. Retries count only repeated invocations of the relevant target tool.
+- **Fixture Cleanup Propagation**: Fixture cleanup is guaranteed via `finally` blocks during execution dispatch and cancellation, tracking cleanup certainty.
+
+### 11.4 C2-to-C3 Assertion Binding
+- **Strict Trial & Entity Scoping**: `C2NamedAssertionEvaluator` verifies that actual observed entity matches expected `entity_id` (returning `UNKNOWN` on mismatch). In `get_c2_fact_value`, strict trial scoping rejects facts with missing or mismatched trial IDs.
+- **Time Scope Validation**: Facts distinguish `time_scope="post_recovery"` from initial observations.
+
+### 11.5 Native Combined Report Mappings & Publication Idempotency
+- **C2 Native Schema**: Preserves exact native verdict `"EXPECTED REJECTION PASS"`. Separates `MODEL NOT READY` and `TEST NOT READY` into `NOT_READY` completeness without creating false defect violations.
+- **C3 Native Schema**: Reads `RuleEvaluationStatus` enum (`SATISFIED`, `VIOLATED`, `UNKNOWN`, `NOT_APPLICABLE`). Preserves `PASS_COMPLETED`, `PASS_GRACEFUL`, and genuine `None` recovery verdicts for un-evaluated cases.
+- **C4 Native Schema**: Treats only actual `FAIL` findings as violations. Passes and non-exercised rules are tracked as non-defect info.
+- **Fabricated Artifact Removal**: Eliminated invented `ord-001`, `event-0`, and synthetic trace references. Real event/entity references are passed through.
+- **Publication Idempotency**: `generate_report` persists the report once; subsequent `GET` requests retrieve the published record without re-publishing or overwriting history.
+
+### 11.6 Replay Integrity & Cancellation Guardrails
+- **Evidence Digest Verification**: Replay calculates canonical SHA-256 digest of retained evidence and asserts equality against `execution.retained_evidence_digest` (HTTP 422 on mismatch).
+- **Deep Semantic Parity**: Replay verifies semantic equality of component verdicts, violation counts, failure reasons, and rule statuses using the shared evaluation dispatcher without re-invoking targets or generating synthetic traces.
+- **Cooperative Cancellation**: Active executions can be safely cancelled; completed executions are guarded and reject cancellation with HTTP 409 Conflict.
+- **Nested Route Validation**: All sub-resources strictly validate `project -> plan -> execution` hierarchy, returning HTTP 404 on mismatched paths.
+- **Bounded Pagination**: Implemented `page` and `page_size` pagination on plan and execution listings.

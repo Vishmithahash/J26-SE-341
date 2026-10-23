@@ -175,8 +175,8 @@ def get_c2_fact_value(
             continue
         if expected_trial_id is not None:
             fact_trial_id = fact.details.get("trial_id")
-            if fact_trial_id and fact_trial_id != expected_trial_id:
-                # Reject fact belonging to another trial
+            if not fact_trial_id or fact_trial_id != expected_trial_id:
+                # Missing trial identifier must NOT satisfy a strict trial-scoping check
                 continue
 
         matching_values.add(fact.value)

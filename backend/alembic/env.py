@@ -7,6 +7,7 @@ import app.shared.auth.models  # noqa: F401
 import app.shared.projects.models  # noqa: F401
 import app.components.c1_tool_call_correctness.models  # noqa: F401
 import app.components.c2_state_aware_workflow  # noqa: F401
+import app.shared.integration.models  # noqa: F401
 from alembic import context
 from app.components.c4_policy_aware_safety.persistence import models as _c4_models  # noqa: F401
 from app.config import get_settings

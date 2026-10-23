@@ -250,6 +250,33 @@ class C2NamedAssertionEvaluator:
 
         if (
             isinstance(after_scope, Mapping)
+            and definition.entity_type in after_scope
+            and entity_id is not None
+        ):
+            observed_entity = after_scope.get(definition.entity_type)
+            if isinstance(observed_entity, Mapping):
+                obs_id = (
+                    observed_entity.get(f"{definition.entity_type}_id")
+                    or observed_entity.get("id")
+                    or observed_entity.get("order_id")
+                )
+                if obs_id and str(obs_id) != str(entity_id):
+                    return C2AssertionResult(
+                        assertion_id=definition.assertion_id,
+                        assertion_version=definition.assertion_version,
+                        value=TriState.UNKNOWN,
+                        time_scope=time_scope,
+                        entity_id=entity_id,
+                        snapshot_id=snapshot_id,
+                        evaluator_version=self.EVALUATOR_VERSION,
+                        provenance="C2_EVALUATOR_BRIDGE",
+                        details={
+                            "reason": f"Expected entity '{entity_id}' does not match observed entity '{obs_id}'."
+                        },
+                    )
+
+        if (
+            isinstance(after_scope, Mapping)
             and definition.entity_type not in after_scope
         ):
             return C2AssertionResult(

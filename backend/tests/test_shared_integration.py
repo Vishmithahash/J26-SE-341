@@ -387,7 +387,7 @@ def test_successful_plan_creation_with_frozen_digests_and_mappings(
         project_id=project_id,
         contract_id="contract-c4-refund",
         version=1,
-        lifecycle_state="APPROVED",
+        lifecycle_state="ACCEPTED",
         content_hash="d" * 64,
     )
     db_session.add(c4_contract)
@@ -561,3 +561,13 @@ def test_admin_can_access_and_create_plans_for_any_project(
     )
     assert resp.status_code == 201
     assert resp.json()["name"] == "Admin Supervised Plan"
+
+
+from sqlalchemy import event
+
+
+@event.listens_for(test_engine, "connect")
+def _set_sqlite_fk(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON;")
+    cursor.close()

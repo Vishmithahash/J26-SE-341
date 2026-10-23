@@ -71,6 +71,9 @@ class ReadinessIssueCode(str, Enum):
     SUITE_NOT_FOUND = "SUITE_NOT_FOUND"
     CONTRACT_NOT_FOUND = "CONTRACT_NOT_FOUND"
     UNAPPROVED_CONTRACT = "UNAPPROVED_CONTRACT"
+    INCOMPLETE_PLAN_SEMANTICS = "INCOMPLETE_PLAN_SEMANTICS"
+    INVALID_POLICY_RULES = "INVALID_POLICY_RULES"
+    UNACCEPTED_CONTRACT = "UNACCEPTED_CONTRACT"
 
 
 class ReadinessVerdict(str, Enum):
@@ -109,6 +112,9 @@ class C1ConfigReference(BaseModel):
     tool_names: list[str] = Field(
         default_factory=list, description="Allowlisted tools declared in this config"
     )
+    case_id: str | None = Field(
+        default=None, description="Optional pinned candidate test case ID"
+    )
 
 
 class C2ModelReference(BaseModel):
@@ -132,6 +138,9 @@ class C2ModelReference(BaseModel):
     task_ref: str | None = Field(
         default=None, description="Primary workflow task reference"
     )
+    test_id: str | None = Field(
+        default=None, description="Specific generated test definition ID"
+    )
 
 
 class C3SuiteReference(BaseModel):
@@ -148,6 +157,12 @@ class C3SuiteReference(BaseModel):
     )
     total_cases: int = Field(
         default=0, description="Total candidate fault cases in suite"
+    )
+    case_id: str | None = Field(
+        default=None, description="Specific candidate fault case ID"
+    )
+    expected_entity_id: str | None = Field(
+        default=None, description="Expected entity ID for scoped C2 assertions"
     )
 
 
@@ -172,6 +187,7 @@ class C4PolicyReference(BaseModel):
     lifecycle_state: str | None = Field(
         default=None, description="Contract lifecycle state (must be APPROVED/ACTIVE)"
     )
+    case_id: str | None = Field(default=None, description="Policy test case ID")
 
 
 class ComponentReferencesPlan(BaseModel):
@@ -472,6 +488,9 @@ class ExecutionStartRequest(BaseModel):
     task_prompt_override: str | None = Field(
         default=None, description="Optional override for natural language agent prompt"
     )
+    permitted_tools_override: list[str] | None = Field(
+        default=None, description="Optional override for allowlisted tools"
+    )
 
 
 class ExecutionStatusResponse(BaseModel):
@@ -499,6 +518,8 @@ class ExecutionListResponse(BaseModel):
 
     items: list[ExecutionStatusResponse] = Field(default_factory=list)
     total: int = Field(default=0)
+    page: int = Field(default=1)
+    page_size: int = Field(default=20)
 
 
 # ---------------------------------------------------------------------------
@@ -700,6 +721,9 @@ class ReplayComparisonResponse(BaseModel):
     )
     semantic_diffs: list[str] = Field(
         default_factory=list, description="Differences found if any"
+    )
+    divergence_reasons: list[str] = Field(
+        default_factory=list, description="Detailed reasons for semantic divergence"
     )
     nondeterministic_fields_ignored: list[str] = Field(
         default_factory=list,

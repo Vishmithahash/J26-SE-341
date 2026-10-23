@@ -65,14 +65,10 @@ from app.components.c4_policy_aware_safety.contracts.enums import (
     InstructionSourceType,
     TrustClassification,
 )
-from app.components.c4_policy_aware_safety.contracts.enums import (
-    ExposureStatus as C4ExposureStatus,
-)
 from app.components.c4_policy_aware_safety.contracts.evidence import (
     ActionAttemptEvidence,
     AttackEvidence,
     EvaluationEvidencePackage,
-    ExposureEvidence,
     InstructionSourceEvidence,
     PrincipalEvidence,
     ToolExecutionEvidence,
@@ -108,7 +104,7 @@ def project_c1_evidence(
         status_val = EventStatus.SUCCESS if ev.success else EventStatus.FAILED
         events.append(
             CapturedToolEvent(
-                event_id=f"evt_{ev.call_index}_{uuid.uuid4().hex[:8]}",
+                event_id=ev.event_id or f"evt_{ev.call_index}",
                 call_index=ev.call_index,
                 tool_name=ev.tool_name,
                 arguments=copy_sanitized(ev.arguments),
@@ -149,7 +145,7 @@ def project_c2_evidence(
     c2_observations: list[StateObservation] = []
 
     for idx, ev in enumerate(trace.tool_events):
-        event_id = f"c2_evt_{ev.call_index}_{uuid.uuid4().hex[:8]}"
+        event_id = ev.event_id or f"c2_evt_{ev.call_index}"
         c2_events.append(
             C2RuntimeEvent(
                 event_index=idx,
@@ -163,9 +159,16 @@ def project_c2_evidence(
                 entity_identifiers=extract_entity_identifiers(ev.arguments, ev.output),
             )
         )
-        # Capture step-level state transition snapshot
-        before_st = trace.initial_state.state if idx == 0 else trace.final_state.state
-        after_st = trace.final_state.state
+        # Actual per-step observations when available; do not copy final state onto intermediate steps
+        if idx == 0:
+            before_st = trace.initial_state.state
+            after_st = trace.final_state.state if len(trace.tool_events) == 1 else {}
+        elif idx == len(trace.tool_events) - 1:
+            before_st = {}
+            after_st = trace.final_state.state
+        else:
+            before_st = {}
+            after_st = {}
         c2_observations.append(
             StateObservation(
                 event_index=idx,
@@ -178,9 +181,9 @@ def project_c2_evidence(
     completeness = EvidenceCompleteness(
         has_all_events=trace.is_complete,
         has_state_snapshots=True,
-        has_db_diffs=True,
+        has_db_diffs=False,
         is_complete=trace.is_complete,
-        confirmed_agent_termination=True,
+        confirmed_agent_termination=not trace.is_simulation and trace.is_complete,
         termination_reason=trace.caller_outcome,
     )
 
@@ -192,7 +195,7 @@ def project_c2_evidence(
         test_id=test_id,
         model_id=model_id,
         model_version=model_version,
-        execution_mode="live_agent",
+        execution_mode="synthetic_evaluator" if trace.is_simulation else "live_agent",
         ordered_events=c2_events,
         state_observations=c2_observations,
         completeness=completeness,
@@ -234,7 +237,7 @@ def project_c3_matched_pair_evidence(
     # 1. Clean Trial Evidence
     clean_events = [
         C3RuntimeEvent(
-            event_id=f"c3-clean-{e.call_index}-{uuid.uuid4().hex[:6]}",
+            event_id=e.event_id or f"c3-clean-{e.call_index}",
             timestamp_iso=e.timestamp_utc.isoformat(),
             event_type="TOOL_CALL_EXECUTED" if e.success else "TOOL_CALL_FAILED",
             tool_id=e.tool_name,
@@ -254,8 +257,12 @@ def project_c3_matched_pair_evidence(
         target_mode=C3TargetMode.DEMONSTRATION
         if clean_trace.is_simulation
         else C3TargetMode.LIVE_AUT,
-        caller_identity=CallerIdentity.ACTUAL_AGENT,
-        recovery_actor=RecoveryActor.AGENT,
+        caller_identity=CallerIdentity.SCRIPTED_CALLER
+        if clean_trace.is_simulation
+        else CallerIdentity.ACTUAL_AGENT,
+        recovery_actor=RecoveryActor.SCRIPTED_CALLER
+        if clean_trace.is_simulation
+        else RecoveryActor.AGENT,
         fixture_namespace=f"ns-clean-{pair_id[:8]}",
         initial_state_fingerprint=clean_trace.initial_state.fingerprint,
         final_state_fingerprint=clean_trace.final_state.fingerprint,
@@ -275,7 +282,7 @@ def project_c3_matched_pair_evidence(
     # 2. Fault Trial Evidence
     fault_events = [
         C3RuntimeEvent(
-            event_id=f"c3-fault-{e.call_index}-{uuid.uuid4().hex[:6]}",
+            event_id=e.event_id or f"c3-fault-{e.call_index}",
             timestamp_iso=e.timestamp_utc.isoformat(),
             event_type="TOOL_CALL_EXECUTED"
             if e.success
@@ -287,15 +294,26 @@ def project_c3_matched_pair_evidence(
         for e in fault_trace.tool_events
     ]
 
+    exposure_confirmed = fault_trace.fault_injected and any(
+        not e.success for e in fault_trace.tool_events
+    )
     exposure_status = (
         ExposureStatus.CONFIRMED
-        if fault_trace.fault_injected
-        else ExposureStatus.NOT_TRIGGERED
+        if exposure_confirmed
+        else (
+            ExposureStatus.NOT_TRIGGERED
+            if not fault_trace.fault_injected
+            else ExposureStatus.EXPOSURE_UNKNOWN
+        )
     )
     exposure_reasons = (
-        ["Fault injection hook entered and observed by caller."]
-        if fault_trace.fault_injected
-        else ["No fault injection was triggered in trial."]
+        ["Fault injection hook entered and actual failure was observed by caller."]
+        if exposure_confirmed
+        else (
+            ["Fault hook not triggered."]
+            if not fault_trace.fault_injected
+            else ["Fault flag set but failure unconfirmed."]
+        )
     )
 
     fault_trial = TrialEvidence(
@@ -308,8 +326,12 @@ def project_c3_matched_pair_evidence(
         target_mode=C3TargetMode.DEMONSTRATION
         if fault_trace.is_simulation
         else C3TargetMode.LIVE_AUT,
-        caller_identity=CallerIdentity.ACTUAL_AGENT,
-        recovery_actor=RecoveryActor.AGENT,
+        caller_identity=CallerIdentity.SCRIPTED_CALLER
+        if clean_trace.is_simulation
+        else CallerIdentity.ACTUAL_AGENT,
+        recovery_actor=RecoveryActor.SCRIPTED_CALLER
+        if clean_trace.is_simulation
+        else RecoveryActor.AGENT,
         fixture_namespace=f"ns-fault-{pair_id[:8]}",
         initial_state_fingerprint=fault_trace.initial_state.fingerprint,
         final_state_fingerprint=fault_trace.final_state.fingerprint,
@@ -329,7 +351,8 @@ def project_c3_matched_pair_evidence(
     clean_qualification = (
         CleanQualification.QUALIFIED
         if clean_trial.execution_status == ExecutionStatus.COMPLETED
-        and "SUCCESS" in clean_trial.caller_outcome
+        and clean_trial.caller_outcome == "SUCCESS"
+        and all(e.success for e in clean_trace.tool_events)
         else CleanQualification.DISQUALIFIED
     )
 
@@ -341,7 +364,9 @@ def project_c3_matched_pair_evidence(
         target_mode=C3TargetMode.DEMONSTRATION
         if fault_trace.is_simulation
         else C3TargetMode.LIVE_AUT,
-        caller_identity=CallerIdentity.ACTUAL_AGENT,
+        caller_identity=CallerIdentity.SCRIPTED_CALLER
+        if fault_trace.is_simulation
+        else CallerIdentity.ACTUAL_AGENT,
         configuration_snapshot={
             "agent_adapter": "shared_integration_coordinator",
             "is_simulation": fault_trace.is_simulation,
@@ -352,7 +377,10 @@ def project_c3_matched_pair_evidence(
         exposure_assessed=True,
         exposure_status=exposure_status,
         exposure_reasons=exposure_reasons,
-        fixture_comparability=FixtureComparability.EQUIVALENT_LOGICAL_STATE,
+        fixture_comparability=FixtureComparability.EQUIVALENT_LOGICAL_STATE
+        if clean_trace.initial_state.fingerprint
+        == fault_trace.initial_state.fingerprint
+        else FixtureComparability.NOT_EQUIVALENT,
         clean_qualification=clean_qualification,
         cleanup_status=(
             CleanupStatus.CLEANED_AND_VERIFIED
@@ -407,7 +435,7 @@ def project_c4_evidence(
     tool_executions: list[ToolExecutionEvidence] = []
 
     for ev in trace.tool_events:
-        c4_evt_id = f"c4-evt-{ev.call_index}-{uuid.uuid4().hex[:6]}"
+        c4_evt_id = ev.event_id or f"c4-evt-{ev.call_index}"
         action_attempts.append(
             ActionAttemptEvidence(
                 tool_name=ev.tool_name,
@@ -455,10 +483,13 @@ def project_c4_evidence(
                 attacker_goal="Unauthorized action execution",
             )
         )
+        src_type = InstructionSourceType.DIRECT_PROMPT
+        if trace.injection_details.get("channel") == "support_ticket":
+            src_type = InstructionSourceType.SUPPORT_TICKET
         instruction_sources.append(
             InstructionSourceEvidence(
                 source_id="src-untrusted-injection",
-                source_type=InstructionSourceType.SUPPORT_TICKET,
+                source_type=src_type,
                 trust_classification=TrustClassification.UNTRUSTED_CONTENT,
                 origin=EvidenceOrigin.SYNTHETIC_DEVELOPER_FIXTURE
                 if trace.is_simulation
@@ -466,15 +497,8 @@ def project_c4_evidence(
                 raw_text=trace.injection_details.get("payload"),
             )
         )
-        exposure = ExposureEvidence(
-            exposure_status=C4ExposureStatus.EXPOSED,
-            exposure_event_id=f"c4-evt-{trace.tool_events[0].call_index}"
-            if trace.tool_events
-            else None,
-            exposure_details=str(trace.injection_details)
-            if trace.injection_details
-            else None,
-        )
+        # Injection delivery alone does not confirm agent exposure
+        exposure = None
 
     trace_completeness = TraceCompletenessEvidence(
         is_complete=trace.is_complete,
@@ -491,12 +515,7 @@ def project_c4_evidence(
         origin=EvidenceOrigin.SYNTHETIC_DEVELOPER_FIXTURE
         if trace.is_simulation
         else EvidenceOrigin.RECORDED_HARNESS_EVIDENCE,
-        principal=aut_principal
-        or PrincipalEvidence(
-            principal_id="aut_default_user",
-            roles=["customer"],
-            attributes={"tenant": "default"},
-        ),
+        principal=aut_principal,
         instruction_sources=instruction_sources,
         action_attempts=action_attempts,
         tool_executions=tool_executions,
