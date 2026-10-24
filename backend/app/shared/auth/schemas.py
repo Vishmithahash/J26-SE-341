@@ -126,6 +126,16 @@ class PasswordChangeRequest(BaseModel):
         max_length=128,
         description="New password (min 8 chars, max 128 chars, Unicode/spaces permitted)",
     )
+
+
+class UserStatusUpdateRequest(BaseModel):
+    """Administrator request to toggle account active status."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    is_active: bool = Field(..., description="Target active status for the account")
+
+
 class UserResponse(BaseModel):
     """Safe public user representation.
 

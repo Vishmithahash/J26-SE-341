@@ -125,5 +125,10 @@ describe('Auth, Session, and Security Rules', () => {
       // New session 2 is current
       assert.equal(isResponseCurrent(currentSessionGen), true);
     });
+
+    it('exposes updateUserStatus method on api service for administrator access management', () => {
+      assert.equal(typeof api.updateUserStatus, 'function');
+    });
   });
 });
+

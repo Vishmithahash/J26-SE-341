@@ -30,6 +30,7 @@ from app.shared.auth.schemas import (
     UserLoginRequest,
     UserResponse,
     UserSignupRequest,
+    UserStatusUpdateRequest,
     UserUpdateRequest,
 )
 from app.shared.auth.security import login_rate_limiter
@@ -38,6 +39,7 @@ from app.shared.auth.service import (
     change_user_password,
     list_users,
     register_user,
+    set_user_active_status,
     update_user_profile,
 )
 
@@ -237,6 +239,53 @@ def get_users(
         limit=limit,
         offset=offset,
     )
+
+
+@admin_router.patch(
+    "/users/{user_id}/status",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update User Active Status (Administrator Only)",
+    description=(
+        "Activate or deactivate a user account. "
+        "Requires authenticated caller with ADMIN role. "
+        "Administrators cannot deactivate their own account."
+    ),
+)
+def update_user_status(
+    user_id: int,
+    data: UserStatusUpdateRequest,
+    admin_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UserResponse:
+    target = set_user_active_status(
+        db=db,
+        admin_user=admin_user,
+        target_user_id=user_id,
+        is_active=data.is_active,
+    )
+    return UserResponse.model_validate(target)
+
+
+@admin_router.patch(
+    "/users/{user_id}",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update User Account (Administrator Only)",
+)
+def update_user_account(
+    user_id: int,
+    data: UserStatusUpdateRequest,
+    admin_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UserResponse:
+    target = set_user_active_status(
+        db=db,
+        admin_user=admin_user,
+        target_user_id=user_id,
+        is_active=data.is_active,
+    )
+    return UserResponse.model_validate(target)
 
 
 # Register sub-routers into top-level shared router

@@ -10,6 +10,7 @@ import {
   User as UserIcon,
   AlertCircle,
   Clock,
+  Edit3,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useProject } from '../../context/ProjectContext';
@@ -67,7 +68,9 @@ export const ProjectsListPage = () => {
     setActionSuccess(null);
     try {
       const res = await projectsApi.checkConnection(projectId);
-      setActionSuccess(`Connection check completed for ${res.project.name}: ${res.connection_state}`);
+      setActionSuccess(
+        `Connection check completed for ${res.project?.name || 'application'}: ${res.connection_state}`
+      );
       // Refresh list to update status and timestamps
       await fetchProjects();
     } catch (err) {
@@ -418,13 +421,25 @@ export const ProjectsListPage = () => {
                     )}
                   </div>
 
-                  <Link
-                    to={`${basePath}/projects/${proj.project_id}`}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400"
-                  >
-                    <span>Details</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    {!isArchived && (
+                      <Link
+                        to={`${basePath}/projects/${proj.project_id}/edit`}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                        title="Edit project URLs and details"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Edit</span>
+                      </Link>
+                    )}
+                    <Link
+                      to={`${basePath}/projects/${proj.project_id}`}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400"
+                    >
+                      <span>Details</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </Link>
+                  </div>
                 </div>
               </div>
             );

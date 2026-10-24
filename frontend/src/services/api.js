@@ -145,6 +145,13 @@ export const api = {
     });
   },
 
+  async updateUserStatus(userId, isActive) {
+    return request(`/api/v1/admin/users/${userId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_active: isActive }),
+    });
+  },
+
   logout() {
     setStoredToken(null);
   },
