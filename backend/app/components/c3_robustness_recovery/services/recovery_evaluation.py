@@ -36,6 +36,7 @@ from app.components.c3_robustness_recovery.runtime.evidence import (
 from app.components.c3_robustness_recovery.services.c2_facts import (
     DEFAULT_C2_TO_C3_MAPPINGS,
     get_c2_fact_value,
+    normalize_c2_to_c3_mappings,
     validate_c2_facts,
 )
 from app.components.c3_robustness_recovery.services.suites import (
@@ -261,10 +262,10 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             state_unknowns: list[str] = []
             supporting_facts: list[str] = []
 
-            active_mappings = {
-                m.c3_assertion_id if hasattr(m, "c3_assertion_id") else m.get("c3_assertion_id"): m
-                for m in (getattr(request, "pinned_mappings", None) or DEFAULT_C2_TO_C3_MAPPINGS)
-            }
+            normalized_mappings = normalize_c2_to_c3_mappings(
+                getattr(request, "pinned_mappings", None)
+            )
+            active_mappings = {m.c3_assertion_id: m for m in normalized_mappings}
 
             for assertion_id in contract.required_state_assertions:
                 resolved_version = _resolve_assertion_version(assertion_id)
@@ -290,9 +291,7 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                 mapping = active_mappings.get(assertion_id)
                 is_entity_scoped = True
                 if mapping is not None:
-                    etype = getattr(mapping, "entity_type", None) or (
-                        mapping.get("entity_type") if isinstance(mapping, dict) else None
-                    )
+                    etype = mapping.entity_type
                     if etype in ("aggregate", "global", "side_effects", "system"):
                         is_entity_scoped = False
                 if is_authoritative and is_entity_scoped and expected_entity is None:

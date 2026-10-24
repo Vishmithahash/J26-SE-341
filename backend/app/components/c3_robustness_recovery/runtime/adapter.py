@@ -345,7 +345,7 @@ class DemonstrationToolAdapter(DomainToolAdapter):
                     effect_phase=EffectPhase.BEFORE_EFFECT,
                     interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
                     supported_occurrence_bounds=OccurrenceBounds(
-                        min_occurrence=1, max_occurrence=5
+                        min_occurrence=1, max_occurrence=1
                     ),
                     allowed_release_rule_types=[
                         ReleaseRuleType.ATTEMPT_BOUNDED,
@@ -364,7 +364,7 @@ class DemonstrationToolAdapter(DomainToolAdapter):
                     effect_phase=EffectPhase.AFTER_COMMIT,
                     interception_hook=InterceptionHook.APPLICATION_AWARE_HOOK,
                     supported_occurrence_bounds=OccurrenceBounds(
-                        min_occurrence=1, max_occurrence=5
+                        min_occurrence=1, max_occurrence=1
                     ),
                     allowed_release_rule_types=[
                         ReleaseRuleType.ATTEMPT_BOUNDED,
@@ -382,7 +382,7 @@ class DemonstrationToolAdapter(DomainToolAdapter):
                     effect_phase=EffectPhase.BEFORE_EFFECT,
                     interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
                     supported_occurrence_bounds=OccurrenceBounds(
-                        min_occurrence=1, max_occurrence=5
+                        min_occurrence=1, max_occurrence=1
                     ),
                     allowed_release_rule_types=[
                         ReleaseRuleType.ATTEMPT_BOUNDED,
@@ -403,7 +403,7 @@ class DemonstrationToolAdapter(DomainToolAdapter):
                     effect_phase=EffectPhase.BEFORE_EFFECT,
                     interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
                     supported_occurrence_bounds=OccurrenceBounds(
-                        min_occurrence=1, max_occurrence=5
+                        min_occurrence=1, max_occurrence=1
                     ),
                     allowed_release_rule_types=[
                         ReleaseRuleType.ATTEMPT_BOUNDED,
@@ -421,7 +421,7 @@ class DemonstrationToolAdapter(DomainToolAdapter):
                     effect_phase=EffectPhase.BEFORE_EFFECT,
                     interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
                     supported_occurrence_bounds=OccurrenceBounds(
-                        min_occurrence=1, max_occurrence=5
+                        min_occurrence=1, max_occurrence=1
                     ),
                     allowed_release_rule_types=[
                         ReleaseRuleType.ATTEMPT_BOUNDED,
@@ -442,7 +442,7 @@ class DemonstrationToolAdapter(DomainToolAdapter):
                     effect_phase=EffectPhase.BEFORE_EFFECT,
                     interception_hook=InterceptionHook.BEFORE_TOOL_CALL,
                     supported_occurrence_bounds=OccurrenceBounds(
-                        min_occurrence=1, max_occurrence=5
+                        min_occurrence=1, max_occurrence=1
                     ),
                     allowed_release_rule_types=[
                         ReleaseRuleType.ATTEMPT_BOUNDED,
@@ -539,8 +539,17 @@ class DemonstrationToolAdapter(DomainToolAdapter):
 
 
 # ---------------------------------------------------------------------------
-# Real Target Integration Blocker Check
+# Real Target Integration Blocker Check & Connector Contract
 # ---------------------------------------------------------------------------
+
+FUTURE_NEXACART_REQUIRED_CAPABILITIES: list[str] = [
+    "Agent invocation and failed-run trace retrieval",
+    "Domain tool-call interception",
+    "Fixture preparation and reset facilities",
+    "Independent state observations",
+    "Operation completion and settling evidence",
+    "Correlated event, trial, and operation identifiers",
+]
 
 
 def check_real_target_prerequisites(
@@ -548,7 +557,9 @@ def check_real_target_prerequisites(
 ) -> tuple[bool, list[str]]:
     """Check whether real target (e.g. NexaCart AUT) prerequisites are available.
 
-    Requires only credentials and facilities genuinely needed by the configured adapter.
+    Safeguard: A configured URL, health check, or env var alone must NOT mark live
+    execution ready. The live NexaCart connector must implement and register all 6
+    required domain adapter and fixture capabilities.
     """
     missing: list[str] = []
 
@@ -579,5 +590,13 @@ def check_real_target_prerequisites(
             "Target API credentials/authorization key not found (set NEXACART_API_KEY or AUT_API_KEY)."
         )
 
-    is_available = len(missing) == 0
-    return is_available, missing
+    # Architectural safeguard: Live NexaCart adapter connector is not yet implemented or registered in this increment.
+    # A configured URL or health check alone does not mark live execution ready.
+    missing.append(
+        "Live NexaCart adapter connector is not implemented in this pre-live increment. "
+        "The connector must implement all 6 required capabilities: "
+        + "; ".join(FUTURE_NEXACART_REQUIRED_CAPABILITIES)
+    )
+
+    # Live AUT execution is never marked ready in this increment
+    return False, missing

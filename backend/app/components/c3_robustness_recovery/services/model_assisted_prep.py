@@ -77,15 +77,20 @@ async def prepare_draft_inputs(
     """Generate draft structured inputs using the user-selected LLM provider."""
     service = LLMProviderService.get_instance()
 
-    supplied_context = {
+    # Do not invent default refund tools or default tasks when authoritative context is absent
+    supplied_task_id = req.task_id or (
+        req.existing_task_fixture.task_id if req.existing_task_fixture else None
+    )
+    supplied_tool_id = req.tool_id or (
+        req.existing_adapter_manifest.tools[0].tool_id
+        if req.existing_adapter_manifest and req.existing_adapter_manifest.tools
+        else None
+    )
+
+    supplied_context: dict[str, Any] = {
         "project_id": req.project_id,
-        "task_id": req.task_id
-        or (
-            req.existing_task_fixture.task_id
-            if req.existing_task_fixture
-            else "task-order-recovery"
-        ),
-        "tool_id": req.tool_id or "refund_api",
+        "task_id": supplied_task_id,
+        "tool_id": supplied_tool_id,
         "domain": req.domain,
         "instructions": req.instructions
         or "Draft recovery parameters for transient failures.",
@@ -95,9 +100,44 @@ async def prepare_draft_inputs(
             req.existing_task_fixture.model_dump()
         )
     if req.existing_adapter_manifest:
-        supplied_context["existing_adapter_tools"] = [
-            t.tool_id for t in req.existing_adapter_manifest.tools
-        ]
+        # Supply full relevant capability combinations rather than only tool names
+        supplied_context["existing_adapter_manifest"] = {
+            "adapter_id": req.existing_adapter_manifest.adapter_id,
+            "adapter_version": req.existing_adapter_manifest.adapter_version,
+            "tools": [
+                {
+                    "tool_id": t.tool_id,
+                    "tool_version": t.tool_version,
+                    "mutability": t.mutability.value
+                    if hasattr(t.mutability, "value")
+                    else str(t.mutability),
+                }
+                for t in req.existing_adapter_manifest.tools
+            ],
+            "supported_combinations": [
+                {
+                    "tool_id": c.tool_id,
+                    "fault_family": c.fault_family.value
+                    if hasattr(c.fault_family, "value")
+                    else str(c.fault_family),
+                    "effect_phase": c.effect_phase.value
+                    if hasattr(c.effect_phase, "value")
+                    else str(c.effect_phase),
+                    "interception_hook": c.interception_hook.value
+                    if hasattr(c.interception_hook, "value")
+                    else str(c.interception_hook),
+                    "min_occurrence": c.supported_occurrence_bounds.min_occurrence,
+                    "max_occurrence": c.supported_occurrence_bounds.max_occurrence,
+                    "allowed_release_rule_types": [
+                        r.value if hasattr(r, "value") else str(r)
+                        for r in c.allowed_release_rule_types
+                    ],
+                    "supported_payload_modes": c.supported_payload_modes,
+                    "required_observation_capabilities": c.required_observation_capabilities,
+                }
+                for c in req.existing_adapter_manifest.supported_combinations
+            ],
+        }
     if req.existing_recovery_contract:
         supplied_context["existing_recovery_contract"] = (
             req.existing_recovery_contract.model_dump()
@@ -254,13 +294,40 @@ async def prepare_draft_inputs(
                     tf_data["supports_partial_effect_observation"] = False
             else:
                 # No authoritative fixture: missing facilities must NOT be filled with generic defaults
-                if not tf_data.get("fixture_id"):
-                    unresolved.append("missing_fixture_id: no authoritative fixture provided and model omitted fixture_id")
-                    tf_data.setdefault("fixture_id", "draft-fixture-unverified")
+                fixture_id_val = tf_data.get("fixture_id")
+                unresolved.append(
+                    f"unresolved_fixture_reference: no authoritative fixture metadata declared; model-supplied fixture_id '{fixture_id_val or 'omitted'}' cannot be verified"
+                )
+                if not fixture_id_val:
+                    tf_data["fixture_id"] = "draft-fixture-unverified"
                 tf_data.setdefault("domain", req.domain)
                 tf_data.setdefault("task_id", req.task_id or "task-draft-unverified")
                 tf_data.setdefault("task_version", req.task_version or "1.0.0")
                 tf_data.setdefault("fixture_version", "1.0.0")
+
+                # If model invented reset facilities, flag as unresolved
+                if tf_data.get("declared_reset_support") or tf_data.get("reset_method"):
+                    unresolved.append(
+                        "unresolved_reset_support: reset facility cannot be verified without declared authoritative fixture metadata"
+                    )
+                    tf_data["declared_reset_support"] = False
+                    tf_data["reset_method"] = None
+
+                # If model invented observation support, flag as unresolved
+                if tf_data.get("declared_observation_support") or tf_data.get("supported_observations"):
+                    unresolved.append(
+                        "unresolved_observation_support: observation support cannot be verified without declared authoritative fixture metadata"
+                    )
+                    tf_data["declared_observation_support"] = False
+                    tf_data["supported_observations"] = []
+
+                # If model invented effect observation support, flag as unresolved
+                if tf_data.get("supports_committed_effect_observation") or tf_data.get("supports_partial_effect_observation"):
+                    unresolved.append(
+                        "unresolved_capability: effect observation flags cannot be verified without declared authoritative fixture metadata"
+                    )
+                    tf_data["supports_committed_effect_observation"] = False
+                    tf_data["supports_partial_effect_observation"] = False
 
             draft_tf = TaskFixtureMetadata.model_validate(tf_data)
         except Exception as e:  # noqa: BLE001
@@ -279,9 +346,16 @@ async def prepare_draft_inputs(
                 rc_data.setdefault("max_tool_calls_budget", auth_rc.max_tool_calls_budget)
                 rc_data.setdefault("max_total_timeout_ms", auth_rc.max_total_timeout_ms)
             else:
-                rc_data.setdefault("required_state_assertions", ["order_created"])
-                rc_data.setdefault("max_tool_calls_budget", 10)
-                rc_data.setdefault("max_total_timeout_ms", 10000)
+                # Do not invent default required state assertions or pretend assertions exist without authoritative contract
+                if rc_data.get("required_state_assertions"):
+                    for assertion in rc_data["required_state_assertions"]:
+                        unresolved.append(
+                            f"unresolved_assertion_reference: state assertion '{assertion}' cannot be verified without declared authoritative recovery contract"
+                        )
+                else:
+                    unresolved.append(
+                        "missing_required_state_assertions: recovery contract requires declared authoritative state assertions"
+                    )
 
             # Validate attempt and retry consistency without silent mutation
             attempts = rc_data.get("max_task_attempts")
@@ -322,17 +396,28 @@ async def prepare_draft_inputs(
             unresolved.append(f"recovery_contract_validation_error: {e}")
 
     # Cross check tools: if task references tools not declared in adapter manifest, flag unresolved
-    if draft_tf and req.existing_adapter_manifest:
-        declared_tool_ids = {t.tool_id for t in req.existing_adapter_manifest.tools}
-        for tid in draft_tf.associated_tool_ids:
-            if tid not in declared_tool_ids:
-                unresolved.append(
-                    f"unresolved_tool_reference: '{tid}' not found in adapter manifest"
-                )
+    if draft_tf:
+        if req.existing_adapter_manifest:
+            declared_tool_ids = {t.tool_id for t in req.existing_adapter_manifest.tools}
+            for tid in draft_tf.associated_tool_ids:
+                if tid not in declared_tool_ids:
+                    unresolved.append(
+                        f"unresolved_tool_reference: '{tid}' not found in adapter manifest"
+                    )
+        else:
+            unresolved.append(
+                "unresolved_tool_reference: no authoritative adapter manifest declared to verify tool associations"
+            )
+
+    has_authoritative_context = (
+        req.existing_task_fixture is not None
+        and req.existing_adapter_manifest is not None
+        and req.existing_recovery_contract is not None
+    )
 
     status = (
         "SUCCESS"
-        if (not unresolved and draft_tf is not None and draft_rc is not None)
+        if (not unresolved and draft_tf is not None and draft_rc is not None and has_authoritative_context)
         else (
             "UNRESOLVED_REFERENCES"
             if (draft_tf is not None or draft_rc is not None)

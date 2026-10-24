@@ -237,6 +237,53 @@ class EvaluationComputeRequest(BaseModel):
     )
     evaluator_version: str = Field("1.1.0", min_length=1)
     rule_set_version: str = Field("1.1.0", min_length=1)
+    pinned_mappings: list[Any] | None = Field(
+        default=None, description="Optional explicit pinned C2-to-C3 assertion mappings."
+    )
+
+
+class ControlledExecutionRequest(BaseModel):
+    """Request to launch a controlled trial run for an eligible stored suite."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(..., min_length=1, description="Project scope identifier.")
+    suite_id_or_digest: str = Field(
+        ..., min_length=1, description="Stored suite ID or cryptographic digest."
+    )
+    execution_mode: str = Field(
+        "DEMONSTRATION",
+        description="Target execution mode: DEMONSTRATION (supported) or LIVE_AUT (blocked).",
+    )
+    max_suite_duration_sec: float = Field(
+        60.0, ge=1.0, le=300.0, description="Overall suite execution time limit in seconds."
+    )
+    per_case_timeout_sec: float = Field(
+        10.0, ge=1.0, le=60.0, description="Per-case execution time limit in seconds."
+    )
+
+
+class ControlledExecutionResponse(BaseModel):
+    """Execution response summary for native controlled trial execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    execution_id: str
+    suite_id: str
+    suite_digest: str
+    project_id: str
+    target_mode: str
+    status: str
+    total_cases: int
+    executed_cases: int
+    blocked_cases: int
+    unsupported_cases: int
+    confirmed_exposure_count: int
+    not_triggered_exposure_count: int
+    unknown_exposure_count: int
+    pair_ids: list[str] = Field(default_factory=list)
+    halt_reason: str | None = None
+    case_results: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EvaluationRecordResponse(BaseModel):

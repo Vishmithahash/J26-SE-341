@@ -17,9 +17,12 @@ from app.components.c3_robustness_recovery.api.authorization import (
 )
 from app.components.c3_robustness_recovery.contracts.persistence import (
     CaseRecordResponse,
+    ControlledExecutionRequest,
+    ControlledExecutionResponse,
     EvaluationComputeRequest,
     EvaluationRecordResponse,
     ExecutionArtifactImportRequest,
+    ExecutionCreateRequest,
     ExecutionRecordResponse,
     MatchedPairImportRequest,
     MatchedPairRecordResponse,
@@ -31,18 +34,27 @@ from app.components.c3_robustness_recovery.repositories.persistence import (
     ConflictError,
     EntityNotFoundError,
 )
+from app.components.c3_robustness_recovery.runtime.adapter import (
+    CallerIdentity,
+    DemonstrationFixtureManager,
+    DemonstrationToolAdapter,
+    TargetMode,
+)
+from app.components.c3_robustness_recovery.runtime.suite_runner import SuiteRunner
 from app.components.c3_robustness_recovery.services.reporting import (
     build_execution_report,
     export_report_to_csv,
 )
 from app.components.c3_robustness_recovery.services.run_tracking import (
+    create_execution_manifest,
+    finalize_execution_lifecycle,
     get_execution as service_get_execution,
-)
-from app.components.c3_robustness_recovery.services.run_tracking import (
     import_execution_artifact,
-)
-from app.components.c3_robustness_recovery.services.run_tracking import (
     list_executions as service_list_executions,
+    record_case_execution_progress,
+)
+from app.components.c3_robustness_recovery.services.suites import (
+    verify_suite_integrity,
 )
 from app.components.c3_robustness_recovery.services.storage import (
     compute_and_store_evaluation,
@@ -283,6 +295,159 @@ def import_execution_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database service unavailable.",
         ) from exc
+
+
+@router.post(
+    "/executions/run-controlled",
+    response_model=ControlledExecutionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Run Controlled Trials for Stored Suite",
+    description="Launches native SuiteRunner under registered demonstration adapter with full evidence retention.",
+)
+async def run_controlled_trials_endpoint(
+    request: ControlledExecutionRequest,
+    current_user: Annotated[User, Depends(require_c3_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ControlledExecutionResponse:
+    verify_c3_project_access(request.project_id, current_user, db)
+
+    # 1. Enforce target mode safeguards
+    if request.execution_mode == "LIVE_AUT":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "LIVE_AUT execution mode is BLOCKED: Live NexaCart adapter connector is not implemented. "
+                "Only registered DEMONSTRATION mode is supported."
+            ),
+        )
+    if request.execution_mode != "DEMONSTRATION":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported execution mode '{request.execution_mode}'. Only DEMONSTRATION is supported.",
+        )
+
+    # 2. Retrieve referenced stored frozen suite
+    suite_record = service_get_suite(db, request.project_id, request.suite_id_or_digest)
+    if not suite_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Suite '{request.suite_id_or_digest}' not found in project '{request.project_id}'.",
+        )
+
+    frozen_suite = suite_record.frozen_suite
+
+    # 3. Verify suite integrity
+    try:
+        verify_suite_integrity(frozen_suite)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Suite integrity verification failed: {exc}",
+        ) from exc
+
+    # 4. Resolve registered installed adapter and fixture manager
+    fixture_manager = DemonstrationFixtureManager()
+    adapter = DemonstrationToolAdapter(fixture_manager)
+
+    # 5. Persist execution intent before target activity starts
+    exec_create_req = ExecutionCreateRequest(
+        suite_digest=suite_record.suite_digest,
+        project_id=request.project_id,
+        target_mode=request.execution_mode,
+        caller_identity="SCRIPTED_CALLER",
+        planned_cases=[c.case_id for c in frozen_suite.selected_cases],
+        configuration_snapshot={
+            "adapter_id": adapter.adapter_id,
+            "adapter_version": adapter.adapter_version,
+            "fixture_id": fixture_manager.fixture_id,
+            "fixture_version": fixture_manager.fixture_version,
+            "target_mode": request.execution_mode,
+            "max_suite_duration_sec": request.max_suite_duration_sec,
+            "per_case_timeout_sec": request.per_case_timeout_sec,
+        },
+    )
+    try:
+        manifest_record = create_execution_manifest(db, request.project_id, exec_create_req)
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+
+    # 6. Execute suite sequentially with isolated fixtures and strict bounds
+    suite_runner = SuiteRunner(
+        adapter=adapter,
+        fixture_manager=fixture_manager,
+        task_fixture_metadata=frozen_suite.task_fixture_metadata,
+        recovery_contract=frozen_suite.recovery_contract,
+        target_mode=TargetMode.DEMONSTRATION,
+        caller_identity=CallerIdentity.SCRIPTED_CALLER,
+        max_suite_duration_sec=request.max_suite_duration_sec,
+        per_case_timeout_sec=request.per_case_timeout_sec,
+    )
+    summary = await suite_runner.run_frozen_suite(frozen_suite)
+
+    # 7. Persist execution progress, matched pairs evidence, and finalize lifecycle
+    pair_ids: list[str] = []
+    case_results: list[dict[str, Any]] = []
+
+    for res in summary.case_results:
+        pair_id = res.evidence.pair_id if res.evidence else None
+        if pair_id:
+            pair_ids.append(pair_id)
+
+        record_case_execution_progress(
+            db=db,
+            project_id=request.project_id,
+            execution_id=manifest_record.execution_id,
+            case_id=res.case_id,
+            status=res.status,
+            evidence=res.evidence,
+        )
+
+        exposure_str = (
+            res.evidence.exposure_status.value
+            if res.evidence and hasattr(res.evidence.exposure_status, "value")
+            else str(res.evidence.exposure_status) if res.evidence else None
+        )
+
+        case_results.append({
+            "case_id": res.case_id,
+            "status": res.status,
+            "pair_id": pair_id,
+            "duration_ms": res.duration_ms,
+            "blocked_reasons": res.blocked_reasons,
+            "exposure_status": exposure_str,
+        })
+
+    final_exec = finalize_execution_lifecycle(
+        db=db,
+        project_id=request.project_id,
+        execution_id=manifest_record.execution_id,
+        summary=summary,
+    )
+
+    return ControlledExecutionResponse(
+        execution_id=final_exec.execution_id,
+        suite_id=suite_record.suite_id,
+        suite_digest=suite_record.suite_digest,
+        project_id=request.project_id,
+        target_mode=request.execution_mode,
+        status=final_exec.status.value if hasattr(final_exec.status, "value") else str(final_exec.status),
+        total_cases=len(frozen_suite.selected_cases),
+        executed_cases=summary.executed_count,
+        blocked_cases=summary.blocked_count,
+        unsupported_cases=summary.unsupported_count,
+        confirmed_exposure_count=summary.confirmed_exposure_count,
+        not_triggered_exposure_count=summary.not_triggered_count,
+        unknown_exposure_count=summary.unknown_exposure_count,
+        pair_ids=pair_ids,
+        halt_reason=summary.halt_reason,
+        case_results=case_results,
+    )
 
 
 @router.get(
