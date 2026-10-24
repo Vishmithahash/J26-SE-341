@@ -26,7 +26,13 @@ Rules:
 1. Base your proposal strictly on the supplied task, tool, fixture, and capability information.
 2. If any tool, fixture, or external reference is missing or cannot be verified from the supplied context, list it explicitly in unresolved_references.
 3. Do NOT invent interception hooks, fixture observations, runtime assertion facts, confirmed fault exposure, or recovery passes.
-4. Output MUST be valid JSON adhering to the specified schema:
+4. Permitted terminal outcome values are:
+   - SUCCESS_CLEAN_RECOVERY
+   - SUCCESS_DEGRADED_FALLBACK
+   - GRACEFUL_ABORT_USER_NOTIFIED
+   - FAIL_SAFE_STOP
+   Never use recovery verdicts (like PASS_COMPLETED or PASS_GRACEFUL) as terminal outcomes.
+5. Output MUST be valid JSON adhering to the specified schema:
 {
   "task_fixture": {
     "task_id": "...",
@@ -46,7 +52,7 @@ Rules:
   "recovery_contract": {
     "contract_id": "...",
     "contract_version": "1.0.0",
-    "permitted_terminal_outcomes": ["PASS_COMPLETED", "PASS_GRACEFUL"],
+    "permitted_terminal_outcomes": ["SUCCESS_CLEAN_RECOVERY", "SUCCESS_DEGRADED_FALLBACK"],
     "graceful_stopping_conditions": ["..."],
     "initial_invocation_counts_as_attempt": true,
     "max_task_attempts": 3,
@@ -73,19 +79,29 @@ async def prepare_draft_inputs(
 
     supplied_context = {
         "project_id": req.project_id,
-        "task_id": req.task_id or (req.existing_task_fixture.task_id if req.existing_task_fixture else "task-order-recovery"),
+        "task_id": req.task_id
+        or (
+            req.existing_task_fixture.task_id
+            if req.existing_task_fixture
+            else "task-order-recovery"
+        ),
         "tool_id": req.tool_id or "refund_api",
         "domain": req.domain,
-        "instructions": req.instructions or "Draft recovery parameters for transient failures.",
+        "instructions": req.instructions
+        or "Draft recovery parameters for transient failures.",
     }
     if req.existing_task_fixture:
-        supplied_context["existing_task_fixture"] = req.existing_task_fixture.model_dump()
+        supplied_context["existing_task_fixture"] = (
+            req.existing_task_fixture.model_dump()
+        )
     if req.existing_adapter_manifest:
         supplied_context["existing_adapter_tools"] = [
             t.tool_id for t in req.existing_adapter_manifest.tools
         ]
     if req.existing_recovery_contract:
-        supplied_context["existing_recovery_contract"] = req.existing_recovery_contract.model_dump()
+        supplied_context["existing_recovery_contract"] = (
+            req.existing_recovery_contract.model_dump()
+        )
 
     user_prompt = (
         f"Supplied Context:\n{json.dumps(supplied_context, indent=2)}\n\n"
@@ -108,7 +124,12 @@ async def prepare_draft_inputs(
                 },
                 "explanation": {"type": "string"},
             },
-            "required": ["task_fixture", "recovery_contract", "unresolved_references", "explanation"],
+            "required": [
+                "task_fixture",
+                "recovery_contract",
+                "unresolved_references",
+                "explanation",
+            ],
         },
         metadata={
             "operation": "c3_prepare_draft",
@@ -127,7 +148,9 @@ async def prepare_draft_inputs(
         )
 
     provider_metadata: dict[str, Any] = {
-        "provider": gen_result.provider.value if hasattr(gen_result.provider, "value") else str(gen_result.provider),
+        "provider": gen_result.provider.value
+        if hasattr(gen_result.provider, "value")
+        else str(gen_result.provider),
         "requested_model": gen_result.requested_model,
         "actual_model": gen_result.actual_model,
         "duration_ms": gen_result.duration_ms,
@@ -178,18 +201,32 @@ async def prepare_draft_inputs(
         try:
             rc_data.setdefault("contract_id", "contract-draft-001")
             rc_data.setdefault("contract_version", "1.0.0")
-            # Ensure attempt and retry consistency
-            attempts = rc_data.get("max_task_attempts", 3)
+
+            # Validate attempt and retry consistency without silent mutation
+            attempts = rc_data.get("max_task_attempts")
+            retries = rc_data.get("max_retries")
             init_counts = rc_data.get("initial_invocation_counts_as_attempt", True)
-            if init_counts:
-                rc_data["max_retries"] = attempts - 1
-            else:
-                rc_data["max_retries"] = attempts
-            # Ensure permitted terminal outcomes
-            if "permitted_terminal_outcomes" in rc_data:
-                rc_data["permitted_terminal_outcomes"] = [
-                    TerminalOutcome(o) for o in rc_data["permitted_terminal_outcomes"]
-                ]
+            if attempts is not None and retries is not None:
+                expected_retries = attempts - 1 if init_counts else attempts
+                if retries != expected_retries:
+                    unresolved.append(
+                        f"budget_inconsistency: proposed max_retries ({retries}) does not match max_task_attempts ({attempts}) when initial_invocation_counts_as_attempt={init_counts} (expected {expected_retries})"
+                    )
+
+            # Ensure permitted terminal outcomes adhere to TerminalOutcome enum
+            if "permitted_terminal_outcomes" in rc_data and isinstance(
+                rc_data["permitted_terminal_outcomes"], list
+            ):
+                valid_outcomes = []
+                for o in rc_data["permitted_terminal_outcomes"]:
+                    try:
+                        valid_outcomes.append(TerminalOutcome(o))
+                    except ValueError:
+                        unresolved.append(
+                            f"invalid_terminal_outcome: '{o}' is not a valid TerminalOutcome enum value"
+                        )
+                rc_data["permitted_terminal_outcomes"] = valid_outcomes
+
             draft_rc = RecoveryContract.model_validate(rc_data)
         except Exception as e:  # noqa: BLE001
             unresolved.append(f"recovery_contract_validation_error: {e}")
@@ -199,9 +236,19 @@ async def prepare_draft_inputs(
         declared_tool_ids = {t.tool_id for t in req.existing_adapter_manifest.tools}
         for tid in draft_tf.associated_tool_ids:
             if tid not in declared_tool_ids:
-                unresolved.append(f"unresolved_tool_reference: '{tid}' not found in adapter manifest")
+                unresolved.append(
+                    f"unresolved_tool_reference: '{tid}' not found in adapter manifest"
+                )
 
-    status = "SUCCESS" if not unresolved else "UNRESOLVED_REFERENCES"
+    status = (
+        "SUCCESS"
+        if (not unresolved and draft_tf is not None and draft_rc is not None)
+        else (
+            "UNRESOLVED_REFERENCES"
+            if (draft_tf is not None or draft_rc is not None)
+            else "FAILED"
+        )
+    )
 
     return ModelAssistedDraftResponse(
         status=status,

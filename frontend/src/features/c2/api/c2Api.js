@@ -41,11 +41,14 @@ export const c2Api = {
    * Propose and build a candidate reference EFSM model from a WorkflowInputContract.
    * POST /api/v1/c2/projects/{project_id}/models/build?auto_validate=true
    */
-  async buildCandidateModel(projectId, workflowInput, autoValidate = true) {
+  async buildCandidateModel(projectId, workflowInput, autoValidate = true, mode = null) {
     if (!projectId) throw new Error('projectId is required to build a candidate model');
-    const url = `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/models/build?auto_validate=${Boolean(
+    let url = `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/models/build?auto_validate=${Boolean(
       autoValidate
     )}`;
+    if (mode) {
+      url += `&mode=${encodeURIComponent(mode)}`;
+    }
     return request(url, {
       method: 'POST',
       body: JSON.stringify(workflowInput),

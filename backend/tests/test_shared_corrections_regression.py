@@ -27,6 +27,12 @@ import uuid
 from collections.abc import Generator
 
 import pytest
+from fastapi import status
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+from starlette.testclient import TestClient
+
 from app.components.c1_tool_call_correctness.examples import (
     get_nexacart_refund_example_config,
 )
@@ -108,11 +114,6 @@ from app.shared.integration.reporting import (
 from app.shared.integration.service import (
     canonical_json_digest,
 )
-from fastapi import status
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-from starlette.testclient import TestClient
 from tests.test_shared_integration import (
     TEST_AUTH_SECRET,
     auth_headers,
@@ -1165,6 +1166,8 @@ def test_tampered_plan_digest_fails_pre_execution_check(
 
 import time
 
+from fastapi import HTTPException
+
 from app.components.c2_state_aware_workflow.persistence.models import (
     C2EvaluationResult,
     C2TestCase,
@@ -1186,7 +1189,6 @@ from app.shared.integration.models import (
     IntegrationPublishedContributionModel,
 )
 from app.shared.integration.replay import EvidenceReplayService
-from fastapi import HTTPException
 
 
 def test_c1_helpdesk_config_cannot_pass_after_only_order_placement(db_session: Session):
@@ -1899,6 +1901,8 @@ def test_wrong_scope_c2_facts_cannot_satisfy_c3_recovery():
         initial_state_fingerprint="fp-init",
         final_state_fingerprint="fp-fin",
         events=[],
+        snapshot_id=snapshot_id,
+        observed_entity_id=entity_id,
         tool_calls_count=2,
         subsequent_calls_count=1,
         execution_status=ExecutionStatus.COMPLETED,
@@ -1949,11 +1953,17 @@ def test_wrong_scope_c2_facts_cannot_satisfy_c3_recovery():
         time_scope="post_recovery",
         provenance="C2_EVALUATOR_BRIDGE",
         supporting_evidence_refs=[trial_id, snapshot_id],
-        details={"project_id": "proj-INTRUDER-99", "pair_id": pair_id, "trial_id": trial_id},
+        details={
+            "project_id": "proj-INTRUDER-99",
+            "pair_id": pair_id,
+            "trial_id": trial_id,
+        },
     )
     res_wrong_proj = eval_with_fact(fact_wrong_project)
     assert res_wrong_proj.recovery_verdict != RecoveryVerdict.PASS_COMPLETED
-    assert res_wrong_proj.recovery_verdict is None or "INCONCLUSIVE" in str(res_wrong_proj.recovery_verdict)
+    assert res_wrong_proj.recovery_verdict is None or "INCONCLUSIVE" in str(
+        res_wrong_proj.recovery_verdict
+    )
 
     # 2. Wrong trial fact cannot satisfy recovery
     fact_wrong_trial = C2AssertionFact(
@@ -1965,70 +1975,95 @@ def test_wrong_scope_c2_facts_cannot_satisfy_c3_recovery():
         time_scope="post_recovery",
         provenance="C2_EVALUATOR_BRIDGE",
         supporting_evidence_refs=["trial-WRONG-99", snapshot_id],
-        details={"project_id": proj_id, "pair_id": pair_id, "trial_id": "trial-WRONG-99"},
+        details={
+            "project_id": proj_id,
+            "pair_id": pair_id,
+            "trial_id": "trial-WRONG-99",
+        },
     )
     res_wrong_trial = eval_with_fact(fact_wrong_trial)
     assert res_wrong_trial.recovery_verdict != RecoveryVerdict.PASS_COMPLETED
 
     # 3. Wrong entity fact cannot satisfy recovery when entity_id scoped
-    assert get_c2_fact_value(
-        [
-            C2AssertionFact(
-                assertion_id="order_created",
-                assertion_version="1.0.0",
-                value=C2FactValue.TRUE,
-                entity_id="ord-DIFFERENT-999",
-                snapshot_id=snapshot_id,
-                time_scope="post_recovery",
-                provenance="C2_EVALUATOR_BRIDGE",
-                supporting_evidence_refs=[trial_id],
-                details={"project_id": proj_id, "pair_id": pair_id, "trial_id": trial_id},
-            )
-        ],
-        "order_created",
-        entity_id="ord-001",
-        expected_trial_id=trial_id,
-    ) == C2FactValue.UNKNOWN
+    assert (
+        get_c2_fact_value(
+            [
+                C2AssertionFact(
+                    assertion_id="order_created",
+                    assertion_version="1.0.0",
+                    value=C2FactValue.TRUE,
+                    entity_id="ord-DIFFERENT-999",
+                    snapshot_id=snapshot_id,
+                    time_scope="post_recovery",
+                    provenance="C2_EVALUATOR_BRIDGE",
+                    supporting_evidence_refs=[trial_id],
+                    details={
+                        "project_id": proj_id,
+                        "pair_id": pair_id,
+                        "trial_id": trial_id,
+                    },
+                )
+            ],
+            "order_created",
+            entity_id="ord-001",
+            expected_trial_id=trial_id,
+        )
+        == C2FactValue.UNKNOWN
+    )
 
     # 4. Wrong snapshot fact cannot satisfy recovery when snapshot_id scoped
-    assert get_c2_fact_value(
-        [
-            C2AssertionFact(
-                assertion_id="order_created",
-                assertion_version="1.0.0",
-                value=C2FactValue.TRUE,
-                entity_id=entity_id,
-                snapshot_id="snap-OTHER",
-                time_scope="post_recovery",
-                provenance="C2_EVALUATOR_BRIDGE",
-                supporting_evidence_refs=[trial_id],
-                details={"project_id": proj_id, "pair_id": pair_id, "trial_id": trial_id},
-            )
-        ],
-        "order_created",
-        snapshot_id=snapshot_id,
-        expected_trial_id=trial_id,
-    ) == C2FactValue.UNKNOWN
+    assert (
+        get_c2_fact_value(
+            [
+                C2AssertionFact(
+                    assertion_id="order_created",
+                    assertion_version="1.0.0",
+                    value=C2FactValue.TRUE,
+                    entity_id=entity_id,
+                    snapshot_id="snap-OTHER",
+                    time_scope="post_recovery",
+                    provenance="C2_EVALUATOR_BRIDGE",
+                    supporting_evidence_refs=[trial_id],
+                    details={
+                        "project_id": proj_id,
+                        "pair_id": pair_id,
+                        "trial_id": trial_id,
+                    },
+                )
+            ],
+            "order_created",
+            snapshot_id=snapshot_id,
+            expected_trial_id=trial_id,
+        )
+        == C2FactValue.UNKNOWN
+    )
 
     # 5. Wrong assertion version cannot satisfy recovery
-    assert get_c2_fact_value(
-        [
-            C2AssertionFact(
-                assertion_id="order_created",
-                assertion_version="2.0.0",
-                value=C2FactValue.TRUE,
-                entity_id=entity_id,
-                snapshot_id=snapshot_id,
-                time_scope="post_recovery",
-                provenance="C2_EVALUATOR_BRIDGE",
-                supporting_evidence_refs=[trial_id],
-                details={"project_id": proj_id, "pair_id": pair_id, "trial_id": trial_id},
-            )
-        ],
-        "order_created",
-        assertion_version="1.0.0",
-        expected_trial_id=trial_id,
-    ) == C2FactValue.UNKNOWN
+    assert (
+        get_c2_fact_value(
+            [
+                C2AssertionFact(
+                    assertion_id="order_created",
+                    assertion_version="2.0.0",
+                    value=C2FactValue.TRUE,
+                    entity_id=entity_id,
+                    snapshot_id=snapshot_id,
+                    time_scope="post_recovery",
+                    provenance="C2_EVALUATOR_BRIDGE",
+                    supporting_evidence_refs=[trial_id],
+                    details={
+                        "project_id": proj_id,
+                        "pair_id": pair_id,
+                        "trial_id": trial_id,
+                    },
+                )
+            ],
+            "order_created",
+            assertion_version="1.0.0",
+            expected_trial_id=trial_id,
+        )
+        == C2FactValue.UNKNOWN
+    )
 
     # 6. Correctly scoped fact DOES satisfy recovery
     fact_correct = C2AssertionFact(

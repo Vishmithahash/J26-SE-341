@@ -40,9 +40,15 @@ class GeminiAdapter(BaseLLMAdapter):
     ):
         settings = get_settings()
         # Retrieve key from parameter, settings SecretStr, or environment
-        secret_val = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else ""
+        secret_val = (
+            settings.gemini_api_key.get_secret_value()
+            if settings.gemini_api_key
+            else ""
+        )
         self.api_key = api_key or secret_val or os.environ.get("GEMINI_API_KEY", "")
-        self.default_model = default_model or settings.gemini_model or "gemini-3.5-flash-lite"
+        self.default_model = (
+            default_model or settings.gemini_model or "gemini-3.5-flash-lite"
+        )
         self._external_client = http_client
 
     @property
@@ -58,10 +64,13 @@ class GeminiAdapter(BaseLLMAdapter):
         """Sanitize error messages to guarantee no secret exposure."""
         if not self.api_key or not self.api_key.strip():
             return message
-        return message.replace(self.api_key, "[REDACTED_API_KEY]")
+        return message.replace(self.api_key, "[REDACTED]")
 
-    async def check_availability(self) -> ProviderStatusInfo:
+    async def check_availability(
+        self, model_id: str | None = None
+    ) -> ProviderStatusInfo:
         """Check if Gemini credentials are configured and model endpoint is reachable."""
+        target_model = (model_id or self.default_model).strip()
         if not self.api_key or not self.api_key.strip():
             return ProviderStatusInfo(
                 provider=self.provider_name,
@@ -77,7 +86,7 @@ class GeminiAdapter(BaseLLMAdapter):
         client, should_close = await self._get_client(timeout=5.0)
         try:
             # Query the specific model definition or models list with request header
-            url = f"{GEMINI_BASE_URL}/models/{self.default_model}"
+            url = f"{GEMINI_BASE_URL}/models/{target_model}"
             headers = {
                 "x-goog-api-key": self.api_key,
                 "Content-Type": "application/json",
@@ -92,10 +101,10 @@ class GeminiAdapter(BaseLLMAdapter):
                     is_available=True,
                     configured_default_model=self.default_model,
                     available_models=PERMITTED_GEMINI_MODELS,
-                    status_message=f"Gemini API configured and verified ({self.default_model})",
+                    status_message=f"Gemini API configured and verified ({target_model})",
                     last_checked_at=datetime.now(UTC),
                 )
-            elif resp.status_code in (400, 401, 403):
+            elif resp.status_code in (401, 403):
                 return ProviderStatusInfo(
                     provider=self.provider_name,
                     connection_type=ConnectionType.HOSTED.value,
@@ -104,6 +113,18 @@ class GeminiAdapter(BaseLLMAdapter):
                     configured_default_model=self.default_model,
                     available_models=PERMITTED_GEMINI_MODELS,
                     status_message="Configured Gemini credentials are invalid or forbidden",
+                    last_checked_at=datetime.now(UTC),
+                )
+            elif resp.status_code == 400:
+                sanitized = self._sanitize(resp.text[:120])
+                return ProviderStatusInfo(
+                    provider=self.provider_name,
+                    connection_type=ConnectionType.HOSTED.value,
+                    is_configured=True,
+                    is_available=False,
+                    configured_default_model=self.default_model,
+                    available_models=PERMITTED_GEMINI_MODELS,
+                    status_message=f"Gemini API rejected request: {sanitized}",
                     last_checked_at=datetime.now(UTC),
                 )
             elif resp.status_code == 404:
@@ -199,9 +220,7 @@ class GeminiAdapter(BaseLLMAdapter):
         }
 
         if request.system_prompt:
-            body["systemInstruction"] = {
-                "parts": [{"text": request.system_prompt}]
-            }
+            body["systemInstruction"] = {"parts": [{"text": request.system_prompt}]}
 
         url = f"{GEMINI_BASE_URL}/models/{actual_model}:generateContent"
         headers = {
@@ -214,7 +233,7 @@ class GeminiAdapter(BaseLLMAdapter):
             resp = await client.post(url, headers=headers, json=body)
             duration_ms = (time.perf_counter() - start_time) * 1000.0
 
-            if resp.status_code in (400, 401, 403):
+            if resp.status_code in (401, 403):
                 sanitized_msg = self._sanitize(resp.text[:200])
                 return LLMGenerationResult(
                     provider=self.provider_name,
@@ -225,7 +244,21 @@ class GeminiAdapter(BaseLLMAdapter):
                     duration_ms=duration_ms,
                     is_success=False,
                     error_type="INVALID_CREDENTIALS",
-                    error_message=f"Gemini authentication failed: {sanitized_msg}",
+                    error_message=f"Gemini credentials invalid or forbidden: {sanitized_msg}",
+                )
+
+            if resp.status_code == 400:
+                sanitized_msg = self._sanitize(resp.text[:200])
+                return LLMGenerationResult(
+                    provider=self.provider_name,
+                    requested_model=actual_model,
+                    actual_model=actual_model,
+                    operation_reference=request.operation_reference,
+                    prompt_template_version=request.prompt_template_version,
+                    duration_ms=duration_ms,
+                    is_success=False,
+                    error_type="INVALID_REQUEST",
+                    error_message=f"Gemini invalid request: {sanitized_msg}",
                 )
 
             if resp.status_code == 404:
@@ -237,7 +270,7 @@ class GeminiAdapter(BaseLLMAdapter):
                     prompt_template_version=request.prompt_template_version,
                     duration_ms=duration_ms,
                     is_success=False,
-                    error_type="UNAVAILABLE_MODEL",
+                    error_type="MODEL_UNAVAILABLE",
                     error_message=f"Gemini model '{actual_model}' not found or unsupported",
                 )
 
@@ -326,7 +359,9 @@ class GeminiAdapter(BaseLLMAdapter):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=candidate_tokens,
                 total_tokens=total_tokens,
-                is_usage_known=(prompt_tokens is not None and candidate_tokens is not None),
+                is_usage_known=(
+                    prompt_tokens is not None and candidate_tokens is not None
+                ),
             )
 
             # If structured output expected, parse JSON

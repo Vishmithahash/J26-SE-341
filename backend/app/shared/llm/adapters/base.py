@@ -18,9 +18,15 @@ class BaseLLMAdapter(ABC):
         """Name of the provider (ollama, gemini)."""
 
     @abstractmethod
-    async def check_availability(self) -> ProviderStatusInfo:
+    async def check_availability(
+        self, model_id: str | None = None
+    ) -> ProviderStatusInfo:
         """Check provider reachability and list installed/available permitted models."""
 
     @abstractmethod
-    async def generate(self, request: LLMGenerationRequest) -> LLMGenerationResult:
+    async def generate(
+        self,
+        request: LLMGenerationRequest,
+        model_override: str | None = None,
+    ) -> LLMGenerationResult:
         """Execute non-streaming text or structured generation with usage telemetry."""

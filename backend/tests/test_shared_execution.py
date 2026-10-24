@@ -236,6 +236,51 @@ def seed_all_components(
     db_session.add(c2_case)
 
     # 3. C3 Frozen Suite
+    valid_c3_contract = {
+        "contract_id": "rec-shared-01",
+        "contract_version": "1.0.0",
+        "permitted_terminal_outcomes": ["SUCCESS_CLEAN_RECOVERY"],
+        "initial_invocation_counts_as_attempt": True,
+        "max_task_attempts": 3,
+        "max_retries": 2,
+        "max_tool_calls_budget": 10,
+        "max_total_timeout_ms": 10000,
+        "required_state_assertions": ["order_created"],
+        "allow_duplicate_side_effects": False,
+        "require_truthful_completion_reporting": True,
+    }
+    valid_c3_case = {
+        "schema_version": "2026.1",
+        "project_id": p_id,
+        "case_id": "case-c3-exec-01",
+        "case_family_id": "fam-01",
+        "domain": "ecommerce",
+        "task_id": "task-checkout-demo",
+        "task_version": "1.0.0",
+        "tool_id": "order_placement",
+        "tool_version": "1.0.0",
+        "fixture_id": "fix-c3-01",
+        "fixture_version": "1.0.0",
+        "adapter_id": "controlled_test_adapter",
+        "adapter_version": "1.0.0",
+        "recovery_contract_id": "rec-shared-01",
+        "recovery_contract_version": "1.0.0",
+        "occurrence": 1,
+        "interception_hook": "BEFORE_TOOL_CALL",
+        "fault_family": "TIMEOUT_DISCONNECTION",
+        "effect_phase": "BEFORE_EFFECT",
+        "payload": {
+            "family": "TIMEOUT_DISCONNECTION",
+            "mode": "CALLER_TIMEOUT_EXCEEDED",
+            "timing_ms": 5000,
+        },
+        "release_rule": {"rule_type": "ATTEMPT_BOUNDED", "max_fault_count": 1},
+        "required_assertions": ["order_created"],
+        "required_observations": ["network_latency_ms"],
+        "caller_timeout_ms": 3000,
+        "reproducibility_seed": 42,
+    }
+
     c3_suite = C3SuiteModel(
         suite_id="suite-c3-exec-01",
         suite_digest="a" * 64,
@@ -249,7 +294,7 @@ def seed_all_components(
         policy_snapshot={},
         adapter_manifest_snapshot={},
         task_fixture_metadata_snapshot={},
-        recovery_contract_snapshot={},
+        recovery_contract_snapshot=valid_c3_contract,
         suite_snapshot={},
     )
     db_session.add(c3_suite)
@@ -267,7 +312,7 @@ def seed_all_components(
         interception_hook="pre_tool_call",
         target_tool_id="order_placement",
         case_order=0,
-        case_snapshot={},
+        case_snapshot=valid_c3_case,
     )
     db_session.add(c3_case)
 

@@ -18,7 +18,10 @@ from app.components.c3_robustness_recovery.contracts.evaluation import (
     C2FactValue,
 )
 from app.components.c3_robustness_recovery.contracts.schemas import RecoveryContract
-from app.components.c3_robustness_recovery.runtime.evidence import MatchedPairEvidence
+from app.components.c3_robustness_recovery.runtime.evidence import (
+    MatchedPairEvidence,
+    StateObservationReference,
+)
 
 
 class C2ToC3AssertionMapping(BaseModel):
@@ -126,14 +129,22 @@ def validate_c2_facts(
     for fact in facts:
         # Check project mismatch if expected project is provided
         fact_pid = fact.details.get("project_id")
-        if expected_project_id is not None and fact_pid is not None and fact_pid != expected_project_id:
+        if (
+            expected_project_id is not None
+            and fact_pid is not None
+            and fact_pid != expected_project_id
+        ):
             conflicts.append(
                 f"Cross-project C2 fact rejected: fact project '{fact_pid}' does not match expected '{expected_project_id}'."
             )
 
         # Check pair mismatch if expected pair is provided
         fact_pair = fact.details.get("pair_id")
-        if expected_pair_id is not None and fact_pair is not None and fact_pair != expected_pair_id:
+        if (
+            expected_pair_id is not None
+            and fact_pair is not None
+            and fact_pair != expected_pair_id
+        ):
             conflicts.append(
                 f"Mismatched pair C2 fact rejected: fact pair '{fact_pair}' does not match expected '{expected_pair_id}'."
             )
@@ -196,33 +207,37 @@ def get_c2_fact_value(
             or fact.provenance == "OFFLINE_EXPORT"
         )
 
-        is_offline_demo_fact = is_imported_untrusted or fact.provenance in (
-            "C2_FIXTURE",
-            "C2_DEMO_FIXTURE",
-            "TEST_FIXTURE",
-            "OFFLINE_DEMO",
-            "OFFLINE_EXPORT",
-            "SYNTHETIC",
-            "FALLBACK_OFFLINE",
-        )
-
-        is_fact_authoritative = (
-            require_strict_scope and not is_offline_demo_fact
-        ) or (
-            not is_imported_untrusted
-            and fact.provenance in ("SERVER_EVALUATED", "SHARED_RUN", "C2_EVALUATOR_BRIDGE")
-        )
+        if require_strict_scope:
+            if is_imported_untrusted:
+                # Imported facts cannot become trusted merely through a provenance string or fabricated labels
+                continue
+            is_fact_authoritative = True
+        else:
+            is_fact_authoritative = not is_imported_untrusted and fact.provenance in (
+                "SERVER_EVALUATED",
+                "SHARED_RUN",
+                "C2_EVALUATOR_BRIDGE",
+            )
 
         # Trial scope enforcement: do not disable trial checks because supplied facts omit trial IDs
-        if expected_trial_id is not None and fact.details.get("trial_id") != expected_trial_id:
+        if (
+            expected_trial_id is not None
+            and fact.details.get("trial_id") != expected_trial_id
+        ):
             continue
 
         # Project scope enforcement
-        if expected_project_id is not None and fact.details.get("project_id") != expected_project_id:
+        if (
+            expected_project_id is not None
+            and fact.details.get("project_id") != expected_project_id
+        ):
             continue
 
         # Pair scope enforcement
-        if expected_pair_id is not None and fact.details.get("pair_id") != expected_pair_id:
+        if (
+            expected_pair_id is not None
+            and fact.details.get("pair_id") != expected_pair_id
+        ):
             continue
 
         if is_fact_authoritative:
@@ -244,11 +259,23 @@ def get_c2_fact_value(
                 continue
         else:
             # Preserve compatibility for explicitly labelled offline/demo fact workflows
-            if time_scope is not None and fact.time_scope is not None and fact.time_scope != time_scope:
+            if (
+                time_scope is not None
+                and fact.time_scope is not None
+                and fact.time_scope != time_scope
+            ):
                 continue
-            if entity_id is not None and fact.entity_id is not None and fact.entity_id != entity_id:
+            if (
+                entity_id is not None
+                and fact.entity_id is not None
+                and fact.entity_id != entity_id
+            ):
                 continue
-            if snapshot_id is not None and fact.snapshot_id is not None and fact.snapshot_id != snapshot_id:
+            if (
+                snapshot_id is not None
+                and fact.snapshot_id is not None
+                and fact.snapshot_id != snapshot_id
+            ):
                 continue
 
         matching_values.add(fact.value)
@@ -394,6 +421,19 @@ def evaluate_c2_facts_bridge(
 
     facts: list[C2AssertionFact] = []
     snapshot_id = context_data.get("snapshot_id") or f"snap-{fault_trial_id[:8]}"
+
+    # Project authoritative retained observation reference onto the fault trial record
+    if hasattr(evidence, "fault_trial") and evidence.fault_trial:
+        evidence.fault_trial.snapshot_id = snapshot_id
+        evidence.fault_trial.observed_entity_id = expected_entity_id
+        evidence.fault_trial.observation_reference = StateObservationReference(
+            snapshot_id=snapshot_id,
+            snapshot_version="1.0.0",
+            entity_id=expected_entity_id,
+            observation_scope=time_scope,
+            fingerprint=context_data.get("fingerprint")
+            or getattr(evidence.fault_trial, "final_state_fingerprint", None),
+        )
 
     # All assertions required by contract + standard rule assertions
     all_target_assertions = set(recovery_contract.required_state_assertions)

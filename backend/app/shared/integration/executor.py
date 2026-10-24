@@ -413,12 +413,9 @@ def dispatch_component_evaluations(
         c3_inputs = frozen_inputs.get("c3", {})
         pair_id = f"pair-{execution_id[:8]}"
 
-        is_demo_c3 = (
-            frozen_inputs.get("is_demonstration")
-            or frozen_inputs.get("is_demo")
-            or "demo" in (refs.c3.suite_id or "").lower()
-            or "demo" in (c3_inputs.get("task_id") or refs.c3.task_id or "").lower()
-            or (refs.c3.suite_digest and refs.c3.suite_digest == "a" * 64)
+        is_demo_c3 = bool(
+            frozen_inputs.get("is_demonstration") is True
+            or frozen_inputs.get("is_demo") is True
         )
 
         contract_raw = c3_inputs.get("recovery_contract") or c3_inputs.get(
@@ -706,7 +703,10 @@ class SharedExecutionCoordinator:
         is_demo = bool(
             frozen_inputs.get("is_demonstration") is True
             or frozen_inputs.get("is_demo") is True
-            or (plan_record.plan_payload and plan_record.plan_payload.get("is_demonstration") is True)
+            or (
+                plan_record.plan_payload
+                and plan_record.plan_payload.get("is_demonstration") is True
+            )
             or getattr(plan_record, "is_demonstration", False) is True
         )
 
@@ -730,10 +730,18 @@ class SharedExecutionCoordinator:
             resolved_prompt = c1_inputs.get("task_prompt") or c1_inputs.get("task")
         if not resolved_prompt and c2_inputs:
             c2_test_def = c2_inputs.get("test_definition") or {}
-            resolved_prompt = c2_test_def.get("task") or c2_inputs.get("task") or c2_inputs.get("task_prompt")
+            resolved_prompt = (
+                c2_test_def.get("task")
+                or c2_inputs.get("task")
+                or c2_inputs.get("task_prompt")
+            )
         if not resolved_prompt and c3_inputs:
             c3_case_snap = c3_inputs.get("case") or c3_inputs.get("selected_case") or {}
-            resolved_prompt = c3_case_snap.get("task") or c3_inputs.get("task") or c3_inputs.get("task_prompt")
+            resolved_prompt = (
+                c3_case_snap.get("task")
+                or c3_inputs.get("task")
+                or c3_inputs.get("task_prompt")
+            )
         if not resolved_prompt and c4_inputs:
             resolved_prompt = c4_inputs.get("task_prompt") or c4_inputs.get("task")
 
@@ -750,7 +758,11 @@ class SharedExecutionCoordinator:
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Execution dispatch prevented: missing required task prompt in frozen execution inputs.",
                 )
-            resolved_prompt = "Execute target test plan" if not is_demo else "Demonstration execution task prompt"
+            resolved_prompt = (
+                "Execute target test plan"
+                if not is_demo
+                else "Demonstration execution task prompt"
+            )
         default_prompt = resolved_prompt
 
         # 3. Resolve actual permitted tools from pinned component inputs
@@ -761,9 +773,13 @@ class SharedExecutionCoordinator:
             # From C1
             c1_tools = [
                 t.get("name") if isinstance(t, dict) else getattr(t, "name", "")
-                for t in (c1_inputs.get("tools", []) if isinstance(c1_inputs, dict) else [])
+                for t in (
+                    c1_inputs.get("tools", []) if isinstance(c1_inputs, dict) else []
+                )
             ]
-            c1_permitted = c1_inputs.get("permitted_tools") or [t for t in c1_tools if t]
+            c1_permitted = c1_inputs.get("permitted_tools") or [
+                t for t in c1_tools if t
+            ]
             for t in c1_permitted:
                 if t and t not in active_tools:
                     active_tools.append(t)
@@ -772,12 +788,20 @@ class SharedExecutionCoordinator:
             c2_def = c2_inputs.get("definition") or {}
             c2_event_mappings = c2_def.get("event_mappings") or []
             for em in c2_event_mappings:
-                tool_name = em.get("tool_name") if isinstance(em, dict) else getattr(em, "tool_name", None)
+                tool_name = (
+                    em.get("tool_name")
+                    if isinstance(em, dict)
+                    else getattr(em, "tool_name", None)
+                )
                 if tool_name and tool_name not in active_tools:
                     active_tools.append(tool_name)
             c2_tool_specs = c2_def.get("tool_specifications") or []
             for ts in c2_tool_specs:
-                tool_name = ts.get("name") if isinstance(ts, dict) else getattr(ts, "name", None)
+                tool_name = (
+                    ts.get("name")
+                    if isinstance(ts, dict)
+                    else getattr(ts, "name", None)
+                )
                 if tool_name and tool_name not in active_tools:
                     active_tools.append(tool_name)
 
@@ -811,7 +835,9 @@ class SharedExecutionCoordinator:
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Execution dispatch prevented: missing required tool configuration in frozen execution inputs.",
                 )
-            permitted_tools = ["target_execution_tool"] if not is_demo else ["demo_tool"]
+            permitted_tools = (
+                ["target_execution_tool"] if not is_demo else ["demo_tool"]
+            )
         else:
             permitted_tools = active_tools
 

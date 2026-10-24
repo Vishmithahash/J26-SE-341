@@ -46,6 +46,7 @@ export const ModelPreparationForm = ({
   const [version, setVersion] = useState('1.0.0');
   const [task, setTask] = useState('Refund my latest paid order.');
   const [autoValidate, setAutoValidate] = useState(true);
+  const [assistanceMode, setAssistanceMode] = useState('deterministic'); // 'deterministic' | 'model_assisted'
 
   // Business Rules
   const [businessRules, setBusinessRules] = useState([
@@ -212,7 +213,7 @@ export const ModelPreparationForm = ({
     }
 
     try {
-      await onBuildCandidate(payload, autoValidate);
+      await onBuildCandidate(payload, autoValidate, assistanceMode);
     } catch (err) {
       if (err.data?.detail?.diagnostics) {
         setDiagnosticsList(err.data.detail.diagnostics);
@@ -637,6 +638,52 @@ export const ModelPreparationForm = ({
                 </div>
               </div>
             )}
+
+            {/* Assistance Mode Selection */}
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                Synthesis Strategy & Model Assistance
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
+                  assistanceMode === 'deterministic'
+                    ? 'border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                    : 'border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800/40'
+                }`}>
+                  <input
+                    type="radio"
+                    name="assistanceMode"
+                    value="deterministic"
+                    checked={assistanceMode === 'deterministic'}
+                    onChange={() => setAssistanceMode('deterministic')}
+                    className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-slate-900 dark:text-white block">Deterministic Synthesis</span>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">Strict rule-based EFSM compilation from declared workflow inputs.</span>
+                  </div>
+                </label>
+
+                <label className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-all ${
+                  assistanceMode === 'model_assisted'
+                    ? 'border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                    : 'border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800/40'
+                }`}>
+                  <input
+                    type="radio"
+                    name="assistanceMode"
+                    value="model_assisted"
+                    checked={assistanceMode === 'model_assisted'}
+                    onChange={() => setAssistanceMode('model_assisted')}
+                    className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-slate-900 dark:text-white block">Model-Assisted Proposal (Selected QA Model)</span>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">Refines transition semantics and state invariants using user's saved LLM.</span>
+                  </div>
+                </label>
+              </div>
+            </div>
 
             {/* Auto Validate Checkbox & Submit */}
             <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

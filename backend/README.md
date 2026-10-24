@@ -1249,21 +1249,36 @@ User model selections are stored in the database table `user_model_selections` (
 alembic upgrade head
 ```
 
-### 4. Authoritative Authenticated API Routes
+### 4. Authoritative Authenticated API Routes and Contract
 All routes require authentication via `require_active_user`:
 - `GET /api/v1/llm/providers`: Discovery of configured providers, installed models, and truthful reachability status.
-- `GET /api/v1/llm/selection`: Get the current authenticated user's authoritative saved model selection.
-- `PUT /api/v1/llm/selection`: Save/activate the user's provider, connection type (`local` | `hosted`), and model.
-- `POST /api/v1/llm/test-connection`: Execute a bounded (non-streaming, 10s timeout, max 100 tokens) test inference to verify provider credentials and responsiveness.
+  - Returns canonical fields: `is_configured`, `is_available`, `configured_default_model`, `available_models`, `status_message`.
+- `GET /api/v1/llm/selection`: Get the current authenticated user's authoritative saved model selection (`connection_type`, `provider`, `model_id`, `generation_settings`).
+- `PUT /api/v1/llm/selection`: Save/activate the user's provider, connection type (`local` | `hosted`), and `model_id`. Validates permitted provider/connection combinations (`local` -> `ollama`, `hosted` -> `gemini`), rejects conflicting `model` vs `model_id`, validates numeric bounds, and rejects booleans for count fields.
+- `POST /api/v1/llm/test-connection`: Execute a bounded (non-streaming, 10s timeout, max 100 tokens) test inference testing the exact requested `model_id`. Returns `model_id`, `duration_ms`, `status_message`, and structured probe validation (`{"status": "ok", "framework": "agentic_qa"}`). Results are bound strictly to user, provider, and model version.
 
-### 5. Component Integrations
+### 5. Frontend Contract and State Protection
+- **Canonical Field Alignment**: Consistently consumes `is_configured`, `is_available`, `configured_default_model`, and `model_id`.
+- **Installed Qwen Tag Handling**: Respects exact installed and selected Qwen tags (e.g., `qwen3.5:4b`) without forcing `qwen3:4b` through hardcoded frontend fallbacks.
+- **Request-Generation / Stale Response Protection**: Loading, saving, resetting, and test actions use monotonically increasing request IDs (`activeReqIdRef`) to prevent previous-user or late-arriving responses from updating the current view.
+- **Truthful Unverified Badging**: Cached browser `localStorage` preferences display an explicit amber "Unverified (Local Cache)" badge and never display green "Active & Saved" confirmation unless verified by a successful server acknowledgement.
+
+### 6. Component Integrations and Assistance Mode Controls
 - **C1 (Tool-Call Correctness)**: `ModelAssistedDiagnosisProvider` uses the selected model to summarize and explain deterministic root-cause findings without inventing code evidence.
-- **C2 (State-Aware Workflow)**: `ModelAssistedEFSMBuilder` proposes candidate draft EFSM workflows based on business rules and tool specs. Proposals require human review and approval; they are never auto-approved.
-- **C3 (Robustness & Recovery)**: `prepare_draft_inputs` drafts candidate task fixtures and recovery contracts based on adapter manifests and tool specifications, explicitly flagging unresolved references.
-- **C4 (Policy-Aware Safety)**: `SharedLlmPolicyExtractionProvider` extracts structured policy candidates adhering to `c4_candidate_v1` schemas with strict offline validation and excerpt preservation.
+- **C2 (State-Aware Workflow)**: `ModelPreparationForm` exposes explicit assistance-mode controls (`DETERMINISTIC` vs `MODEL_ASSISTED`). `ModelAssistedEFSMBuilder` proposes candidate draft EFSM workflows grounded in declared tools and invariants. Proposed models retain provider/model provenance and require human review and approval; they are never auto-approved.
+- **C3 (Robustness & Recovery)**: `prepare_draft_inputs` drafts candidate task fixtures and recovery contracts using valid `TerminalOutcome` enums (`SUCCESS_CLEAN_RECOVERY`, `SUCCESS_DEGRADED_FALLBACK`, `GRACEFUL_ABORT_USER_NOTIFIED`, `FAIL_SAFE_STOP`). No silent repair of attempt/retry budgets.
+- **C4 (Policy-Aware Safety)**: `ExtractionSection` exposes an explicit engine toggle ("Offline Mock Engine" vs "Use Selected QA Model"). `SharedLlmPolicyExtractionProvider` prompts for and validates canonical candidate schemas (`supporting_excerpt`, `policy_requirement`, `evaluation_boundary`). Missing or invalid policy requirements fail-safe to `DENY` rather than silent `ALLOW`.
 
-### 6. Safeguards and Error Handling
-- **No Transaction Holding**: Database transactions are committed before external HTTP requests and never held open during model inference.
-- **Credential Protection**: API keys are passed in request headers (`x-goog-api-key`), never logged, placed in URLs, or exported to frontend bundles.
-- **Truthful Status**: Outages, missing models, invalid credentials, and timeouts produce distinct, classified errors rather than silent fallbacks.
+### 7. C3 Evaluator Fact-Scope Binding and Execution Dispatch
+- **Authoritative Fact Scope**: The evaluator never derives `expected_snapshot` circular from the facts being validated. Expected scope is strictly bound from authoritative retained observations (`TrialEvidence.snapshot_id`, `observation_reference`) and pinned mapping versions.
+- **Strict Scope Enforcement**: Wrong project, wrong pair/trial ID, wrong entity ID, wrong snapshot ID, or mismatched assertion versions evaluate to `UNKNOWN` and cannot satisfy recovery assertions. Imported or self-reported facts cannot bypass strict evaluation.
+- **Execution Input Integrity**: Pinned task prompts and permitted tools are strictly required. Missing required inputs block dispatch with HTTP 422 rather than substituting generic defaults. Demonstration name and digest heuristics inside evaluation dispatch have been completely removed.
+
+### 8. Safeguards, Resource Management, and Live Prerequisites
+- **Short Transaction Scopes**: Database transactions are never held across external LLM network calls. Authoritative inputs are authorized and snapshotted, transactions released, model invoked, and results persisted in a fresh transaction.
+- **Credential Protection & Redaction**: API keys are passed in request headers (`x-goog-api-key`), never logged or exposed in client bundles. Error sanitizers replace credentials with `[REDACTED]`.
+- **Live Prerequisites**:
+  1. **PostgreSQL**: Neon DB reachable with Alembic migration `20261024_user_model_selections` applied (`alembic upgrade head`).
+  2. **Local Ollama**: Running on `http://127.0.0.1:11434` with the selected model pulled (e.g., `ollama pull qwen3.5:4b` or `ollama pull qwen3:4b`).
+  3. **Hosted Gemini**: Valid Google AI Studio API key configured in `GEMINI_API_KEY` (`backend/.env`).
 

@@ -38,7 +38,6 @@ export const ModelSelectionPage = () => {
 
   // Providers availability from server
   const [providers, setProviders] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -56,7 +55,6 @@ export const ModelSelectionPage = () => {
     }
 
     const currentReqId = ++activeReqIdRef.current;
-    setLoading(true);
 
     // Initial cache restore from localStorage for instant render
     const cached = getModelPreference(userId);
@@ -84,26 +82,36 @@ export const ModelSelectionPage = () => {
       }
 
       if (userSelection) {
-        setActiveSelection(userSelection);
+        const confirmedModel = userSelection.model_id || userSelection.model;
+        setActiveSelection({
+          ...userSelection,
+          model_id: confirmedModel,
+          model: confirmedModel,
+          isServerConfirmed: true,
+          isUnverifiedCached: false,
+        });
         setConnectionType(userSelection.connection_type);
         setProvider(userSelection.provider);
-        setModelId(userSelection.model);
+        setModelId(confirmedModel);
 
-        // Update local cache
+        // Update local cache as verified
         saveModelPreference(userId, {
           connectionType: userSelection.connection_type,
           provider: userSelection.provider,
-          modelId: userSelection.model,
+          modelId: confirmedModel,
+          isServerConfirmed: true,
         });
       } else if (cached) {
+        // Cached browser preference must NOT become "Active & Saved" when server retrieval fails
         setActiveSelection({
           connection_type: cached.connectionType,
           provider: cached.provider,
+          model_id: cached.modelId,
           model: cached.modelId,
+          isServerConfirmed: false,
+          isUnverifiedCached: true,
         });
       }
-
-      setLoading(false);
     });
   }, [userId]);
 
@@ -114,11 +122,17 @@ export const ModelSelectionPage = () => {
   // Handle clicking Local / Hosted card
   const handleSelectConnectionType = async (type) => {
     if (!userId || saving) return;
+    const currentReqId = ++activeReqIdRef.current;
 
     const targetProvider = type === 'local' ? 'ollama' : 'gemini';
     const providerInfo = targetProvider === 'ollama' ? ollamaProvider : geminiProvider;
-    const defaultModel =
-      providerInfo?.default_model || (type === 'local' ? 'qwen3:4b' : 'gemini-3.5-flash-lite');
+    let defaultModel =
+      providerInfo?.configured_default_model || (type === 'local' ? 'qwen3:4b' : 'gemini-3.5-flash-lite');
+
+    // If local and exact default is not installed but available models exist, use first discovered model
+    if (type === 'local' && providerInfo?.available_models?.length > 0 && !providerInfo.available_models.includes(defaultModel)) {
+      defaultModel = providerInfo.available_models[0];
+    }
 
     // Optimistically update form state
     setConnectionType(type);
@@ -133,33 +147,45 @@ export const ModelSelectionPage = () => {
       const updated = await saveModelSelection({
         connection_type: type,
         provider: targetProvider,
-        model: defaultModel,
+        model_id: defaultModel,
       });
+      if (currentReqId !== activeReqIdRef.current) return;
 
-      setActiveSelection(updated);
+      const confirmedModel = updated.model_id || updated.model;
+      setActiveSelection({
+        ...updated,
+        model_id: confirmedModel,
+        model: confirmedModel,
+        isServerConfirmed: true,
+        isUnverifiedCached: false,
+      });
       saveModelPreference(userId, {
         connectionType: updated.connection_type,
         provider: updated.provider,
-        modelId: updated.model,
+        modelId: confirmedModel,
+        isServerConfirmed: true,
       });
 
       setFeedback({
         type: 'success',
-        message: `Active provider updated to ${type === 'local' ? 'Ollama' : 'Google Gemini'} (${updated.model}).`,
+        message: `Active provider updated to ${type === 'local' ? 'Ollama' : 'Google Gemini'} (${confirmedModel}).`,
       });
     } catch (err) {
+      if (currentReqId !== activeReqIdRef.current) return;
       // Retain last confirmed active selection on failure
       if (activeSelection) {
         setConnectionType(activeSelection.connection_type);
         setProvider(activeSelection.provider);
-        setModelId(activeSelection.model);
+        setModelId(activeSelection.model_id || activeSelection.model);
       }
       setFeedback({
         type: 'error',
         message: `Failed to activate ${type}: ${err.message || 'Server error'}`,
       });
     } finally {
-      setSaving(false);
+      if (currentReqId === activeReqIdRef.current) {
+        setSaving(false);
+      }
     }
   };
 
@@ -173,110 +199,143 @@ export const ModelSelectionPage = () => {
       return;
     }
 
+    const currentReqId = ++activeReqIdRef.current;
     setSaving(true);
     setFeedback(null);
     try {
       const updated = await saveModelSelection({
         connection_type: connectionType,
         provider,
-        model: modelId.trim(),
+        model_id: modelId.trim(),
       });
+      if (currentReqId !== activeReqIdRef.current) return;
 
-      setActiveSelection(updated);
+      const confirmedModel = updated.model_id || updated.model;
+      setActiveSelection({
+        ...updated,
+        model_id: confirmedModel,
+        model: confirmedModel,
+        isServerConfirmed: true,
+        isUnverifiedCached: false,
+      });
       saveModelPreference(userId, {
         connectionType: updated.connection_type,
         provider: updated.provider,
-        modelId: updated.model,
+        modelId: confirmedModel,
+        isServerConfirmed: true,
       });
 
       setFeedback({
         type: 'success',
-        message: `Selection saved: ${updated.provider} / ${updated.model}`,
+        message: `Selection saved: ${updated.provider} / ${confirmedModel}`,
       });
     } catch (err) {
+      if (currentReqId !== activeReqIdRef.current) return;
       setFeedback({
         type: 'error',
         message: `Failed to save selection: ${err.message || 'Server error'}`,
       });
     } finally {
-      setSaving(false);
+      if (currentReqId === activeReqIdRef.current) {
+        setSaving(false);
+      }
     }
   };
 
   // Reset to default local Ollama/Qwen
   const handleReset = async () => {
     if (!userId || saving) return;
+    const currentReqId = ++activeReqIdRef.current;
     setSaving(true);
     setFeedback(null);
     setTestResult(null);
 
-    const defaultModel = ollamaProvider?.default_model || 'qwen3:4b';
+    const defaultModel = ollamaProvider?.configured_default_model || 'qwen3:4b';
     try {
       const updated = await saveModelSelection({
         connection_type: 'local',
         provider: 'ollama',
-        model: defaultModel,
+        model_id: defaultModel,
       });
-      setActiveSelection(updated);
+      if (currentReqId !== activeReqIdRef.current) return;
+
+      const confirmedModel = updated.model_id || updated.model;
+      setActiveSelection({
+        ...updated,
+        model_id: confirmedModel,
+        model: confirmedModel,
+        isServerConfirmed: true,
+        isUnverifiedCached: false,
+      });
       setConnectionType('local');
       setProvider('ollama');
-      setModelId(defaultModel);
+      setModelId(confirmedModel);
 
       saveModelPreference(userId, {
         connectionType: 'local',
         provider: 'ollama',
-        modelId: defaultModel,
+        modelId: confirmedModel,
+        isServerConfirmed: true,
       });
 
       setFeedback({
         type: 'info',
-        message: `Model selection reset to default: Ollama / ${defaultModel}.`,
+        message: `Model selection reset to default: Ollama / ${confirmedModel}.`,
       });
     } catch (err) {
+      if (currentReqId !== activeReqIdRef.current) return;
       setFeedback({
         type: 'error',
         message: `Failed to reset selection: ${err.message || 'Server error'}`,
       });
     } finally {
-      setSaving(false);
+      if (currentReqId === activeReqIdRef.current) {
+        setSaving(false);
+      }
     }
   };
 
   // Explicit bounded connection and inference test
   const handleTestConnection = async () => {
     if (testing) return;
+    const currentReqId = ++activeReqIdRef.current;
     setTesting(true);
     setTestResult(null);
 
     try {
       const result = await testLLMConnection({
         provider,
-        model: modelId.trim() || undefined,
+        model_id: modelId.trim() || undefined,
       });
+      if (currentReqId !== activeReqIdRef.current) return;
 
       setTestResult(result);
       if (result.success) {
         setFeedback({
           type: 'success',
-          message: `Inference test succeeded for ${result.provider} / ${result.model} (${result.latency_ms}ms).`,
+          message: `Inference test succeeded for ${result.provider} / ${result.model_id} (${Math.round(result.duration_ms)}ms).`,
         });
       } else {
         setFeedback({
           type: 'error',
-          message: `Connection test failed: ${result.message}`,
+          message: `Connection test failed: ${result.status_message || result.error || 'Probe failed'}`,
         });
       }
     } catch (err) {
+      if (currentReqId !== activeReqIdRef.current) return;
       setTestResult({
         success: false,
-        message: err.message || 'Connection test failed',
+        status_message: err.message || 'Connection test failed',
+        error: err.message || 'Network error',
       });
       setFeedback({
         type: 'error',
         message: `Connection test failed: ${err.message || 'Network error'}`,
       });
     } finally {
-      setTesting(false);
+      if (currentReqId === activeReqIdRef.current) {
+        setTesting(false);
+      }
     }
   };
 
@@ -285,38 +344,39 @@ export const ModelSelectionPage = () => {
     if (!activeSelection) return 'No model selected';
 
     const prov = activeSelection.provider === 'ollama' ? ollamaProvider : geminiProvider;
-    const modelTag = activeSelection.model || 'unspecified';
+    const modelTag = activeSelection.model_id || activeSelection.model || 'unspecified';
+    const prefix = activeSelection.isUnverifiedCached ? '[Unverified Cache] ' : '';
 
     if (activeSelection.provider === 'ollama') {
-      if (!prov) return `Selected: Ollama / ${modelTag}`;
-      if (!prov.available) {
-        if (prov.error && prov.error.toLowerCase().includes('not installed')) {
-          return `Selected: Ollama / ${modelTag} — Qwen model is not installed`;
+      if (!prov) return `${prefix}Selected: Ollama / ${modelTag}`;
+      if (!prov.is_available) {
+        if (prov.status_message && prov.status_message.toLowerCase().includes('not installed')) {
+          return `${prefix}Selected: Ollama / ${modelTag} — Qwen model is not installed`;
         }
-        return `Selected: Ollama / ${modelTag} — Ollama is not running`;
+        return `${prefix}Selected: Ollama / ${modelTag} — Ollama is not running`;
       }
-      return `Selected: Ollama / ${modelTag}`;
+      return `${prefix}Selected: Ollama / ${modelTag}`;
     }
 
     if (activeSelection.provider === 'gemini') {
-      if (!prov) return `Selected: Gemini / ${modelTag}`;
-      if (!prov.configured) {
-        return `Selected: Gemini / ${modelTag} — Gemini API key is not configured`;
+      if (!prov) return `${prefix}Selected: Gemini / ${modelTag}`;
+      if (!prov.is_configured) {
+        return `${prefix}Selected: Gemini / ${modelTag} — Gemini API key is not configured`;
       }
-      if (!prov.available) {
-        return `Selected: Gemini / ${modelTag} — Model unavailable`;
+      if (!prov.is_available) {
+        return `${prefix}Selected: Gemini / ${modelTag} — ${prov.status_message || 'Model unavailable'}`;
       }
-      return `Selected: Gemini / ${modelTag}`;
+      return `${prefix}Selected: Gemini / ${modelTag}`;
     }
 
-    return `Selected: ${activeSelection.provider} / ${modelTag}`;
+    return `${prefix}Selected: ${activeSelection.provider} / ${modelTag}`;
   };
 
   const isCurrentSelectionActive =
     activeSelection &&
     activeSelection.connection_type === connectionType &&
     activeSelection.provider === provider &&
-    activeSelection.model === modelId;
+    (activeSelection.model_id === modelId || activeSelection.model === modelId);
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -353,13 +413,29 @@ export const ModelSelectionPage = () => {
       {/* Current Truthful Status Card */}
       <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Current Active Selection
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              Current Active Selection
+            </span>
+            {activeSelection?.isUnverifiedCached && (
+              <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700">
+                Unverified (Local Cache)
+              </span>
+            )}
+            {activeSelection?.isServerConfirmed && (
+              <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-teal-100 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300 border border-teal-300 dark:border-teal-700">
+                Active & Saved
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2 mt-1">
             <span
               className={`inline-block w-2.5 h-2.5 rounded-full ${
-                activeSelection && activeSelection.model ? 'bg-teal-500' : 'bg-slate-400'
+                activeSelection?.isUnverifiedCached
+                  ? 'bg-amber-500'
+                  : activeSelection && (activeSelection.model_id || activeSelection.model)
+                  ? 'bg-teal-500'
+                  : 'bg-slate-400'
               }`}
             />
             <span className="text-sm font-bold text-slate-900 dark:text-white">
@@ -376,7 +452,7 @@ export const ModelSelectionPage = () => {
         {activeSelection && (
           <div className="flex items-center gap-2">
             <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 font-mono">
-              {activeSelection.provider} : {activeSelection.model}
+              {activeSelection.provider} : {activeSelection.model_id || activeSelection.model}
             </div>
             <button
               type="button"
@@ -443,17 +519,17 @@ export const ModelSelectionPage = () => {
                     {ollamaProvider && (
                       <span
                         className={`text-[10px] px-2 py-0.5 rounded font-medium ${
-                          ollamaProvider.available
+                          ollamaProvider.is_available
                             ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
                             : 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
                         }`}
                       >
-                        {ollamaProvider.available ? 'Ready' : 'Not Running'}
+                        {ollamaProvider.is_available ? 'Ready' : 'Not Running'}
                       </span>
                     )}
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Ollama runtime with Qwen model (Default: {ollamaProvider?.default_model || 'qwen3:4b'})
+                    Ollama runtime with Qwen model (Default: {ollamaProvider?.configured_default_model || 'qwen3:4b'})
                   </p>
                 </div>
               </button>
@@ -476,23 +552,23 @@ export const ModelSelectionPage = () => {
                     {geminiProvider && (
                       <span
                         className={`text-[10px] px-2 py-0.5 rounded font-medium ${
-                          geminiProvider.available
+                          geminiProvider.is_available
                             ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
-                            : geminiProvider.configured
+                            : geminiProvider.is_configured
                             ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
                             : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
                         }`}
                       >
-                        {geminiProvider.available
+                        {geminiProvider.is_available
                           ? 'Available'
-                          : geminiProvider.configured
+                          : geminiProvider.is_configured
                           ? 'Key Configured'
                           : 'No API Key'}
                       </span>
                     )}
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Google Gemini Developer API (Default: {geminiProvider?.default_model || 'gemini-3.5-flash-lite'})
+                    Google Gemini Developer API (Default: {geminiProvider?.configured_default_model || 'gemini-3.5-flash-lite'})
                   </p>
                 </div>
               </button>
@@ -600,7 +676,27 @@ export const ModelSelectionPage = () => {
               <RotateCcw className="w-4 h-4" />
               <span>Reset to Default</span>
             </button>
+
+            {isCurrentSelectionActive && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                <Check className="w-3.5 h-3.5" />
+                <span>Form matches active saved selection</span>
+              </span>
+            )}
           </div>
+
+          {testResult && (
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 font-mono space-y-1">
+              <div className="flex items-center justify-between">
+                <span>Probe Target: <strong className="text-slate-800 dark:text-slate-200">{testResult.provider} / {testResult.model_id}</strong></span>
+                <span className={testResult.success ? "text-emerald-600 font-bold" : "text-rose-600 font-bold"}>
+                  {testResult.success ? "PROBE SUCCESSFUL" : "PROBE FAILED"}
+                </span>
+              </div>
+              <div>Duration: <strong>{Math.round(testResult.duration_ms || 0)}ms</strong></div>
+              {testResult.status_message && <div>Status: {testResult.status_message}</div>}
+            </div>
+          )}
         </form>
       </div>
     </div>

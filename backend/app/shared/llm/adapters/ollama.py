@@ -45,8 +45,11 @@ class OllamaAdapter(BaseLLMAdapter):
             return self._external_client, False
         return httpx.AsyncClient(base_url=self.base_url, timeout=timeout), True
 
-    async def check_availability(self) -> ProviderStatusInfo:
+    async def check_availability(
+        self, model_id: str | None = None
+    ) -> ProviderStatusInfo:
         """Query /api/tags to detect reachable Ollama daemon and discover installed Qwen models."""
+        target_model = (model_id or self.default_model).strip()
         client, should_close = await self._get_client(timeout=5.0)
         try:
             resp = await client.get(f"{self.base_url}/api/tags")
@@ -72,22 +75,24 @@ class OllamaAdapter(BaseLLMAdapter):
                 # Still record installed models for visibility
                 qwen_models = installed_names
 
-            is_default_installed = any(
-                self.default_model == name or self.default_model in name
+            is_target_installed = any(
+                target_model == name
+                or target_model in name
+                or name.startswith(target_model)
                 for name in installed_names
             )
 
             status_msg = (
                 f"Ollama active with {len(qwen_models)} installed model(s)"
-                if is_default_installed
-                else f"Ollama is running, but configured model '{self.default_model}' is not installed. Run: ollama pull {self.default_model}"
+                if is_target_installed
+                else f"Ollama is running, but model '{target_model}' is not installed. Run: ollama pull {target_model}"
             )
 
             return ProviderStatusInfo(
                 provider=self.provider_name,
                 connection_type=ConnectionType.LOCAL.value,
                 is_configured=True,
-                is_available=is_default_installed,
+                is_available=is_target_installed,
                 configured_default_model=self.default_model,
                 available_models=qwen_models,
                 status_message=status_msg,
@@ -191,7 +196,9 @@ class OllamaAdapter(BaseLLMAdapter):
             usage = LLMUsageMetadata(
                 prompt_tokens=prompt_eval,
                 completion_tokens=eval_count,
-                total_tokens=(prompt_eval + eval_count) if (prompt_eval is not None and eval_count is not None) else None,
+                total_tokens=(prompt_eval + eval_count)
+                if (prompt_eval is not None and eval_count is not None)
+                else None,
                 is_usage_known=(prompt_eval is not None and eval_count is not None),
             )
 

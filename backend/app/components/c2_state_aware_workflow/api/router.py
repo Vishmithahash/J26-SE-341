@@ -380,7 +380,15 @@ def build_and_propose_model(
             detail=f"Route project_id '{project_id}' does not match payload project_id '{workflow_input.project_id}'.",
         )
 
-    if mode == "model_assisted":
+    valid_modes = {"deterministic", "model_assisted"}
+    norm_mode = (mode or "").strip().lower()
+    if norm_mode not in valid_modes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid builder mode '{mode}'. Supported modes are 'deterministic' and 'model_assisted'.",
+        )
+
+    if norm_mode == "model_assisted":
         builder = ModelAssistedEFSMBuilder(user_id=current_user.id, db=db)
         try:
             model_def = builder.propose_model(workflow_input)

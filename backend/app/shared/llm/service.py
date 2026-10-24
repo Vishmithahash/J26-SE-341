@@ -16,6 +16,7 @@ from app.shared.llm.contracts import (
     LLMProviderType,
     ModelSelectionConfig,
     ProviderStatusInfo,
+    SelectionSnapshot,
 )
 from app.shared.llm.models import UserModelSelection
 
@@ -59,6 +60,7 @@ class LLMProviderService:
         close_db = False
         if db is None:
             from app.database import SessionLocal
+
             db = SessionLocal()
             close_db = True
         try:
@@ -93,6 +95,7 @@ class LLMProviderService:
         close_db = False
         if db is None:
             from app.database import SessionLocal
+
             db = SessionLocal()
             close_db = True
         try:
@@ -131,21 +134,45 @@ class LLMProviderService:
     ) -> list[ProviderStatusInfo]:
         """Check and return availability of configured providers."""
         last_test_status = None
-        if db is not None and user_id is not None:
-            stmt = select(UserModelSelection).where(UserModelSelection.user_id == user_id)
-            user_sel = db.execute(stmt).scalar_one_or_none()
-            if user_sel:
-                last_test_status = user_sel.last_test_status
-
-        # Query provider adapters
-        ollama_status = await self.ollama_adapter.check_availability()
-        gemini_status = await self.gemini_adapter.check_availability()
+        user_sel = None
+        ollama_model = None
+        gemini_model = None
 
         if user_id is not None:
-            # Attach last test status if matching provider
-            if user_sel and user_sel.provider == LLMProviderType.OLLAMA.value:
+            close_db = False
+            if db is None:
+                from app.database import SessionLocal
+
+                db = SessionLocal()
+                close_db = True
+            try:
+                stmt = select(UserModelSelection).where(
+                    UserModelSelection.user_id == int(user_id)
+                )
+                user_sel = db.execute(stmt).scalar_one_or_none()
+                if user_sel:
+                    last_test_status = user_sel.last_test_status
+                    if user_sel.provider == LLMProviderType.OLLAMA.value:
+                        ollama_model = user_sel.model_id
+                    elif user_sel.provider == LLMProviderType.GEMINI.value:
+                        gemini_model = user_sel.model_id
+            finally:
+                if close_db and db is not None:
+                    db.close()
+
+        # Query provider adapters for truthful availability of requested or default models
+        ollama_status = await self.ollama_adapter.check_availability(
+            model_id=ollama_model
+        )
+        gemini_status = await self.gemini_adapter.check_availability(
+            model_id=gemini_model
+        )
+
+        if user_sel is not None and last_test_status is not None:
+            # Attach last test status ONLY if matching provider and model
+            if user_sel.provider == LLMProviderType.OLLAMA.value:
                 ollama_status.last_test_status = last_test_status
-            if user_sel and user_sel.provider == LLMProviderType.GEMINI.value:
+            elif user_sel.provider == LLMProviderType.GEMINI.value:
                 gemini_status.last_test_status = last_test_status
 
         return [ollama_status, gemini_status]
@@ -157,13 +184,36 @@ class LLMProviderService:
         is_conf = bool(adapter.api_key) if hasattr(adapter, "api_key") else True
         return ProviderStatusInfo(
             provider=norm,
-            connection_type="local" if norm == LLMProviderType.OLLAMA.value else "hosted",
+            connection_type="local"
+            if norm == LLMProviderType.OLLAMA.value
+            else "hosted",
             is_configured=is_conf,
             is_available=is_conf,
             configured_default_model=adapter.default_model,
             available_models=[adapter.default_model],
             status_message=f"{norm} configuration ready",
             last_checked_at=datetime.now(UTC),
+        )
+
+    def resolve_selection_snapshot(
+        self,
+        user_id: int | str,
+        operation_reference: str = "general",
+        prompt_template_version: str = "v1.0.0",
+        db: Session | None = None,
+    ) -> SelectionSnapshot:
+        """Resolve selection into an immutable snapshot when an operation begins."""
+        sel = self.get_user_selection(user_id, db)
+        return SelectionSnapshot(
+            user_id=int(user_id),
+            connection_type=sel.connection_type,
+            provider=sel.provider,
+            requested_model=sel.model_id,
+            generation_settings=dict(sel.generation_settings or {}),
+            selection_version=1,
+            operation_reference=operation_reference,
+            prompt_template_version=prompt_template_version,
+            created_at=datetime.now(UTC),
         )
 
     async def test_connection(
@@ -194,7 +244,7 @@ class LLMProviderService:
 
         test_request = LLMGenerationRequest(
             system_prompt="You are a QA framework test probe. Return JSON status.",
-            user_prompt="Respond with a JSON object: {\"status\": \"ok\", \"framework\": \"agentic_qa\"}",
+            user_prompt='Respond with a JSON object: {"status": "ok", "framework": "agentic_qa"}',
             operation_reference="connection_test",
             prompt_template_version="v1.0.0",
             temperature=0.0,
@@ -212,43 +262,64 @@ class LLMProviderService:
 
         res = await adapter.generate(test_request, model_override=target_model)
 
-        # Update test status in database if session available
+        # Probe validation: probe request asked for {"status": "ok"}
+        probe_valid = res.is_success and (
+            (
+                isinstance(res.structured_data, dict)
+                and res.structured_data.get("status") == "ok"
+            )
+            or "ok" in res.raw_text.lower()
+        )
+        test_succeeded = res.is_success and probe_valid
+
+        # Update test status in database ONLY IF tested provider and model match the user's active saved selection!
+        # Testing Gemini must NOT mark the user's different saved Ollama model as verified.
         close_db = False
         if db is None:
             from app.database import SessionLocal
+
             db = SessionLocal()
             close_db = True
         try:
             stmt = select(UserModelSelection).where(UserModelSelection.user_id == uid)
             selection = db.execute(stmt).scalar_one_or_none()
-            if selection:
-                selection.last_test_status = "SUCCESS" if res.is_success else "FAILED"
+            if (
+                selection
+                and selection.provider == target_provider
+                and selection.model_id == target_model
+            ):
+                selection.last_test_status = "SUCCESS" if test_succeeded else "FAILED"
                 selection.last_test_at = datetime.now(UTC)
                 db.commit()
         finally:
             if close_db and db is not None:
                 db.close()
 
-        if res.is_success:
+        if test_succeeded:
             return ConnectionTestResponse(
                 success=True,
                 provider=target_provider,
                 model_id=res.actual_model,
                 duration_ms=res.duration_ms,
-                status_message=f"Inference succeeded on {target_provider} ({res.actual_model}) in {res.duration_ms}ms.",
+                status_message=f"Inference succeeded on {target_provider} ({res.actual_model}) in {round(res.duration_ms, 2)}ms.",
                 metadata={
                     "usage": res.usage.model_dump(),
                     "response": res.structured_data or res.raw_text[:100],
                 },
             )
         else:
+            fail_reason = (
+                f"Probe validation failed: expected 'status: ok', got: {res.raw_text[:120]}"
+                if res.is_success
+                else (res.error_message or "Unknown failure")
+            )
             return ConnectionTestResponse(
                 success=False,
                 provider=target_provider,
                 model_id=target_model,
                 duration_ms=res.duration_ms,
-                status_message=f"Connection test failed: {res.error_message}",
-                error=res.error_message,
+                status_message=f"Connection test failed: {fail_reason}",
+                error=fail_reason,
                 metadata={"error_type": res.error_type},
             )
 
@@ -263,21 +334,27 @@ class LLMProviderService:
         Transactions are never held open across external HTTP requests.
         """
         uid = int(user_id)
-        # 1. Resolve user's frozen selection from database
-        selection = self.get_user_selection(uid, db)
-        provider_name = selection.provider
-        chosen_model = selection.model_id
-        user_settings = dict(selection.generation_settings or {})
+        # 1. Resolve user's frozen selection from database in a short transaction
+        snapshot = self.resolve_selection_snapshot(
+            uid,
+            operation_reference=request.operation_reference,
+            prompt_template_version=request.prompt_template_version,
+            db=db,
+        )
+
+        user_settings = dict(snapshot.generation_settings)
 
         # Merge user settings if not overridden in request
         if "temperature" in user_settings and request.temperature == 0.0:
             request.temperature = float(user_settings["temperature"])
 
         # 2. Resolve adapter
-        adapter = self.get_adapter(provider_name)
+        adapter = self.get_adapter(snapshot.provider)
 
-        # 3. Execute generation outside DB transaction
-        result = await adapter.generate(request, model_override=chosen_model)
+        # 3. Execute generation completely outside DB transaction
+        result = await adapter.generate(
+            request, model_override=snapshot.requested_model
+        )
 
         # Attach frozen selection metadata
         result.generation_settings.update(user_settings)

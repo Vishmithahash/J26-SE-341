@@ -50,6 +50,7 @@ from app.components.c3_robustness_recovery.runtime.evidence import (
     FixtureComparability,
     MatchedPairEvidence,
     ReadinessStatus,
+    StateObservationReference,
     TrialEvidence,
     TrialRole,
 )
@@ -355,6 +356,19 @@ def project_c3_matched_pair_evidence(
         else:
             retries_count = 0
 
+    obs_ref = None
+    snap_id = fault_trace.final_state.snapshot_id if fault_trace.final_state else None
+    if snap_id:
+        obs_ref = StateObservationReference(
+            snapshot_id=snap_id,
+            snapshot_version="1.0.0",
+            entity_id=expected_entity_id,
+            observation_scope="post_recovery",
+            fingerprint=fault_trace.final_state.fingerprint
+            if fault_trace.final_state
+            else None,
+        )
+
     fault_trial = TrialEvidence(
         project_id=project_id,
         case_id=case_id,
@@ -385,6 +399,9 @@ def project_c3_matched_pair_evidence(
         if fault_trace.cleanup_successful
         else CleanupStatus.UNCERTAIN,
         evidence_complete=fault_trace.is_complete,
+        snapshot_id=snap_id,
+        observed_entity_id=expected_entity_id,
+        observation_reference=obs_ref,
     )
 
     clean_qualification = (

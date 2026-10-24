@@ -287,6 +287,10 @@ export const PolicySafetyWorkspace = ({
                   selectedArtifact={intake.selectedArtifact}
                   providerReadiness={extraction.providerReadiness}
                   selectedProvider={extraction.selectedProvider}
+                  onSelectProvider={(p) => {
+                    extraction.setSelectedProvider(p);
+                    extraction.checkReadiness(p);
+                  }}
                   onCheckReadiness={extraction.checkReadiness}
                   isLoadingReadiness={extraction.isLoadingReadiness}
                   onDeriveCandidates={extraction.deriveCandidates}

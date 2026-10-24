@@ -154,12 +154,9 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
     # 4. Fixed Recovery Rules Evaluation
     rule_results: list[RecoveryRuleResult] = []
 
-    is_authoritative = (
-        fault_trial.target_mode != TargetMode.DEMONSTRATION
-        or any(
-            f.provenance in ("C2_EVALUATOR_BRIDGE", "SERVER_EVALUATED", "SHARED_RUN")
-            for f in request.c2_facts
-        )
+    is_authoritative = fault_trial.target_mode != TargetMode.DEMONSTRATION or any(
+        f.provenance in ("C2_EVALUATOR_BRIDGE", "SERVER_EVALUATED", "SHARED_RUN")
+        for f in request.c2_facts
     )
 
     if is_authoritative:
@@ -171,59 +168,62 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
         expected_pair_id = None
         expected_tid = None
 
-    # Derive expected scope from frozen configuration and correlated observations
+    # Derive expected scope from authoritative retained observations and frozen configuration
     expected_entity = None
     expected_snapshot = None
-    target_tool_id = getattr(case, "tool_id", None)
-    if fault_trial and fault_trial.events and target_tool_id:
-        for ev in fault_trial.events:
-            if ev.tool_id == target_tool_id:
-                det = getattr(ev, "details", {}) or {}
-                if det.get("order_id"):
-                    expected_entity = str(det.get("order_id"))
-                    break
-                if det.get("entity_id"):
-                    expected_entity = str(det.get("entity_id"))
-                    break
-    if not expected_entity and hasattr(contract, "expected_entity_id"):
-        expected_entity = contract.expected_entity_id
-    if not expected_entity and hasattr(case, "expected_entity_id"):
-        expected_entity = case.expected_entity_id
 
-    # Resolve expected snapshot from observations, event details, or trial evidence
-    if fault_trial and fault_trial.events:
-        for ev in reversed(fault_trial.events):
-            det = getattr(ev, "details", {}) or {}
-            if det.get("snapshot_id"):
-                expected_snapshot = str(det.get("snapshot_id"))
-                break
-            if det.get("after_snapshot_id"):
-                expected_snapshot = str(det.get("after_snapshot_id"))
-                break
-    if not expected_snapshot and hasattr(fault_trial, "snapshot_id") and fault_trial.snapshot_id:
-        expected_snapshot = fault_trial.snapshot_id
-    if not expected_snapshot and hasattr(contract, "expected_snapshot_id") and contract.expected_snapshot_id:
-        expected_snapshot = contract.expected_snapshot_id
-    if not expected_snapshot and hasattr(case, "expected_snapshot_id") and case.expected_snapshot_id:
-        expected_snapshot = case.expected_snapshot_id
-    if not expected_snapshot and hasattr(request.matched_evidence, "metadata") and isinstance(request.matched_evidence.metadata, dict):
-        expected_snapshot = request.matched_evidence.metadata.get("snapshot_id")
-    if not expected_snapshot and request.c2_facts:
-        matching_snaps = {
-            f.snapshot_id for f in request.c2_facts
-            if f.snapshot_id and f.details.get("trial_id") == expected_tid
-        }
-        if len(matching_snaps) == 1:
-            expected_snapshot = next(iter(matching_snaps))
+    if fault_trial:
+        # 1. Authoritative observation reference or retained snapshot/entity on fault trial
+        if getattr(fault_trial, "observation_reference", None) is not None:
+            expected_snapshot = fault_trial.observation_reference.snapshot_id
+            if fault_trial.observation_reference.entity_id:
+                expected_entity = fault_trial.observation_reference.entity_id
+
+        if not expected_snapshot and getattr(fault_trial, "snapshot_id", None):
+            expected_snapshot = fault_trial.snapshot_id
+
+        if not expected_entity and getattr(fault_trial, "observed_entity_id", None):
+            expected_entity = fault_trial.observed_entity_id
+
+        # 2. Independently retained snapshot recorded in runtime events during execution
+        if not expected_snapshot and fault_trial.events:
+            for ev in reversed(fault_trial.events):
+                det = getattr(ev, "details", {}) or {}
+                if det.get("snapshot_id"):
+                    expected_snapshot = str(det.get("snapshot_id"))
+                    break
+                if det.get("after_snapshot_id"):
+                    expected_snapshot = str(det.get("after_snapshot_id"))
+                    break
 
     # Helper function to resolve assertion version from pinned mappings and contracts
     def _resolve_assertion_version(aid: str) -> str:
-        if hasattr(contract, "assertion_versions") and isinstance(contract.assertion_versions, dict):
-            if aid in contract.assertion_versions:
-                return str(contract.assertion_versions[aid])
-        for m in DEFAULT_C2_TO_C3_MAPPINGS:
-            if m.c3_assertion_id == aid:
-                return m.c3_assertion_version
+        # Check pinned mappings from request first
+        if hasattr(request, "pinned_mappings") and request.pinned_mappings:
+            for m in request.pinned_mappings:
+                c3_id = getattr(m, "c3_assertion_id", None) or (
+                    m.get("c3_assertion_id") if isinstance(m, dict) else None
+                )
+                if c3_id == aid:
+                    c3_ver = getattr(m, "c3_assertion_version", None) or (
+                        m.get("c3_assertion_version") if isinstance(m, dict) else None
+                    )
+                    if c3_ver:
+                        return str(c3_ver)
+
+        if (
+            hasattr(contract, "assertion_versions")
+            and isinstance(contract.assertion_versions, dict)
+            and aid in contract.assertion_versions
+        ):
+            return str(contract.assertion_versions[aid])
+
+        # Do not use global demo mappings as authoritative configuration for every project
+        if not is_authoritative:
+            for m in DEFAULT_C2_TO_C3_MAPPINGS:
+                if m.c3_assertion_id == aid:
+                    return m.c3_assertion_version
+
         if hasattr(case, "assertion_version") and case.assertion_version:
             return str(case.assertion_version)
         return "1.0.0"
@@ -501,7 +501,9 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             time_scope="post_recovery",
             entity_id=expected_entity,
             snapshot_id=expected_snapshot,
-            assertion_version=_resolve_assertion_version("duplicate_side_effect_detected"),
+            assertion_version=_resolve_assertion_version(
+                "duplicate_side_effect_detected"
+            ),
             expected_trial_id=expected_tid,
             expected_project_id=expected_pid,
             expected_pair_id=expected_pair_id,
@@ -587,7 +589,9 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                 time_scope="post_recovery",
                 entity_id=expected_entity,
                 snapshot_id=expected_snapshot,
-                assertion_version=_resolve_assertion_version("target_idempotency_enforced"),
+                assertion_version=_resolve_assertion_version(
+                    "target_idempotency_enforced"
+                ),
                 expected_trial_id=expected_tid,
                 expected_project_id=expected_pid,
                 expected_pair_id=expected_pair_id,
@@ -599,7 +603,9 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                 time_scope="post_recovery",
                 entity_id=expected_entity,
                 snapshot_id=expected_snapshot,
-                assertion_version=_resolve_assertion_version("duplicate_side_effect_detected"),
+                assertion_version=_resolve_assertion_version(
+                    "duplicate_side_effect_detected"
+                ),
                 expected_trial_id=expected_tid,
                 expected_project_id=expected_pid,
                 expected_pair_id=expected_pair_id,

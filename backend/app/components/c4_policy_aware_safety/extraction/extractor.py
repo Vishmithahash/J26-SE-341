@@ -128,11 +128,32 @@ class BoundedNLPolicyExtractor:
             principal_sel = raw.get("principal_selector", "*")
             action_sel = raw.get("action_selector", "*")
             resource_sel = raw.get("resource_selector", "*")
-            req_str = raw.get("policy_requirement", "ALLOW")
-            try:
-                requirement = PolicyRequirement(req_str)
-            except ValueError:
-                requirement = PolicyRequirement.ALLOW
+            req_str = raw.get("policy_requirement") or raw.get("effect")
+            if not req_str:
+                issues.append(
+                    ValidationIssue(
+                        code=ValidationIssueCode.INVALID_SCHEMA,
+                        message="Extracted output missing required 'policy_requirement'.",
+                        field="policy_requirement",
+                        severity=Severity.CRITICAL,
+                        blocking=True,
+                    )
+                )
+                requirement = PolicyRequirement.DENY
+            else:
+                try:
+                    requirement = PolicyRequirement(req_str)
+                except ValueError:
+                    issues.append(
+                        ValidationIssue(
+                            code=ValidationIssueCode.INVALID_SCHEMA,
+                            message=f"Unsupported policy requirement '{req_str}'.",
+                            field="policy_requirement",
+                            severity=Severity.CRITICAL,
+                            blocking=True,
+                        )
+                    )
+                    requirement = PolicyRequirement.DENY
 
             eval_b_str = raw.get("evaluation_boundary", "ATTEMPTED_ACTION")
             try:
@@ -140,7 +161,9 @@ class BoundedNLPolicyExtractor:
             except ValueError:
                 eval_boundary = EvaluationBoundary.ATTEMPTED_ACTION
 
-            supporting_excerpt = str(raw.get("supporting_excerpt", "")).strip()
+            supporting_excerpt = str(
+                raw.get("supporting_excerpt") or raw.get("source_excerpt") or ""
+            ).strip()
 
             # 2. Anti-Prompt-Injection Filter & Data-Only Authority
             # Quoted attacks or prompt injections inside policy docs must NEVER become governance rules.
@@ -167,7 +190,9 @@ class BoundedNLPolicyExtractor:
             is_injection = False
             has_quoted_attack = False
             for pat in ADVERSARIAL_INJECTION_PATTERNS:
-                if pat.search(supporting_excerpt) or pat.search(str(raw.get("explanation", ""))):
+                if pat.search(supporting_excerpt) or pat.search(
+                    str(raw.get("explanation", ""))
+                ):
                     has_quoted_attack = True
                     if not is_governance_denial or raw.get("is_injection_candidate"):
                         is_injection = True
@@ -277,7 +302,10 @@ class BoundedNLPolicyExtractor:
             app_pred = None
             if raw.get("applicability_field"):
                 # Unit check: if threshold without verified units
-                if "amount" in raw["applicability_field"] or "credit" in raw["applicability_field"]:
+                if (
+                    "amount" in raw["applicability_field"]
+                    or "credit" in raw["applicability_field"]
+                ):
                     unit = raw.get("applicability_unit", "cents")
                     if unit not in ("cents", "USD", "currency"):
                         issues.append(
@@ -295,7 +323,9 @@ class BoundedNLPolicyExtractor:
                     conditions=[
                         PredicateCondition(
                             field=raw["applicability_field"],
-                            operator=PredicateOperator(raw.get("applicability_operator", "GREATER_THAN")),
+                            operator=PredicateOperator(
+                                raw.get("applicability_operator", "GREATER_THAN")
+                            ),
                             value=raw.get("applicability_value", 5000),
                         )
                     ],
@@ -306,7 +336,9 @@ class BoundedNLPolicyExtractor:
                 comp_pred_list.append(
                     PredicateCondition(
                         field=raw["compliance_field"],
-                        operator=PredicateOperator(raw.get("compliance_operator", "EQUALS")),
+                        operator=PredicateOperator(
+                            raw.get("compliance_operator", "EQUALS")
+                        ),
                         value=raw.get("compliance_value", "APPROVED"),
                     )
                 )
@@ -334,7 +366,11 @@ class BoundedNLPolicyExtractor:
             # 7. Initial Lifecycle Review Status
             # Candidates with blocking issues start as REJECTED; valid candidates start as DRAFT
             has_blocking_issue = any(i.blocking for i in issues)
-            status = RuleReviewStatus.REJECTED if has_blocking_issue else RuleReviewStatus.DRAFT
+            status = (
+                RuleReviewStatus.REJECTED
+                if has_blocking_issue
+                else RuleReviewStatus.DRAFT
+            )
 
             candidate = CandidateRule(
                 project_id=artifact.project_id,
@@ -382,14 +418,14 @@ class BoundedNLPolicyExtractor:
                     and not c1.applicability_conditions
                     and not c2.applicability_conditions
                 ):
-                        conflict_issue = ValidationIssue(
-                            code=ValidationIssueCode.CONFLICTING,
-                            message=f"Rule '{c1.rule_id}' directly contradicts '{c2.rule_id}' with opposing requirements without conditions.",
-                            field="policy_requirement",
-                            severity=Severity.HIGH,
-                            blocking=True,
-                        )
-                        c1.validation_issues.append(conflict_issue)
-                        c2.validation_issues.append(conflict_issue)
-                        c1.review_status = RuleReviewStatus.REJECTED
-                        c2.review_status = RuleReviewStatus.REJECTED
+                    conflict_issue = ValidationIssue(
+                        code=ValidationIssueCode.CONFLICTING,
+                        message=f"Rule '{c1.rule_id}' directly contradicts '{c2.rule_id}' with opposing requirements without conditions.",
+                        field="policy_requirement",
+                        severity=Severity.HIGH,
+                        blocking=True,
+                    )
+                    c1.validation_issues.append(conflict_issue)
+                    c2.validation_issues.append(conflict_issue)
+                    c1.review_status = RuleReviewStatus.REJECTED
+                    c2.review_status = RuleReviewStatus.REJECTED
