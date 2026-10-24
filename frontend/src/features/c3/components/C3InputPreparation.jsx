@@ -231,12 +231,12 @@ export const C3InputPreparation = ({
     try {
       const res = await c3Api.prepareDraftInputs({
         project_id: activeProject?.project_id || 'proj-demo-qa',
-        task_id: candidateCase?.task_id || 'task-order-recovery',
-        tool_id: candidateCase?.tool_id || 'refund_api',
+        task_id: candidateCase?.task_id || taskFixtureMetadata?.task_id || undefined,
+        tool_id: candidateCase?.tool_id || adapterManifest?.tools?.[0]?.tool_id || undefined,
         domain: candidateCase?.domain || 'ecommerce',
-        existing_task_fixture: taskFixtureMetadata,
-        existing_adapter_manifest: adapterManifest,
-        existing_recovery_contract: recoveryContract,
+        existing_task_fixture: taskFixtureMetadata || null,
+        existing_adapter_manifest: adapterManifest || null,
+        existing_recovery_contract: recoveryContract || null,
       });
 
       const meta = res.provider_metadata || {};

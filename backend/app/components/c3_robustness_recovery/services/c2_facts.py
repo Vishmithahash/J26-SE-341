@@ -28,7 +28,7 @@ from app.components.c3_robustness_recovery.runtime.evidence import (
 class C2ToC3AssertionMapping(BaseModel):
     """Explicit versioned binding between a C3 recovery requirement and a C2 state assertion."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     c3_assertion_id: str = Field(
         ..., description="Assertion ID expected by C3 recovery contract or rules"
@@ -53,12 +53,70 @@ class C2ToC3AssertionMapping(BaseModel):
         default="FAULT",
         description="Role of trial providing observation evidence (must be FAULT for recovery)",
     )
+    project_id: str | None = Field(
+        default=None, description="Optional applicable project binding"
+    )
+    configuration_binding: str | None = Field(
+        default=None, description="Optional configuration binding identifier"
+    )
+
+
+def normalize_c2_to_c3_mapping(mapping: Any) -> C2ToC3AssertionMapping | None:
+    """Safely normalize a single mapping into the C2ToC3AssertionMapping model.
+
+    Supports:
+    - Already validated C2ToC3AssertionMapping objects.
+    - Equivalent dictionaries restored from stored JSON.
+
+    Rejects malformed mappings safely (returns None instead of raising AttributeError or HTTP 500).
+    """
+    if isinstance(mapping, C2ToC3AssertionMapping):
+        return mapping
+    if isinstance(mapping, dict):
+        try:
+            return C2ToC3AssertionMapping.model_validate(mapping)
+        except Exception:
+            return None
+    if hasattr(mapping, "__dict__"):
+        try:
+            return C2ToC3AssertionMapping.model_validate(mapping.__dict__)
+        except Exception:
+            return None
+    return None
+
+
+def normalize_c2_to_c3_mappings(
+    mappings: list[Any] | None,
+) -> list[C2ToC3AssertionMapping]:
+    """Normalize a list of mappings into validated C2ToC3AssertionMapping models.
+
+    Safely rejects malformed mappings without raising AttributeError or HTTP 500.
+    Falls back to DEFAULT_C2_TO_C3_MAPPINGS when no valid mappings are supplied.
+    """
+    if not mappings:
+        return list(DEFAULT_C2_TO_C3_MAPPINGS)
+
+    normalized: list[C2ToC3AssertionMapping] = []
+    for item in mappings:
+        norm = normalize_c2_to_c3_mapping(item)
+        if norm is not None:
+            normalized.append(norm)
+
+    return normalized if normalized else list(DEFAULT_C2_TO_C3_MAPPINGS)
 
 
 # Default versioned mappings connecting canonical C3 requirements to registered C2 assertions
 DEFAULT_C2_TO_C3_MAPPINGS: list[C2ToC3AssertionMapping] = [
     C2ToC3AssertionMapping(
         c3_assertion_id="order_created",
+        c3_assertion_version="1.0.0",
+        c2_assertion_id="order_created",
+        c2_assertion_version="1.0.0",
+        entity_type="order",
+        required_time_scope="post_recovery",
+    ),
+    C2ToC3AssertionMapping(
+        c3_assertion_id="state_order_created",
         c3_assertion_version="1.0.0",
         c2_assertion_id="order_created",
         c2_assertion_version="1.0.0",
@@ -417,14 +475,13 @@ def evaluate_c2_facts_bridge(
         variables=context_data.get("vars", {}),
     )
 
-    # 4. Resolve mappings
-    active_mappings = {
-        m.c3_assertion_id: m for m in (mappings or DEFAULT_C2_TO_C3_MAPPINGS)
-    }
+    # 4. Resolve mappings safely
+    normalized_list = normalize_c2_to_c3_mappings(mappings)
+    active_mappings = {m.c3_assertion_id: m for m in normalized_list}
 
     facts: list[C2AssertionFact] = []
     snapshot_id = context_data.get("snapshot_id") or f"snap-{fault_trial_id[:8]}"
-    # Initialize observation reference on fault trial if missing without overwriting existing scope in authoritative modes
+    # Initialize observation reference on fault trial if missing without overwriting retained observation scope
     if hasattr(evidence, "fault_trial") and evidence.fault_trial:
         is_demo = (
             getattr(evidence.fault_trial, "target_mode", None) == "DEMONSTRATION"
@@ -434,7 +491,7 @@ def evaluate_c2_facts_bridge(
             evidence.fault_trial.snapshot_id = snapshot_id
         if (evidence.fault_trial.observed_entity_id is None or is_demo) and expected_entity_id:
             evidence.fault_trial.observed_entity_id = expected_entity_id
-        if evidence.fault_trial.observation_reference is None or is_demo:
+        if evidence.fault_trial.observation_reference is None:
             evidence.fault_trial.observation_reference = StateObservationReference(
                 snapshot_id=evidence.fault_trial.snapshot_id or snapshot_id,
                 snapshot_version="1.0.0",
@@ -442,6 +499,17 @@ def evaluate_c2_facts_bridge(
                 observation_scope=time_scope,
                 fingerprint=context_data.get("fingerprint")
                 or getattr(evidence.fault_trial, "final_state_fingerprint", None),
+            )
+        elif is_demo:
+            # Preserve existing observation_scope without overwriting it while syncing snapshot_id
+            evidence.fault_trial.observation_reference = (
+                evidence.fault_trial.observation_reference.model_copy(
+                    update={
+                        "snapshot_id": evidence.fault_trial.snapshot_id or snapshot_id,
+                        "entity_id": evidence.fault_trial.observed_entity_id
+                        or expected_entity_id,
+                    }
+                )
             )
     # All assertions required by contract + standard rule assertions
     all_target_assertions = set(recovery_contract.required_state_assertions)

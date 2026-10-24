@@ -43,6 +43,7 @@ from app.components.c3_robustness_recovery.runtime.evidence import (
     FixtureComparability,
     MatchedPairEvidence,
     ReadinessStatus,
+    StateObservationReference,
     TimeoutBoundaryType,
     TrialEvidence,
     TrialRole,
@@ -288,7 +289,24 @@ class DemonstrationCaller:
             results.append(res)
             if res.success:
                 return "SUCCESS", results
-            return f"TOOL_ERROR: {res.error}", results
+            if not self.allow_scripted_retry:
+                return f"TOOL_ERROR: {res.error}", results
+
+            # Scripted caller retry on intercepted domain error
+            try:
+                retry_res = await self.interceptor.intercept_call(
+                    tool_id=tool_id,
+                    tool_version=tool_version,
+                    arguments=arguments,
+                    forward_callback=forward_call,
+                    context=call_context,
+                )
+                results.append(retry_res)
+                if retry_res.success:
+                    return "SUCCESS_AFTER_RETRY", results
+                return f"RETRY_FAILED: {retry_res.error}", results
+            except Exception as retry_exc:  # noqa: BLE001
+                return f"RETRY_FAILED: {type(retry_exc).__name__}", results
         except (TimeoutError, asyncio.CancelledError):
             if not self.allow_scripted_retry:
                 return "TIMEOUT_ABORTED", results
@@ -506,6 +524,21 @@ class HarnessRunner:
         clean_cleanup = self.fixture_manager.cleanup(clean_namespace)
         clean_interceptor.close()
 
+        clean_snapshot_id = f"snap-{clean_trial_id[:8]}"
+        clean_entity_id = clean_final_state.get("customer_id")
+        if clean_final_state.get("orders"):
+            clean_entity_id = (
+                clean_final_state["orders"][0].get("order_id") or clean_entity_id
+            )
+
+        clean_obs_ref = StateObservationReference(
+            snapshot_id=clean_snapshot_id,
+            snapshot_version="1.0.0",
+            entity_id=clean_entity_id or "cust-demo-100",
+            observation_scope="clean_baseline",
+            fingerprint=clean_final_fp,
+        )
+
         clean_trial_evidence = TrialEvidence(
             project_id=project_id,
             case_id=case_id,
@@ -528,6 +561,9 @@ class HarnessRunner:
             caller_outcome=clean_outcome,
             cleanup_status=clean_cleanup.status,
             evidence_complete=True,
+            snapshot_id=clean_snapshot_id,
+            observed_entity_id=clean_entity_id or "cust-demo-100",
+            observation_reference=clean_obs_ref,
         )
 
         # -------------------------------------------------------------------
@@ -609,6 +645,21 @@ class HarnessRunner:
             else RecoveryActor.UNKNOWN
         )
 
+        fault_snapshot_id = f"snap-{fault_trial_id[:8]}"
+        fault_entity_id = fault_final_state.get("customer_id")
+        if fault_final_state.get("orders"):
+            fault_entity_id = (
+                fault_final_state["orders"][0].get("order_id") or fault_entity_id
+            )
+
+        fault_obs_ref = StateObservationReference(
+            snapshot_id=fault_snapshot_id,
+            snapshot_version="1.0.0",
+            entity_id=fault_entity_id or "cust-demo-100",
+            observation_scope="post_recovery",
+            fingerprint=fault_final_fp,
+        )
+
         fault_trial_evidence = TrialEvidence(
             project_id=project_id,
             case_id=case_id,
@@ -624,14 +675,40 @@ class HarnessRunner:
             final_state_fingerprint=fault_final_fp,
             events=fault_interceptor.events,
             episodes=fault_interceptor.episode_records,
-            tool_calls_count=len(fault_results)
-            + (1 if fault_interceptor.is_consumed else 0),
-            subsequent_calls_count=len(fault_results),
+            tool_calls_count=(
+                len(fault_results)
+                if len(fault_results) > 1
+                else (
+                    2
+                    if (
+                        fault_interceptor.is_consumed
+                        and fault_outcome
+                        in ("SUCCESS_AFTER_RETRY", "RETRY_FAILED")
+                    )
+                    else len(fault_results)
+                )
+            ),
+            subsequent_calls_count=(
+                len(fault_results) - 1
+                if len(fault_results) > 1
+                else (
+                    1
+                    if (
+                        fault_interceptor.is_consumed
+                        and fault_outcome
+                        in ("SUCCESS_AFTER_RETRY", "RETRY_FAILED")
+                    )
+                    else 0
+                )
+            ),
             observed_effects=fault_effects,
             execution_status=ExecutionStatus.COMPLETED,
             caller_outcome=fault_outcome,
             cleanup_status=fault_cleanup.status,
             evidence_complete=True,
+            snapshot_id=fault_snapshot_id,
+            observed_entity_id=fault_entity_id or "cust-demo-100",
+            observation_reference=fault_obs_ref,
         )
 
         # -------------------------------------------------------------------
@@ -694,23 +771,36 @@ class HarnessRunner:
         reasons: list[str] = []
 
         if not fault_trial.episodes:
-            hook_entries = [
-                ev
-                for ev in fault_trial.events
-                if ev.event_type.startswith("HOOK_ENTRY")
-                or ev.event_type.startswith("APPLICATION_AWARE_HOOK")
+            # Check actual per-tool occurrences reached for plan.target_tool_id
+            target_tool_events = [
+                ev for ev in fault_trial.events if ev.tool_id == plan.target_tool_id
             ]
-            if not hook_entries:
+            reached_occurrences = {
+                ev.occurrence
+                for ev in target_tool_events
+                if getattr(ev, "occurrence", None) is not None
+            }
+            max_reached_occurrence = max(reached_occurrences, default=0)
+
+            # If target occurrence was never reached by the targeted tool, it is NOT_TRIGGERED
+            if (
+                plan.target_occurrence > max_reached_occurrence
+                or plan.target_occurrence not in reached_occurrences
+            ):
                 return (
                     ExposureStatus.NOT_TRIGGERED,
                     [
-                        f"Target tool '{plan.target_tool_id}' was not invoked; target occurrence {plan.target_occurrence} was not reached."
+                        f"Target tool '{plan.target_tool_id}' was not invoked at planned occurrence {plan.target_occurrence} "
+                        f"(maximum observed occurrence: {max_reached_occurrence})."
                     ],
                 )
+
+            # Selected occurrence was reached, but no fault episode or delivery receipts were recorded
             return (
                 ExposureStatus.EXPOSURE_UNKNOWN,
                 [
-                    "Tool calls occurred but no fault episode was recorded in the trial trace."
+                    f"Target tool '{plan.target_tool_id}' reached occurrence {plan.target_occurrence}, "
+                    "but no fault episode or delivery evidence was recorded in the trial trace."
                 ],
             )
 

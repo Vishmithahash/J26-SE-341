@@ -546,5 +546,29 @@ export const c3Api = {
       window.URL.revokeObjectURL(blobUrl);
     }
   },
+
+  /**
+   * Run controlled clean/fault trials for an eligible stored suite.
+   * Dispatches SuiteRunner with registered demonstration adapter and preserves full evidence.
+   */
+  async runControlledTrials(payload, signal) {
+    if (!payload?.project_id) {
+      throw new Error('Project ID is required to run controlled trials.');
+    }
+    if (!payload?.suite_id_or_digest) {
+      throw new Error('Suite identifier or digest is required to run controlled trials.');
+    }
+    return request('/api/v1/c3/executions/run-controlled', {
+      method: 'POST',
+      body: JSON.stringify({
+        project_id: payload.project_id,
+        suite_id_or_digest: payload.suite_id_or_digest,
+        execution_mode: payload.execution_mode || 'DEMONSTRATION',
+        max_suite_duration_sec: payload.max_suite_duration_sec ?? 60.0,
+        per_case_timeout_sec: payload.per_case_timeout_sec ?? 10.0,
+      }),
+      signal,
+    });
+  },
 };
 

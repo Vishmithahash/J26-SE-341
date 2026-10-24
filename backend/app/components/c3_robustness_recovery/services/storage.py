@@ -33,6 +33,9 @@ from app.components.c3_robustness_recovery.runtime.evidence import (
     MatchedPairEvidence,
     validate_evidence_linkage,
 )
+from app.components.c3_robustness_recovery.services.c2_facts import (
+    normalize_c2_to_c3_mappings,
+)
 from app.components.c3_robustness_recovery.services.recovery_evaluation import (
     evaluate_recovery,
 )
@@ -205,7 +208,23 @@ def store_matched_pair(
             f"Project scope mismatch: Evidence declares project '{evidence.project_id}', "
             f"which does not match requested project '{project_id}'."
         )
+    if evidence.clean_trial.project_id != project_id:
+        raise ValueError(
+            f"Project scope mismatch: Clean trial declares project '{evidence.clean_trial.project_id}', "
+            f"which does not match requested project '{project_id}'."
+        )
+    if evidence.fault_trial.project_id != project_id:
+        raise ValueError(
+            f"Project scope mismatch: Fault trial declares project '{evidence.fault_trial.project_id}', "
+            f"which does not match requested project '{project_id}'."
+        )
     repo = C3PersistenceRepository(db)
+    stored_case = repo.get_case(project_id, evidence.case_id)
+    if stored_case and stored_case.project_id != project_id:
+        raise ValueError(
+            f"Case reference mismatch: Stored case '{evidence.case_id}' belongs to project "
+            f"'{stored_case.project_id}', not '{project_id}'."
+        )
     pair_model, _ = repo.save_matched_pair(
         project_id=project_id, evidence=evidence, execution_id=execution_id
     )
@@ -369,7 +388,14 @@ def compute_and_store_evaluation(
     }
     inputs_digest = compute_content_digest(inputs_payload)
 
-    # 5. Execute pure deterministic recovery evaluation
+    # 5. Resolve applicable mappings safely and execute pure deterministic recovery evaluation
+    raw_mappings = getattr(request, "pinned_mappings", None)
+    if not raw_mappings and suite_model.suite_snapshot:
+        raw_mappings = suite_model.suite_snapshot.get("pinned_mappings")
+    if not raw_mappings and suite_model.recovery_contract_snapshot:
+        raw_mappings = suite_model.recovery_contract_snapshot.get("pinned_mappings")
+    resolved_mappings = normalize_c2_to_c3_mappings(raw_mappings)
+
     eval_req = RecoveryEvaluationRequest(
         project_id=request.project_id,
         case_id=candidate_case.case_id,
@@ -380,6 +406,7 @@ def compute_and_store_evaluation(
         matched_evidence=evidence,
         c2_facts=request.c2_facts,
         suite_digest=suite_model.suite_digest,
+        pinned_mappings=resolved_mappings,
     )
     eval_result = evaluate_recovery(eval_req)
 
