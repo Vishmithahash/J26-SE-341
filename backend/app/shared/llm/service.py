@@ -266,7 +266,7 @@ class LLMProviderService:
                 },
                 "required": ["status"],
             },
-            timeout_seconds=30.0,
+            timeout_seconds=180.0,
         )
 
         res = await adapter.generate(test_request, model_override=target_model)
@@ -359,7 +359,7 @@ class LLMProviderService:
             request.max_tokens = int(user_settings["max_tokens"])
         if "top_p" in user_settings and request.top_p is None:
             request.top_p = float(user_settings["top_p"])
-        if "timeout_seconds" in user_settings and request.timeout_seconds in (30.0, None):
+        if "timeout_seconds" in user_settings and request.timeout_seconds in (180.0, None):
             request.timeout_seconds = float(user_settings["timeout_seconds"])
 
         # 2. Resolve adapter

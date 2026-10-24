@@ -227,3 +227,35 @@ def change_user_password(
     user.password_hash = hash_password(new_password)
     db.commit()
     db.refresh(user)
+
+
+def set_user_active_status(
+    db: Session,
+    admin_user: User,
+    target_user_id: int,
+    is_active: bool,
+) -> User:
+    """Update active status of a user account.
+
+    Guarantees:
+    - Target user must exist (HTTP 404 if not found).
+    - An administrator cannot deactivate their own active account (HTTP 400).
+    - Returns updated User object.
+    """
+    target = db.get(User, target_user_id)
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    if target.id == admin_user.id and not is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Administrators cannot deactivate their own account.",
+        )
+
+    target.is_active = is_active
+    db.commit()
+    db.refresh(target)
+    return target

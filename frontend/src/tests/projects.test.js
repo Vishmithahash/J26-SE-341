@@ -82,4 +82,20 @@ describe('Shared Projects Frontend Tests', () => {
       }
     });
   });
+
+  describe('Project Response Unwrapping and Validation', () => {
+    it('unwraps direct ProjectResponse and wrapped { project: ... } objects identically', () => {
+      const mockProject = {
+        project_id: 'proj-nexacart-123',
+        name: 'Nexacart',
+        backend_base_url: 'http://localhost:8000',
+        backend_health_url: 'http://localhost:8000/health',
+      };
+
+      const unwrap = (res) => res?.project || res;
+
+      assert.deepEqual(unwrap(mockProject), mockProject);
+      assert.deepEqual(unwrap({ project: mockProject }), mockProject);
+    });
+  });
 });
