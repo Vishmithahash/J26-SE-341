@@ -18,7 +18,8 @@ import {
 export function ExtractionSection({
   selectedArtifact,
   providerReadiness,
-  selectedProvider,
+  selectedProvider = 'offline_mock',
+  onSelectProvider,
   onCheckReadiness,
   isLoadingReadiness,
   onDeriveCandidates,
@@ -83,6 +84,42 @@ export function ExtractionSection({
           </div>
         </div>
 
+        {/* Provider Source Selection Toggle */}
+        <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800">
+          <div>
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+              Extraction Engine Provider
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              Choose between the deterministic scripted engine or your active saved QA model (Ollama / Gemini).
+            </span>
+          </div>
+          <div className="inline-flex p-1 rounded-xl bg-slate-200/70 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => onSelectProvider?.('offline_mock')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                selectedProvider === 'offline_mock'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              Offline Mock Engine
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectProvider?.('shared_llm')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                selectedProvider === 'shared_llm'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              Use Selected QA Model
+            </button>
+          </div>
+        </div>
+
         {/* Feedback notices */}
         {error && (
           <div className="mt-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
@@ -120,7 +157,7 @@ export function ExtractionSection({
               {providerReadiness?.provider_id || selectedProvider}
             </div>
             <div className="text-[11px] text-slate-500 mt-1">
-              Mode: {selectedProvider === 'offline_mock' ? 'Deterministic Scripted Engine' : 'External LLM'}
+              Mode: {selectedProvider === 'offline_mock' ? 'Deterministic Scripted Engine' : 'Shared Selected QA Model'}
             </div>
           </div>
 
@@ -129,10 +166,10 @@ export function ExtractionSection({
               Model Identifier
             </span>
             <div className="font-mono text-sm font-bold text-slate-900 dark:text-white truncate">
-              {providerReadiness?.model_identifier || 'offline-deterministic-regex'}
+              {providerReadiness?.model_identifier || (selectedProvider === 'shared_llm' ? 'qa-model-selected' : 'offline-deterministic-regex')}
             </div>
             <div className="text-[11px] text-slate-500 mt-1">
-              Deterministic parsing & bounded regex extractor
+              {selectedProvider === 'shared_llm' ? 'Configured provider model instance' : 'Deterministic parsing & bounded regex extractor'}
             </div>
           </div>
 
@@ -161,9 +198,14 @@ export function ExtractionSection({
         <div className="mt-4 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 flex items-start gap-2.5">
           <Info className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
           <p className="text-xs text-slate-600 dark:text-slate-400 leading-normal">
-            <strong>Provider Architecture Distinction:</strong> Extraction runs using the backend’s deterministic controlled-language engine (
-            <code className="px-1 py-0.5 bg-slate-200 dark:bg-slate-800 rounded font-mono text-[11px]">offline_mock</code>
-            ). The shared Model Selection page manages framework-level preference metadata and does <em>not</em> establish a live external extraction provider connection.
+            <strong>Extraction Engine:</strong> Operating under{' '}
+            <code className="px-1 py-0.5 bg-slate-200 dark:bg-slate-800 rounded font-mono text-[11px]">
+              {selectedProvider}
+            </code>
+            .{' '}
+            {selectedProvider === 'shared_llm'
+              ? 'Invoking the authenticated user’s confirmed model selection via the shared LLM provider layer.'
+              : 'Using the deterministic controlled-language engine for bounded regex extraction and testing.'}
           </p>
         </div>
 

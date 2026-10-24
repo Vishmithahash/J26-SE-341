@@ -18,7 +18,7 @@ import { ConnectionStatusBadge } from '../../components/projects/ConnectionStatu
 
 export const ProjectsListPage = () => {
   const { user } = useAuth();
-  const { activeProjectId, selectActiveProject } = useProject();
+  const { activeProjectId, selectActiveProject, clearActiveProject } = useProject();
   const location = useLocation();
   const isAdmin = user?.role === 'ADMIN';
   const basePath = location.pathname.startsWith('/admin') ? '/admin' : '/app';
@@ -77,16 +77,17 @@ export const ProjectsListPage = () => {
     }
   };
 
-  const handleSetActive = async (projectId) => {
+  const handleToggleActive = async (projectId) => {
     try {
       if (activeProjectId === projectId) {
-        // Already active
+        clearActiveProject();
+        setActionSuccess('Project deactivated from current workspace.');
         return;
       }
       await selectActiveProject(projectId);
       setActionSuccess('Active project updated successfully.');
     } catch (err) {
-      setError(err.message || 'Failed to set active project.');
+      setError(err.message || 'Failed to update active project.');
     }
   };
 
@@ -389,16 +390,15 @@ export const ProjectsListPage = () => {
                   <div className="flex items-center gap-1.5">
                     {!isArchived && (
                       <button
-                        onClick={() => handleSetActive(proj.project_id)}
-                        disabled={isActive}
+                        onClick={() => handleToggleActive(proj.project_id)}
                         className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                           isActive
-                            ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-default'
+                            ? 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/50'
                             : 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50'
                         }`}
-                        title={isActive ? 'Currently active project' : 'Select as active project'}
+                        title={isActive ? 'Deactivate project from workspace' : 'Select as active project'}
                       >
-                        {isActive ? 'Active' : 'Set Active'}
+                        {isActive ? 'Deactivate' : 'Set Active'}
                       </button>
                     )}
 

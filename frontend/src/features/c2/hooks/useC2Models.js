@@ -279,13 +279,13 @@ export const useC2Models = (projectId, userId) => {
    * Propose and build candidate model from workflow input
    */
   const buildCandidateModel = useCallback(
-    async (workflowInput, autoValidate = true) => {
+    async (workflowInput, autoValidate = true, mode = null) => {
       if (!projectId) return;
       setIsBuildingCandidate(true);
       setActionError(null);
 
       try {
-        const builtModel = await c2Api.buildCandidateModel(projectId, workflowInput, autoValidate);
+        const builtModel = await c2Api.buildCandidateModel(projectId, workflowInput, autoValidate, mode);
         await loadModels();
         await selectModel(builtModel.model_id, builtModel.version);
         return builtModel;

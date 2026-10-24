@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     auth_jwt_issuer: str | None = Field(default=None, alias="AUTH_JWT_ISSUER")
     auth_jwt_audience: str | None = Field(default=None, alias="AUTH_JWT_AUDIENCE")
 
+    # LLM Provider Configuration
+    gemini_api_key: SecretStr = Field(default=SecretStr(""), alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-3.5-flash-lite", alias="GEMINI_MODEL")
+    ollama_base_url: str = Field(default="http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
+    ollama_model: str = Field(default="qwen3.5:4b", alias="OLLAMA_MODEL")
+
     @field_validator("database_url", mode="after")
     @classmethod
     def validate_database_url(cls, v: SecretStr) -> SecretStr:

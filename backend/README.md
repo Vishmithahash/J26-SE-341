@@ -93,6 +93,9 @@ alembic upgrade head
 Revisions:
 - `e75342624f8c`: C3 persistence tables
 - `f1a89c2b4d3e`: Shared `users` table for platform authentication and role-based authorization
+- `20261024_user_model_selections`: Shared user model selections and settings
+- `20261024_002_repair_schemas`: Additive schema repair provisioning missing C1 configs/suites, C2 suites/evaluations/evidence columns, and C3 recovery tables
+
 
 ---
 
@@ -1189,16 +1192,99 @@ python -m pip check
 
 ---
 
-## Shared Integration & Architecture Design Notes (Design Only)
+## Shared Backend Integration (Parts 1–3 Implemented & Verified)
 
-The following integration agreements are documented for team alignment and will be finalized prior to component implementation:
-1. **Identifier Conventions**: Uniform format for shared identifiers: `project_id`, `case_id`, `run_id`, and `event_id`.
-2. **C3 Matched Trials**: Pairwise identifiers explicitly linking matched baseline (clean) and fault-injected trials for differential evaluation.
-3. **Traceability Metadata**: Versioned tracking for test tasks, environment fixtures, tool adapters, agent/LLM models, contract schemas, and evaluation heuristics.
-4. **Distinct Verdict Semantics**: Strict conceptual separation between test *readiness*, execution *health*, fault *exposure*, and individual component *verdicts*.
-5. **Component Boundary (C2 & C3)**: C2 owns multi-step state machine modeling and workflow state assertions; C3 consumes discrete `true` / `false` / `unknown` state facts to evaluate recovery behavior without re-implementing state checking.
-6. **Decoupled Evaluation Rules**: Each research component maintains authoritative ownership of its specialized generation algorithms and evaluation rules.
-7. **Unified Execution Infrastructure**: Shared execution orchestration, target fixture/state reset, and evidence transport designed once as a shared capability rather than re-invented across components.
-8. **Deduplicated Findings**: Vulnerabilities, faults, and failures reference shared `event_id` traces without multiplying counts for a single root cause.
-9. **Database Boundary**: QA framework test metadata, evidence, and run results remain strictly partitioned in the QA framework database, completely isolated from Application-Under-Test (AUT) databases.
-10. **Shared Code & Migration Coordination**: Clear code ownership across shared foundations (`app/database.py`, `app/config.py`, `alembic/`) with synchronized Alembic migration reviews across component teams.
+The shared integration infrastructure unites the four research components (C1, C2, C3, C4) into an end-to-end, project-scoped QA execution and reporting pipeline.
+
+### Core Capabilities:
+1. **Intake & Run Planning**: Authenticated project scoping, pinned configuration versions, and immutable run plans (`IntegrationRunPlanModel`).
+2. **Coordinated Shared Execution**: Isolated fixture namespaces, clean/fault matched trial execution (`SharedExecutionCoordinator`), and unified trace capture.
+3. **C2-to-C3 Named State Facts**: C2 EFSM state assertions project into C3 recovery evaluation via `AssertionBridgeFacade` preserving provenance.
+4. **Combined QA Reporting**: `SharedReportAggregator` consumes authentic component findings, connects C2's publisher (`IntegrationStatus.CONNECTED`), deduplicates repeated findings via stable SHA-256 identities, links related events, and exposes raw vs. grouped defect counts.
+5. **Deterministic Evidence Replay**: `EvidenceReplayService` re-evaluates stored trace evidence against pinned configurations without invoking the target application.
+6. **Project-Scoped API & Export**: Endpoints under `/api/v1/projects/{project_id}/integration/*` for execution, reporting, JSON/CSV exports, and bounded pagination.
+
+For the full architectural specification, API/CLI references, and operational matrix, see [docs/backend_integration.md](docs/backend_integration.md).
+
+---
+
+## Shared QA Framework LLM Integration (Local Ollama/Qwen & Hosted Google Gemini)
+
+The QA framework integrates a unified, authoritative model layer to assist test engineers in preparing candidate inputs, proposing state-machine models, extracting candidate policy rules, and explaining derived findings.
+
+### 1. Framework Model vs. AUT LLM Agent Separation
+- **QA Framework Model**: Used strictly for QA generation, preparation, and presentation tasks (C1 explanation, C2 draft EFSM proposal, C3 input preparation, C4 candidate policy extraction).
+- **Application Under Test (AUT) Agent**: The external system being tested (e.g., NexaCart). Selecting Gemini or Qwen for the QA framework **does not** modify the AUT agent, mark live AUT integration as ready, or replace deterministic evaluation with an LLM opinion.
+
+### 2. Supported Providers and Configuration
+Configuration values are loaded via backend settings (`backend/app/config.py`). Update `backend/.env` with local values:
+
+```env
+# Hosted Google Gemini API (Server-side key, SecretStr)
+GEMINI_API_KEY="your-gemini-api-key-here"
+GEMINI_MODEL="gemini-3.5-flash-lite"
+
+# Local Ollama Inference (Must be reachable from backend host)
+OLLAMA_BASE_URL="http://127.0.0.1:11434"
+OLLAMA_MODEL="qwen3.5:4b"
+```
+
+#### Local Ollama Setup
+1. Install Ollama from [ollama.com](https://ollama.com).
+2. Pull the default team Qwen model:
+   ```bash
+   ollama pull qwen3.5:4b
+   ```
+   *(Note: The server administrator can configure any installed Qwen model tag, e.g. `OLLAMA_MODEL=qwen3.5:4b`, without code changes).*
+3. Verify Ollama is running:
+   ```bash
+   curl http://127.0.0.1:11434/api/tags
+   ```
+
+#### Hosted Google Gemini Setup
+1. Obtain an API key from Google AI Studio.
+2. Set `GEMINI_API_KEY` in `backend/.env` or as an environment variable.
+3. Supported models include `gemini-3.5-flash-lite` (default) and `gemini-3.8-flash`.
+
+### 3. Database Migration
+User model selections are stored in the database table `user_model_selections` (`20261024_user_model_selections`):
+```powershell
+alembic upgrade head
+```
+
+### 4. Authoritative Authenticated API Routes and Contract
+All routes require authentication via `require_active_user`:
+- `GET /api/v1/llm/providers`: Discovery of configured providers, installed models, and truthful reachability status.
+  - Returns canonical fields: `is_configured`, `is_available`, `configured_default_model`, `available_models`, `status_message`.
+- `GET /api/v1/llm/selection`: Get the current authenticated user's authoritative saved model selection (`connection_type`, `provider`, `model_id`, `generation_settings`).
+- `PUT /api/v1/llm/selection`: Save/activate the user's provider, connection type (`local` | `hosted`), and `model_id`. Validates permitted provider/connection combinations (`local` -> `ollama`, `hosted` -> `gemini`), rejects conflicting `model` vs `model_id`, validates numeric bounds, and rejects booleans for count fields.
+- `POST /api/v1/llm/test-connection`: Execute a bounded (non-streaming, 10s timeout, max 100 tokens) test inference testing the exact requested `model_id`. Returns `model_id`, `duration_ms`, `status_message`, and structured probe validation (`{"status": "ok", "framework": "agentic_qa"}`). Results are bound strictly to user, provider, and model version.
+
+### 5. Frontend Contract, State Protection, and Workspace Scope
+- **Canonical Field Alignment**: Consistently consumes `is_configured`, `is_available`, `configured_default_model`, and `model_id`.
+- **Installed Qwen Tag Handling**: Respects exact installed and selected Qwen tags (e.g., `qwen3.5:4b`) without forcing `qwen3:4b` through hardcoded frontend fallbacks.
+- **Request-Generation / Stale Response Protection**: Loading, saving, resetting, and test actions use monotonically increasing request IDs (`activeReqIdRef`) to prevent previous-user or late-arriving responses from updating the current view.
+- **Truthful Unverified Badging**: Cached browser `localStorage` preferences display an explicit amber "Unverified (Local Cache)" badge and never display green "Active & Saved" confirmation unless verified by a successful server acknowledgement.
+- **Project Workspace Selection & Deactivation**: Users can explicitly activate or deactivate the active workspace project from both list (`ProjectsListPage`) and detail (`ProjectDetailPage`) views. Deactivating deselects the workspace context without deleting or archiving any underlying database records. Context state survives page refresh, and temporary 503/network failures flag data as unavailable without silently clearing the user's confirmed selection.
+- **C4 API Routing & CORS**: The Vite development proxy forwards `/projects` routes alongside `/api` routes, and the backend provides deployment-aware CORS preflight and sanitized 500 error responses.
+
+
+### 6. Component Integrations and Assistance Mode Controls
+- **C1 (Tool-Call Correctness)**: `ModelAssistedDiagnosisProvider` uses the selected model to summarize and explain deterministic root-cause findings without inventing code evidence.
+- **C2 (State-Aware Workflow)**: `ModelPreparationForm` exposes explicit assistance-mode controls (`DETERMINISTIC` vs `MODEL_ASSISTED`). `ModelAssistedEFSMBuilder` proposes candidate draft EFSM workflows grounded in declared tools and invariants. Proposed models retain provider/model provenance and require human review and approval; they are never auto-approved.
+- **C3 (Robustness & Recovery)**: `prepare_draft_inputs` drafts candidate task fixtures and recovery contracts using valid `TerminalOutcome` enums (`SUCCESS_CLEAN_RECOVERY`, `SUCCESS_DEGRADED_FALLBACK`, `GRACEFUL_ABORT_USER_NOTIFIED`, `FAIL_SAFE_STOP`). No silent repair of attempt/retry budgets.
+- **C4 (Policy-Aware Safety)**: `ExtractionSection` exposes an explicit engine toggle ("Offline Mock Engine" vs "Use Selected QA Model"). `SharedLlmPolicyExtractionProvider` prompts for and validates canonical candidate schemas (`supporting_excerpt`, `policy_requirement`, `evaluation_boundary`). Missing or invalid policy requirements fail-safe to `DENY` rather than silent `ALLOW`.
+
+### 7. C3 Evaluator Fact-Scope Binding and Execution Dispatch
+- **Authoritative Fact Scope**: The evaluator never derives `expected_snapshot` circular from the facts being validated. Expected scope is strictly bound from authoritative retained observations (`TrialEvidence.snapshot_id`, `observation_reference`) and pinned mapping versions.
+- **Strict Scope Enforcement**: Wrong project, wrong pair/trial ID, wrong entity ID, wrong snapshot ID, or mismatched assertion versions evaluate to `UNKNOWN` and cannot satisfy recovery assertions. Imported or self-reported facts cannot bypass strict evaluation.
+- **Execution Input Integrity**: Pinned task prompts and permitted tools are strictly required. Missing required inputs block dispatch with HTTP 422 rather than substituting generic defaults. Demonstration name and digest heuristics inside evaluation dispatch have been completely removed.
+
+### 8. Safeguards, Resource Management, and Live Prerequisites
+- **Short Transaction Scopes**: Database transactions are never held across external LLM network calls. Authoritative inputs are authorized and snapshotted, transactions released, model invoked, and results persisted in a fresh transaction.
+- **Credential Protection & Redaction**: API keys are passed in request headers (`x-goog-api-key`), never logged or exposed in client bundles. Error sanitizers replace credentials with `[REDACTED]`.
+- **Live Prerequisites**:
+  1. **PostgreSQL**: Neon DB reachable with Alembic migration `20261024_user_model_selections` applied (`alembic upgrade head`).
+  2. **Local Ollama**: Running on `http://127.0.0.1:11434` with the selected model pulled (e.g., `ollama pull qwen3.5:4b` or `ollama pull qwen3:4b`).
+  3. **Hosted Gemini**: Valid Google AI Studio API key configured in `GEMINI_API_KEY` (`backend/.env`).
+

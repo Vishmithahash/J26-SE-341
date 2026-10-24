@@ -27,26 +27,44 @@ export const isSelectableLifecycle = (proj) => {
 const ProjectContext = createContext(null);
 
 export const ProjectProvider = ({ children }) => {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [activeProject, setActiveProjectState] = useState(null);
-  const [isLoadingActive, setIsLoadingActive] = useState(false);
+  const [isLoadingActive, setIsLoadingActive] = useState(true);
 
   // Request counter to protect against stale asynchronous responses and account switches
   const requestCounterRef = useRef(0);
+  const lastUserIdRef = useRef(user?.id);
 
-  // Sync and validate active project whenever user identity changes
+  // Clear previous user active project immediately when user identity changes
+  useEffect(() => {
+    if (lastUserIdRef.current !== user?.id) {
+      lastUserIdRef.current = user?.id;
+      setActiveProjectState(null);
+    }
+  }, [user?.id]);
+
+  // Sync and validate active project whenever user identity or auth state changes
   const loadActiveProject = useCallback(async () => {
     const currentRequestId = ++requestCounterRef.current;
+
+    // Wait for authentication initialization before deciding project availability
+    if (isAuthLoading) {
+      setIsLoadingActive(true);
+      return;
+    }
+
     const currentUserId = user?.id;
 
     if (!isAuthenticated || !currentUserId) {
       setActiveProjectState(null);
+      setIsLoadingActive(false);
       return;
     }
 
     const storedId = getStoredActiveProjectId(currentUserId);
     if (!storedId) {
       setActiveProjectState(null);
+      setIsLoadingActive(false);
       return;
     }
 
@@ -67,18 +85,27 @@ export const ProjectProvider = ({ children }) => {
         clearStoredActiveProjectId(currentUserId);
         setActiveProjectState(null);
       }
-    } catch {
-      // Inaccessible, deleted, or network error
+    } catch (err) {
+      // Handle failure without silently erasing confirmed selection on temporary service errors
       if (requestCounterRef.current === currentRequestId && user?.id === currentUserId) {
-        clearStoredActiveProjectId(currentUserId);
-        setActiveProjectState(null);
+        if (err?.status === 404 || err?.status === 403 || err?.status === 401) {
+          clearStoredActiveProjectId(currentUserId);
+          setActiveProjectState(null);
+        } else {
+          setActiveProjectState({
+            project_id: storedId,
+            name: 'Unavailable Project',
+            isUnavailable: true,
+            unavailableReason: err?.message || 'Project service temporarily unavailable',
+          });
+        }
       }
     } finally {
       if (requestCounterRef.current === currentRequestId && user?.id === currentUserId) {
         setIsLoadingActive(false);
       }
     }
-  }, [isAuthenticated, user]);
+  }, [isAuthenticated, isAuthLoading, user?.id]);
 
   useEffect(() => {
     loadActiveProject();

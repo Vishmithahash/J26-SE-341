@@ -5,6 +5,9 @@ import {
   Download,
   Info,
   Send,
+  CheckCircle2,
+  AlertTriangle,
+  AlertCircle,
 } from 'lucide-react';
 
 export const RunReportModal = ({
@@ -12,6 +15,8 @@ export const RunReportModal = ({
   onClose,
   report,
   exportStatus,
+  exportError,
+  lastConfirmedReceipt,
   onExportReport,
   isExporting,
 }) => {
@@ -20,8 +25,49 @@ export const RunReportModal = ({
   if (!isOpen || !report) return null;
 
   const provenance = report.execution_provenance || {};
-  const isPublished = exportStatus?.published_to_shared_aggregator || report.published_to_shared_aggregator || false;
-  const pubStatus = exportStatus?.publishing_status || report.publishing_status || 'STUB_PENDING_SHARED_AGGREGATOR';
+
+  // Scope publication receipts and export responses strictly to this report's evaluation
+  const isReceiptForThisReport = Boolean(
+    lastConfirmedReceipt &&
+    (lastConfirmedReceipt.evaluation_id
+      ? lastConfirmedReceipt.evaluation_id === report.evaluation_id
+      : lastConfirmedReceipt.run_id === report.run_id)
+  );
+
+  const isExportStatusForThisReport = Boolean(
+    exportStatus &&
+    (exportStatus.evaluation_id
+      ? exportStatus.evaluation_id === report.evaluation_id
+      : exportStatus.run_id === report.run_id)
+  );
+
+  // Determine actual publication state
+  let publicationState = 'NOT_PUBLISHED'; // 'CONFIRMED' | 'FAILED' | 'UNAVAILABLE' | 'NOT_PUBLISHED'
+  if (exportError) {
+    publicationState = 'FAILED';
+  } else if (
+    (isExportStatusForThisReport && exportStatus?.published_to_shared_aggregator) ||
+    (isExportStatusForThisReport && exportStatus?.publishing_status === 'PUBLISHED') ||
+    report.published_to_shared_aggregator ||
+    report.publishing_status === 'PUBLISHED' ||
+    isReceiptForThisReport
+  ) {
+    publicationState = 'CONFIRMED';
+  } else if (
+    report.publishing_status === 'UNAVAILABLE' ||
+    report.publishing_status === 'UNKNOWN' ||
+    (isExportStatusForThisReport && (exportStatus?.publishing_status === 'UNAVAILABLE' || exportStatus?.publishing_status === 'UNKNOWN'))
+  ) {
+    publicationState = 'UNAVAILABLE';
+  } else {
+    publicationState = 'NOT_PUBLISHED';
+  }
+
+  const activeReceipt = isReceiptForThisReport
+    ? lastConfirmedReceipt
+    : publicationState === 'CONFIRMED'
+    ? (isExportStatusForThisReport ? exportStatus : report)
+    : null;
 
   const downloadJSON = () => {
     const filename = `c2_report_${report.evaluation_id || report.run_id}.json`;
@@ -51,7 +97,7 @@ export const RunReportModal = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-                  C2 Report Contribution Contract
+                  C2 Report Contribution
                 </h2>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
                   v{report.contract_version || '2026.1'}
@@ -72,23 +118,87 @@ export const RunReportModal = ({
           </button>
         </div>
 
-        {/* Aggregator Publication Status Disclosure */}
-        <div className="p-4 bg-indigo-50/60 dark:bg-indigo-950/30 border-b border-indigo-100 dark:border-indigo-900/40 text-xs text-indigo-900 dark:text-indigo-200 flex items-start gap-2.5">
-          <Info className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="font-semibold">Shared Aggregator Publication Status:</span>
-              <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-800 dark:text-indigo-300">
-                {pubStatus}
-              </span>
+        {/* Dynamic Aggregator Publication Status Display */}
+        {publicationState === 'CONFIRMED' && (
+          <div className="p-4 bg-emerald-50/70 dark:bg-emerald-950/30 border-b border-emerald-100 dark:border-emerald-900/40 text-xs text-emerald-900 dark:text-emerald-200 flex items-start gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold">Shared Aggregator Publication:</span>
+                <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 font-semibold">
+                  Confirmed publication
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-emerald-800 dark:text-emerald-300">
+                Report contribution has been published to the shared integration aggregator.
+                {activeReceipt?.contribution_id && (
+                  <span className="block font-mono text-[10px] mt-0.5 text-emerald-700 dark:text-emerald-400">
+                    Contribution ID: {activeReceipt.contribution_id}
+                  </span>
+                )}
+              </p>
             </div>
-            <p className="text-[11px] leading-relaxed text-indigo-800 dark:text-indigo-300">
-              A locally generated or downloaded report is maintained for local verification.
-              Shared multi-component aggregator intake remains pending or stubbed on the server.
-              {isPublished ? ' Published finding confirmed.' : ' Report has not been transmitted to a centralized multi-component aggregator.'}
-            </p>
           </div>
-        </div>
+        )}
+
+        {publicationState === 'FAILED' && (
+          <div className="p-4 bg-rose-50/70 dark:bg-rose-950/30 border-b border-rose-100 dark:border-rose-900/40 text-xs text-rose-900 dark:text-rose-200 flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold">Shared Aggregator Publication:</span>
+                <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-rose-100 dark:bg-rose-900/60 text-rose-800 dark:text-rose-300 font-semibold">
+                  {exportError?.status === 409 ? 'Publication conflict (HTTP 409)' : 'Failed publication attempt'}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-rose-800 dark:text-rose-300">
+                {exportError?.message || 'Publication attempt failed.'}
+              </p>
+              <p className="text-[10px] text-rose-700 dark:text-rose-400">
+                The report remains preserved and available for local inspection and download.
+              </p>
+              {isReceiptForThisReport && lastConfirmedReceipt && (
+                <div className="text-[10px] font-mono text-slate-600 dark:text-slate-400 mt-1 pt-1 border-t border-rose-200 dark:border-rose-900/40">
+                  Last confirmed receipt preserved: {lastConfirmedReceipt.contribution_id || 'available'}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {publicationState === 'UNAVAILABLE' && (
+          <div className="p-4 bg-amber-50/70 dark:bg-amber-950/30 border-b border-amber-100 dark:border-amber-900/40 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold">Shared Aggregator Publication:</span>
+                <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 font-semibold">
+                  Publication unavailable/unknown
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
+                Shared integration publication service is currently unavailable or status is unknown.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {publicationState === 'NOT_PUBLISHED' && (
+          <div className="p-4 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold">Shared Aggregator Publication:</span>
+                <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                  Not published
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
+                Report has not been transmitted to the shared aggregator. Click &quot;Export report&quot; to publish finding.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto max-h-[60vh] space-y-4 text-xs">
@@ -130,7 +240,7 @@ export const RunReportModal = ({
                 {report.evidence_digest ? `${report.evidence_digest.substring(0, 12)}...` : 'None'}
               </div>
               <span className="text-[10px] text-slate-400">
-                SHA-256 Provenance
+                Content checksum
               </span>
             </div>
           </div>
@@ -139,7 +249,7 @@ export const RunReportModal = ({
           {(report.readiness_limitations?.length > 0 || report.observation_limitations?.length > 0) && (
             <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-200 space-y-2">
               <span className="font-bold text-[11px] uppercase tracking-wide">
-                Honest Readiness & Observation Limitations
+                Readiness & Observation Limitations
               </span>
               <ul className="list-disc pl-5 space-y-1 text-[11px]">
                 {report.readiness_limitations?.map((r, i) => (
@@ -173,16 +283,17 @@ export const RunReportModal = ({
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold shadow-xs transition-colors"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>{isExporting ? 'Exporting...' : 'Export Finding via Adapter'}</span>
+              <span>{isExporting ? 'Exporting...' : 'Export report'}</span>
             </button>
 
             <button
               type="button"
               onClick={downloadJSON}
+              title="Save report locally to your machine (independent of publication)"
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>{downloadSuccess ? 'Downloaded!' : 'Download JSON'}</span>
+              <span>{downloadSuccess ? 'Downloaded locally!' : 'Download JSON (Local)'}</span>
             </button>
           </div>
 

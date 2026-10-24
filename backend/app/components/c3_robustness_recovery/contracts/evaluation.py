@@ -161,6 +161,10 @@ class RecoveryEvaluationRequest(BaseModel):
     suite_digest: str | None = Field(
         None, description="Optional cryptographic digest of the enclosing suite."
     )
+    pinned_mappings: list[Any] | None = Field(
+        default=None,
+        description="Explicit pinned C2-to-C3 assertion mappings for the project/evaluation.",
+    )
 
 
 class RecoveryEvaluationResult(BaseModel):

@@ -1,5 +1,10 @@
 """Integrations package for C2."""
 
+from app.components.c2_state_aware_workflow.integrations.assertion_facade import (
+    C2AssertionDefinition,
+    C2AssertionResult,
+    C2NamedAssertionEvaluator,
+)
 from app.components.c2_state_aware_workflow.integrations.interfaces import (
     AgentExecutionInterface,
     EvidenceIngestionInterface,
@@ -22,7 +27,10 @@ from app.components.c2_state_aware_workflow.integrations.service import (
 
 __all__ = [
     "AgentExecutionInterface",
+    "C2AssertionDefinition",
+    "C2AssertionResult",
     "C2IntegrationService",
+    "C2NamedAssertionEvaluator",
     "C2ReportExportService",
     "C2ReportPublisher",
     "EvidenceIngestionInterface",

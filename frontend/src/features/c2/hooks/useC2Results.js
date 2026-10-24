@@ -14,6 +14,8 @@ export const useC2Results = (projectId, userId) => {
   const [runReport, setRunReport] = useState(null);
   const [suiteReport, setSuiteReport] = useState(null);
   const [exportStatus, setExportStatus] = useState(null);
+  const [exportError, setExportError] = useState(null);
+  const [lastConfirmedReceipt, setLastConfirmedReceipt] = useState(null);
   const [reproductionResult, setReproductionResult] = useState(null);
 
   // Filters
@@ -36,9 +38,11 @@ export const useC2Results = (projectId, userId) => {
   const [error, setError] = useState(null);
   const [actionError, setActionError] = useState(null);
 
-  // Stale-response protection
+  // Stale-response protection and evaluation receipt scoping
   const generationRef = useRef(0);
   const inFlightRef = useRef(false);
+  const selectedEvalIdRef = useRef(null);
+  const receiptsByEvalRef = useRef({});
 
   /**
    * Load all evaluation records for the active project
@@ -75,9 +79,15 @@ export const useC2Results = (projectId, userId) => {
 
       // Auto-select first evaluation if none selected
       setSelectedEvaluation((prev) => {
-        if (!prev) return filtered[0] || null;
+        if (!prev) {
+          const first = filtered[0] || null;
+          selectedEvalIdRef.current = first?.evaluation_id || null;
+          return first;
+        }
         const matching = filtered.find((e) => e.evaluation_id === prev.evaluation_id);
-        return matching || filtered[0] || null;
+        const next = matching || filtered[0] || null;
+        selectedEvalIdRef.current = next?.evaluation_id || null;
+        return next;
       });
     } catch (err) {
       if (currentGen !== generationRef.current) return;
@@ -93,6 +103,8 @@ export const useC2Results = (projectId, userId) => {
   // Reset when project or user changes
   useEffect(() => {
     generationRef.current += 1;
+    selectedEvalIdRef.current = null;
+    receiptsByEvalRef.current = {};
     setEvaluations([]);
     setSelectedEvaluation(null);
     setRetainedEvidence(null);
@@ -101,6 +113,8 @@ export const useC2Results = (projectId, userId) => {
     setRunReport(null);
     setSuiteReport(null);
     setExportStatus(null);
+    setExportError(null);
+    setLastConfirmedReceipt(null);
     setReproductionResult(null);
     setError(null);
     setActionError(null);
@@ -115,19 +129,25 @@ export const useC2Results = (projectId, userId) => {
    */
   const selectEvaluation = useCallback(
     async (evaluation) => {
+      const evaluationId = evaluation?.evaluation_id || null;
+      selectedEvalIdRef.current = evaluationId;
+
       setSelectedEvaluation(evaluation);
       setRetainedEvidence(null);
       setObservedCoverage(null);
       setRunReport(null);
       setExportStatus(null);
+      setExportError(null);
       setReproductionResult(null);
+
+      // Preserve confirmed receipt only if scoped to this exact evaluation
+      const existingReceipt = evaluationId ? receiptsByEvalRef.current[evaluationId] || null : null;
+      setLastConfirmedReceipt(existingReceipt);
 
       if (!evaluation || !projectId) return;
 
       const currentGen = ++generationRef.current;
       setIsLoadingDetail(true);
-
-      const evaluationId = evaluation.evaluation_id;
       const runId = evaluation.run_id;
 
       // 1. Fetch Retained Evidence (if runId available)
@@ -238,14 +258,40 @@ export const useC2Results = (projectId, userId) => {
       if (inFlightRef.current) return;
       inFlightRef.current = true;
       setIsExportingReport(true);
-      setActionError(null);
+      const targetEvalId = evaluationId;
+
+      if (selectedEvalIdRef.current === targetEvalId) {
+        setExportError(null);
+        setActionError(null);
+      }
 
       try {
-        const result = await c2Api.exportC2ReportContribution(projectId, evaluationId);
-        setExportStatus(result);
+        const result = await c2Api.exportC2ReportContribution(projectId, targetEvalId);
+        if (result?.published_to_shared_aggregator) {
+          receiptsByEvalRef.current[targetEvalId] = result;
+        }
+
+        // Only update visible status if user has not switched to another evaluation
+        if (selectedEvalIdRef.current === targetEvalId) {
+          setExportStatus(result);
+          if (result?.published_to_shared_aggregator) {
+            setLastConfirmedReceipt(result);
+          }
+        }
         return result;
       } catch (err) {
-        setActionError(err.message || 'Failed to export C2 report contribution.');
+        const isConflict = err.status === 409 || String(err.message || '').includes('409') || String(err.message || '').toLowerCase().includes('conflict');
+        const errDetail = {
+          status: err.status || (isConflict ? 409 : 500),
+          isConflict,
+          message: isConflict
+            ? 'Publication conflict: an export contribution already exists for this execution in the shared integration service.'
+            : (err.message || 'Failed to export C2 report contribution.'),
+        };
+        if (selectedEvalIdRef.current === targetEvalId) {
+          setExportError(errDetail);
+          setActionError(errDetail.message);
+        }
         throw err;
       } finally {
         inFlightRef.current = false;
@@ -324,6 +370,8 @@ export const useC2Results = (projectId, userId) => {
     runReport,
     suiteReport,
     exportStatus,
+    exportError,
+    lastConfirmedReceipt,
     reproductionResult,
     suiteFilter,
     testFilter,

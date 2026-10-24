@@ -10,7 +10,9 @@ import {
   Wrench,
   ShieldCheck,
   Compass,
+  RefreshCw,
 } from 'lucide-react';
+import { c3Api } from '../api.js';
 import {
   DEMO_ADAPTER_MANIFEST,
   DEMO_TASK_FIXTURE_METADATA,
@@ -39,6 +41,9 @@ export const C3InputPreparation = ({
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState(null);
   const [presetLoaded, setPresetLoaded] = useState('ecommerce');
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [draftFeedback, setDraftFeedback] = useState(null);
+  const [proposedDraft, setProposedDraft] = useState(null);
 
   // Keep JSON string in sync when entering JSON tab
   useEffect(() => {
@@ -219,6 +224,61 @@ export const C3InputPreparation = ({
     }
   };
 
+  const handleModelDraft = async () => {
+    setDraftLoading(true);
+    setDraftFeedback(null);
+    setProposedDraft(null);
+    try {
+      const res = await c3Api.prepareDraftInputs({
+        project_id: activeProject?.project_id || 'proj-demo-qa',
+        task_id: candidateCase?.task_id || 'task-order-recovery',
+        tool_id: candidateCase?.tool_id || 'refund_api',
+        domain: candidateCase?.domain || 'ecommerce',
+        existing_task_fixture: taskFixtureMetadata,
+        existing_adapter_manifest: adapterManifest,
+        existing_recovery_contract: recoveryContract,
+      });
+
+      const meta = res.provider_metadata || {};
+      const modelInfo = meta.provider ? ` (${meta.provider} / ${meta.actual_model})` : '';
+
+      if (res.status === 'SUCCESS') {
+        setProposedDraft({
+          taskFixture: res.draft_task_fixture,
+          recoveryContract: res.draft_recovery_contract,
+        });
+        setDraftFeedback({
+          type: 'success',
+          message: `AI draft inputs prepared successfully${modelInfo}. Review proposed parameters and click 'Apply Proposed Draft' below.`,
+          unresolved: [],
+        });
+      } else if (res.status === 'UNRESOLVED_REFERENCES') {
+        setProposedDraft(null);
+        setDraftFeedback({
+          type: 'warning',
+          message: `AI draft produced with unresolved references${modelInfo}: ${res.explanation || ''}. Configuration was not altered.`,
+          unresolved: res.unresolved_references || [],
+        });
+      } else {
+        setProposedDraft(null);
+        setDraftFeedback({
+          type: 'error',
+          message: res.explanation || 'Draft generation failed. Configuration was preserved.',
+          unresolved: res.unresolved_references || [],
+        });
+      }
+    } catch (err) {
+      setProposedDraft(null);
+      setDraftFeedback({
+        type: 'error',
+        message: `Model assistance failed: ${err.message || 'Network error'}`,
+        unresolved: [],
+      });
+    } finally {
+      setDraftLoading(false);
+    }
+  };
+
   return (
     <div id="prepare" className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
       {/* Header and Controls */}
@@ -304,12 +364,29 @@ export const C3InputPreparation = ({
           >
             Read-Only AFTER_COMMIT (Trigger TEST_NOT_READY)
           </button>
+
+          <span className="text-slate-300 dark:text-slate-700">|</span>
+
+          <button
+            type="button"
+            onClick={handleModelDraft}
+            disabled={draftLoading}
+            className="px-2.5 py-1 rounded-lg font-medium transition-colors bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-1.5 shadow-xs disabled:opacity-50"
+          >
+            {draftLoading ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="w-3.5 h-3.5" />
+            )}
+            <span>{draftLoading ? 'Drafting...' : 'AI Model Draft'}</span>
+          </button>
         </div>
 
         <button
           type="button"
           onClick={() => {
             applyPreset('ecommerce');
+            setDraftFeedback(null);
             if (onReset) onReset();
           }}
           className="inline-flex items-center gap-1 text-slate-500 hover:text-slate-900 dark:hover:text-white"
@@ -318,6 +395,56 @@ export const C3InputPreparation = ({
           <span>Reset Form</span>
         </button>
       </div>
+
+      {/* Model-Assisted Draft Feedback Banner */}
+      {draftFeedback && (
+        <div
+          role="status"
+          className={`p-3.5 rounded-xl text-xs flex items-start gap-2.5 border ${
+            draftFeedback.type === 'success'
+              ? 'bg-teal-50 dark:bg-teal-950/40 border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200'
+              : draftFeedback.type === 'warning'
+              ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200'
+              : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-800 dark:text-red-200'
+          }`}
+        >
+          {draftFeedback.type === 'success' ? (
+            <Check className="w-4 h-4 shrink-0 mt-0.5 text-teal-600 dark:text-teal-400" />
+          ) : (
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+          )}
+          <div className="space-y-1">
+            <p className="font-semibold">{draftFeedback.message}</p>
+            {draftFeedback.unresolved?.length > 0 && (
+              <ul className="list-disc list-inside text-[11px] opacity-90">
+                {draftFeedback.unresolved.map((u, i) => (
+                  <li key={i}>{u}</li>
+                ))}
+              </ul>
+            )}
+            {proposedDraft && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (proposedDraft.taskFixture) setTaskFixtureMetadata(proposedDraft.taskFixture);
+                    if (proposedDraft.recoveryContract) setRecoveryContract(proposedDraft.recoveryContract);
+                    setProposedDraft(null);
+                    setDraftFeedback({
+                      type: 'success',
+                      message: 'Proposed draft successfully accepted and applied to form configuration.',
+                      unresolved: [],
+                    });
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-medium text-[11px] transition-colors shadow-xs"
+                >
+                  Apply Proposed Draft
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Shared Project Input References (if available) */}
       {activeProject?.input_references && activeProject.input_references.length > 0 && (

@@ -37,10 +37,14 @@ export const projectsApi = {
   /**
    * List projects with pagination, search, and filters.
    */
-  async listProjects({ limit = 20, offset = 0, search = '', lifecycle = '', connectionState = '' } = {}) {
+  async listProjects({ page = 1, page_size = 20, limit, offset, search = '', lifecycle = '', connectionState = '' } = {}) {
     const params = new URLSearchParams();
-    params.set('limit', String(limit));
-    params.set('offset', String(offset));
+    const effectivePageSize = limit !== undefined ? limit : page_size;
+    const effectivePage = offset !== undefined ? Math.floor(offset / effectivePageSize) + 1 : page;
+    params.set('page', String(effectivePage));
+    params.set('page_size', String(effectivePageSize));
+    params.set('limit', String(effectivePageSize));
+    params.set('offset', String((effectivePage - 1) * effectivePageSize));
     if (search && search.trim()) params.set('search', search.trim());
     if (lifecycle && lifecycle.trim()) params.set('lifecycle', lifecycle.trim());
     if (connectionState && connectionState.trim()) params.set('connection_state', connectionState.trim());

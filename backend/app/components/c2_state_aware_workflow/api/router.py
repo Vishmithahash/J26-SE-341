@@ -5,6 +5,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.components.c2_state_aware_workflow.baselines.contracts import (
@@ -13,6 +14,9 @@ from app.components.c2_state_aware_workflow.baselines.contracts import (
 from app.components.c2_state_aware_workflow.builder.deterministic import (
     DeterministicCandidateBuilder,
     InsufficientInputError,
+)
+from app.components.c2_state_aware_workflow.builder.model_assisted import (
+    ModelAssistedEFSMBuilder,
 )
 from app.components.c2_state_aware_workflow.contracts.coverage import (
     DetailedObservedCoverage,
@@ -359,6 +363,13 @@ def build_and_propose_model(
     project_id: str,
     workflow_input: WorkflowInputContract,
     db: DbSession,
+    current_user: Annotated[User, Depends(require_active_user)],
+    mode: Annotated[
+        str,
+        Query(
+            description="Builder mode: 'deterministic' (rule-based) or 'model_assisted' (LLM-proposed)"
+        ),
+    ] = "deterministic",
     auto_validate: Annotated[
         bool, Query(description="Automatically trigger validation after build")
     ] = True,
@@ -369,14 +380,32 @@ def build_and_propose_model(
             detail=f"Route project_id '{project_id}' does not match payload project_id '{workflow_input.project_id}'.",
         )
 
-    builder = DeterministicCandidateBuilder()
-    try:
-        model_def = builder.build_candidate_model(workflow_input)
-    except InsufficientInputError as exc:
+    valid_modes = {"deterministic", "model_assisted"}
+    norm_mode = (mode or "").strip().lower()
+    if norm_mode not in valid_modes:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"message": str(exc), "diagnostics": exc.diagnostics},
-        ) from exc
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid builder mode '{mode}'. Supported modes are 'deterministic' and 'model_assisted'.",
+        )
+
+    if norm_mode == "model_assisted":
+        builder = ModelAssistedEFSMBuilder(user_id=current_user.id, db=db)
+        try:
+            model_def = builder.propose_model(workflow_input)
+        except InsufficientInputError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": str(exc), "diagnostics": exc.diagnostics},
+            ) from exc
+    else:
+        builder = DeterministicCandidateBuilder()
+        try:
+            model_def = builder.build_candidate_model(workflow_input)
+        except InsufficientInputError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": str(exc), "diagnostics": exc.diagnostics},
+            ) from exc
 
     repo = C2ModelRepository(db)
     try:
@@ -1522,12 +1551,55 @@ def export_c2_report_contribution(
     report_service = C2ReportExportService(db)
     try:
         report = report_service.build_run_report(project_id, evaluation_id)
-        publisher = C2ReportPublisher()
+        aggregator_client = None
+        published_shared = False
+        from app.shared.integration.models import (
+            IntegrationExecutionModel,
+            IntegrationIdentifierMappingModel,
+        )
+        from app.shared.integration.reporting import AggregatorClientAdapter
+
+        mapping_rec = (
+            db.execute(
+                select(IntegrationIdentifierMappingModel).where(
+                    IntegrationIdentifierMappingModel.project_id == project_id,
+                    IntegrationIdentifierMappingModel.component_type == "C2",
+                    IntegrationIdentifierMappingModel.native_id == evaluation_id,
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+        exec_rec = None
+        if mapping_rec:
+            target_exec_id = (mapping_rec.context_json or {}).get("execution_id")
+            if target_exec_id:
+                exec_rec = (
+                    db.execute(
+                        select(IntegrationExecutionModel).where(
+                            IntegrationExecutionModel.project_id == project_id,
+                            IntegrationExecutionModel.execution_id == target_exec_id,
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+
+        if exec_rec:
+            aggregator_client = AggregatorClientAdapter(
+                execution_id=exec_rec.execution_id,
+                db=db,
+                project_id=project_id,
+            )
+            published_shared = True
+
+        publisher = C2ReportPublisher(aggregator_client=aggregator_client)
         pub_status = publisher.publish_component_finding(report)
         return {
             "evaluation_id": evaluation_id,
             "project_id": project_id,
-            "published_to_shared_aggregator": False,
+            "published_to_shared_aggregator": published_shared,
             "publishing_status": pub_status,
             "report_contribution": report.model_dump(mode="json"),
         }

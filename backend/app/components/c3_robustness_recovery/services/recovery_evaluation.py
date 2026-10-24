@@ -18,7 +18,10 @@ from app.components.c3_robustness_recovery.contracts.evaluation import (
     RecoveryVerdict,
     RuleEvaluationStatus,
 )
-from app.components.c3_robustness_recovery.contracts.schemas import EffectPhase, TerminalOutcome
+from app.components.c3_robustness_recovery.contracts.schemas import (
+    EffectPhase,
+    TerminalOutcome,
+)
 from app.components.c3_robustness_recovery.runtime.adapter import (
     CleanupStatus,
     RecoveryActor,
@@ -31,6 +34,7 @@ from app.components.c3_robustness_recovery.runtime.evidence import (
     ReadinessStatus,
 )
 from app.components.c3_robustness_recovery.services.c2_facts import (
+    DEFAULT_C2_TO_C3_MAPPINGS,
     get_c2_fact_value,
     validate_c2_facts,
 )
@@ -113,8 +117,12 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
         is_eligible = False
         non_eval_reasons.append(f"Evidence linkage violation: {exc}")
 
-    # Validate C2 facts consistency
-    c2_valid, c2_conflicts = validate_c2_facts(request.c2_facts)
+    # Validate C2 facts consistency and project/pair boundaries
+    c2_valid, c2_conflicts = validate_c2_facts(
+        request.c2_facts,
+        expected_project_id=request.project_id,
+        expected_pair_id=evidence.pair_id,
+    )
     if not c2_valid:
         is_eligible = False
         non_eval_reasons.extend(c2_conflicts)
@@ -145,6 +153,80 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
 
     # 4. Fixed Recovery Rules Evaluation
     rule_results: list[RecoveryRuleResult] = []
+
+    is_authoritative = fault_trial.target_mode != TargetMode.DEMONSTRATION or any(
+        f.provenance in ("C2_EVALUATOR_BRIDGE", "SERVER_EVALUATED", "SHARED_RUN")
+        for f in request.c2_facts
+    )
+
+    if is_authoritative:
+        expected_pid = request.project_id
+        expected_pair_id = evidence.pair_id
+        expected_tid = fault_trial.trial_id if fault_trial else None
+    else:
+        expected_pid = None
+        expected_pair_id = None
+        expected_tid = None
+
+    # Derive expected scope from authoritative retained observations and frozen configuration
+    expected_entity = None
+    expected_snapshot = None
+
+    if fault_trial:
+        # 1. Authoritative observation reference or retained snapshot/entity on fault trial
+        if getattr(fault_trial, "observation_reference", None) is not None:
+            expected_snapshot = fault_trial.observation_reference.snapshot_id
+            if fault_trial.observation_reference.entity_id:
+                expected_entity = fault_trial.observation_reference.entity_id
+
+        if not expected_snapshot and getattr(fault_trial, "snapshot_id", None):
+            expected_snapshot = fault_trial.snapshot_id
+
+        if not expected_entity and getattr(fault_trial, "observed_entity_id", None):
+            expected_entity = fault_trial.observed_entity_id
+
+        # 2. Independently retained snapshot recorded in runtime events during execution
+        if not expected_snapshot and fault_trial.events:
+            for ev in reversed(fault_trial.events):
+                det = getattr(ev, "details", {}) or {}
+                if det.get("snapshot_id"):
+                    expected_snapshot = str(det.get("snapshot_id"))
+                    break
+                if det.get("after_snapshot_id"):
+                    expected_snapshot = str(det.get("after_snapshot_id"))
+                    break
+
+    # Helper function to resolve assertion version from pinned mappings and contracts
+    def _resolve_assertion_version(aid: str) -> str:
+        # Check pinned mappings from request first
+        if hasattr(request, "pinned_mappings") and request.pinned_mappings:
+            for m in request.pinned_mappings:
+                c3_id = getattr(m, "c3_assertion_id", None) or (
+                    m.get("c3_assertion_id") if isinstance(m, dict) else None
+                )
+                if c3_id == aid:
+                    c3_ver = getattr(m, "c3_assertion_version", None) or (
+                        m.get("c3_assertion_version") if isinstance(m, dict) else None
+                    )
+                    if c3_ver:
+                        return str(c3_ver)
+
+        if (
+            hasattr(contract, "assertion_versions")
+            and isinstance(contract.assertion_versions, dict)
+            and aid in contract.assertion_versions
+        ):
+            return str(contract.assertion_versions[aid])
+
+        for m in DEFAULT_C2_TO_C3_MAPPINGS:
+            if m.c3_assertion_id == aid:
+                return m.c3_assertion_version
+
+        if hasattr(case, "assertion_version") and case.assertion_version:
+            return str(case.assertion_version)
+
+        # Do not fall back to assertion version 1.0.0 when mapping is missing
+        return None
 
     # -----------------------------------------------------------------------
     # Rule A: Completion (RULE_COMPLETION)
@@ -179,8 +261,56 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             state_unknowns: list[str] = []
             supporting_facts: list[str] = []
 
+            active_mappings = {
+                m.c3_assertion_id if hasattr(m, "c3_assertion_id") else m.get("c3_assertion_id"): m
+                for m in (getattr(request, "pinned_mappings", None) or DEFAULT_C2_TO_C3_MAPPINGS)
+            }
+
             for assertion_id in contract.required_state_assertions:
-                fact_val = get_c2_fact_value(request.c2_facts, assertion_id)
+                resolved_version = _resolve_assertion_version(assertion_id)
+                if is_authoritative and resolved_version is None:
+                    state_unknowns.append(f"{assertion_id} (missing authoritative mapping)")
+                    continue
+
+                # Check retained observation time scope:
+                if fault_trial and getattr(fault_trial, "observation_reference", None) is not None:
+                    obs_scope = getattr(fault_trial.observation_reference, "observation_scope", None)
+                    if obs_scope is not None and obs_scope != "post_recovery":
+                        state_unknowns.append(
+                            f"{assertion_id} (observation has wrong time scope '{obs_scope}', required 'post_recovery')"
+                        )
+                        continue
+
+                # Check snapshot scope in authoritative mode:
+                if is_authoritative and expected_snapshot is None:
+                    state_unknowns.append(f"{assertion_id} (missing required snapshot scope)")
+                    continue
+
+                # Check entity scope in authoritative mode:
+                mapping = active_mappings.get(assertion_id)
+                is_entity_scoped = True
+                if mapping is not None:
+                    etype = getattr(mapping, "entity_type", None) or (
+                        mapping.get("entity_type") if isinstance(mapping, dict) else None
+                    )
+                    if etype in ("aggregate", "global", "side_effects", "system"):
+                        is_entity_scoped = False
+                if is_authoritative and is_entity_scoped and expected_entity is None:
+                    state_unknowns.append(f"{assertion_id} (missing required entity scope)")
+                    continue
+
+                fact_val = get_c2_fact_value(
+                    request.c2_facts,
+                    assertion_id,
+                    time_scope="post_recovery",
+                    entity_id=expected_entity,
+                    snapshot_id=expected_snapshot,
+                    assertion_version=resolved_version,
+                    expected_trial_id=expected_tid,
+                    expected_project_id=expected_pid,
+                    expected_pair_id=expected_pair_id,
+                    require_strict_scope=is_authoritative,
+                )
                 supporting_facts.append(assertion_id)
                 if fact_val == C2FactValue.FALSE:
                     state_violations.append(assertion_id)
@@ -402,7 +532,18 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
         )
     else:
         dup_c2_fact = get_c2_fact_value(
-            request.c2_facts, "duplicate_side_effect_detected"
+            request.c2_facts,
+            "duplicate_side_effect_detected",
+            time_scope="post_recovery",
+            entity_id=expected_entity,
+            snapshot_id=expected_snapshot,
+            assertion_version=_resolve_assertion_version(
+                "duplicate_side_effect_detected"
+            ),
+            expected_trial_id=expected_tid,
+            expected_project_id=expected_pid,
+            expected_pair_id=expected_pair_id,
+            require_strict_scope=is_authoritative,
         )
         if dup_c2_fact == C2FactValue.TRUE:
             rule_results.append(
@@ -467,13 +608,44 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
     else:
         if case.effect_phase == EffectPhase.AFTER_COMMIT and retries_count > 0:
             idempotency_fact = get_c2_fact_value(
-                request.c2_facts, "idempotency_key_reused"
+                request.c2_facts,
+                "idempotency_key_reused",
+                time_scope="post_recovery",
+                entity_id=expected_entity,
+                snapshot_id=expected_snapshot,
+                assertion_version=_resolve_assertion_version("idempotency_key_reused"),
+                expected_trial_id=expected_tid,
+                expected_project_id=expected_pid,
+                expected_pair_id=expected_pair_id,
+                require_strict_scope=is_authoritative,
             )
             target_enforced_fact = get_c2_fact_value(
-                request.c2_facts, "target_idempotency_enforced"
+                request.c2_facts,
+                "target_idempotency_enforced",
+                time_scope="post_recovery",
+                entity_id=expected_entity,
+                snapshot_id=expected_snapshot,
+                assertion_version=_resolve_assertion_version(
+                    "target_idempotency_enforced"
+                ),
+                expected_trial_id=expected_tid,
+                expected_project_id=expected_pid,
+                expected_pair_id=expected_pair_id,
+                require_strict_scope=is_authoritative,
             )
             dup_fact = get_c2_fact_value(
-                request.c2_facts, "duplicate_side_effect_detected"
+                request.c2_facts,
+                "duplicate_side_effect_detected",
+                time_scope="post_recovery",
+                entity_id=expected_entity,
+                snapshot_id=expected_snapshot,
+                assertion_version=_resolve_assertion_version(
+                    "duplicate_side_effect_detected"
+                ),
+                expected_trial_id=expected_tid,
+                expected_project_id=expected_pid,
+                expected_pair_id=expected_pair_id,
+                require_strict_scope=is_authoritative,
             )
 
             if idempotency_fact == C2FactValue.FALSE:
@@ -554,7 +726,45 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             unverified = False
             checked_facts: list[str] = []
             for assertion_id in contract.required_state_assertions:
-                fval = get_c2_fact_value(request.c2_facts, assertion_id)
+                resolved_version = _resolve_assertion_version(assertion_id)
+                if is_authoritative and resolved_version is None:
+                    unverified = True
+                    continue
+
+                if fault_trial and getattr(fault_trial, "observation_reference", None) is not None:
+                    obs_scope = getattr(fault_trial.observation_reference, "observation_scope", None)
+                    if obs_scope is not None and obs_scope != "post_recovery":
+                        unverified = True
+                        continue
+
+                if is_authoritative and expected_snapshot is None:
+                    unverified = True
+                    continue
+
+                mapping = active_mappings.get(assertion_id)
+                is_entity_scoped = True
+                if mapping is not None:
+                    etype = getattr(mapping, "entity_type", None) or (
+                        mapping.get("entity_type") if isinstance(mapping, dict) else None
+                    )
+                    if etype in ("aggregate", "global", "side_effects", "system"):
+                        is_entity_scoped = False
+                if is_authoritative and is_entity_scoped and expected_entity is None:
+                    unverified = True
+                    continue
+
+                fval = get_c2_fact_value(
+                    request.c2_facts,
+                    assertion_id,
+                    time_scope="post_recovery",
+                    entity_id=expected_entity,
+                    snapshot_id=expected_snapshot,
+                    assertion_version=resolved_version,
+                    expected_trial_id=expected_tid,
+                    expected_project_id=expected_pid,
+                    expected_pair_id=expected_pair_id,
+                    require_strict_scope=is_authoritative,
+                )
                 checked_facts.append(assertion_id)
                 if fval == C2FactValue.FALSE:
                     untruthful = True

@@ -88,6 +88,7 @@ class C4OnboardingService:
         self,
         project_id: str,
         req: OnboardingJobCreate,
+        user_id: str | None = None,
     ) -> C4OnboardingJobRecord:
         """Step 1 & 2: Initialize onboarding job and run bounded natural-language extraction."""
         job_id = f"onboard-{uuid.uuid4().hex[:12]}"
@@ -127,7 +128,7 @@ class C4OnboardingService:
 
         # 3. Create Extraction Job
         ext_job_id = f"ext-{uuid.uuid4().hex[:12]}"
-        provider = get_extraction_provider(provider_id=req.provider_id)
+        provider = get_extraction_provider(provider_id=req.provider_id, user_id=user_id)
         readiness = provider.check_readiness()
 
         candidate_rules: list[CandidateRule] = []
@@ -141,7 +142,8 @@ class C4OnboardingService:
         else:
             ext_status = ExtractionJobStatus.COMPLETED
             err_msg = None
-            candidate_rules, ext_metadata = self.extractor.extract_candidates(
+            extractor = BoundedNLPolicyExtractor(provider=provider)
+            candidate_rules, ext_metadata = extractor.extract_candidates(
                 artifact, binding
             )
 

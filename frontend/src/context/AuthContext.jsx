@@ -94,6 +94,7 @@ export const AuthProvider = ({ children }) => {
       value={{
         user,
         token,
+        isAuthenticated: Boolean(user && token),
         isLoading,
         login,
         signup,

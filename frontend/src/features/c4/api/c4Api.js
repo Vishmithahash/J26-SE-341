@@ -18,11 +18,6 @@ function getApiBase() {
     // so we never blindly append /projects to an existing API prefix
     return envBase.replace(/\/api(\/v\d+)?\/?$/, '').replace(/\/+$/, '');
   }
-  // If running in development browser environment on default Vite ports without a /projects proxy,
-  // target the backend port 8000 using current location host dynamically without hardcoded origin
-  if (typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000')) {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
-  }
   return '';
 }
 
@@ -167,6 +162,13 @@ export const c4Api = {
     const query = bindingId ? `?binding_id=${encodeURIComponent(bindingId)}` : '';
     const url = `${buildUrl(projectId, '/bindings')}${query}`;
     return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Alias for listDomainBindings for dashboard card compatibility.
+   */
+  async getBindings(projectId, bindingId = null) {
+    return this.listDomainBindings(projectId, bindingId);
   },
 
   /**

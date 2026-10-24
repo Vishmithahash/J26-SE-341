@@ -195,6 +195,19 @@ class FaultEpisodeRecord(BaseModel):
     cancellation_reason: str | None = None
 
 
+class StateObservationReference(BaseModel):
+    """Authoritative versioned observation reference projected from captured state snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str = Field(min_length=1, max_length=128)
+    snapshot_version: str = Field(default="1.0.0", min_length=1, max_length=32)
+    entity_id: str | None = Field(default=None, max_length=128)
+    captured_at_iso: str | None = None
+    observation_scope: str = Field(default="post_recovery", max_length=64)
+    fingerprint: str | None = None
+
+
 class TrialEvidence(BaseModel):
     """Complete evidence record for one trial (CLEAN or FAULT)."""
 
@@ -224,6 +237,19 @@ class TrialEvidence(BaseModel):
     caller_outcome: str
     cleanup_status: CleanupStatus
     evidence_complete: bool = True
+
+    snapshot_id: str | None = Field(
+        default=None,
+        description="Retained post-recovery observation snapshot identifier.",
+    )
+    observed_entity_id: str | None = Field(
+        default=None,
+        description="Retained observed entity identifier.",
+    )
+    observation_reference: StateObservationReference | None = Field(
+        default=None,
+        description="Authoritative versioned observation reference projected from captured state snapshot.",
+    )
 
 
 class MatchedPairEvidence(BaseModel):

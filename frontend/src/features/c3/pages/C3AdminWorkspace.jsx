@@ -203,17 +203,17 @@ export const C3AdminWorkspace = () => {
             )}
           </div>
 
-          {/* Governance & Backend Barriers */}
+          {/* Governance & Permissions */}
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
             <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-              Server Permissions & Boundaries
+              Authorization & Boundaries
             </span>
             <div className="space-y-1 text-slate-600 dark:text-slate-400">
               <p>
-                Server-side role enforcement is operational on <code className="font-mono text-[10px]">/projects</code> and <code className="font-mono text-[10px]">/admin/users</code>.
+                Server-side authentication and role-based access control protect project records.
               </p>
-              <p className="text-[11px] text-amber-700 dark:text-amber-400 font-medium">
-                C3 persistence endpoints currently do not provide privileged global cross-tenant override. Operations remain scoped to authorized project records.
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Administrative access oversees project-scoped testing and verification boundaries.
               </p>
             </div>
           </div>

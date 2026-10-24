@@ -1,4 +1,5 @@
 import time
+from typing import Any
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, joinedload
@@ -78,6 +79,7 @@ class DiagnosisService:
         project_id: str,
         run_id: str,
         request: DiagnosisRequest,
+        user_id: int | None = None,
     ) -> list[CaseDiagnosisRecord]:
         """Perform batch failure explanation and diagnosis for an execution run."""
         # 1. Check idempotency: If idempotency_key is provided and existing records match, return immediately
@@ -131,7 +133,80 @@ class DiagnosisService:
         # Provider selection
         provider = self.default_provider
         if request.use_model_assisted:
-            provider = ModelAssistedDiagnosisProvider()
+            from app.shared.llm.contracts import LLMGenerationRequest
+            from app.shared.llm.router import get_llm_service
+            llm_service = get_llm_service()
+            user_sel = llm_service.get_user_selection(user_id, db) if user_id else None
+            model_tag = f"{user_sel.provider}:{user_sel.model_id}" if user_sel else "selected-model"
+
+            async def _c1_model_callable(
+                cause_category: str,
+                deterministic_summary: str,
+                evidence_refs: list[str],
+                candidates: list[dict[str, Any]],
+            ) -> dict[str, Any]:
+                system_prompt = (
+                    "You are an AI diagnostic assistant for an Agentic AI QA Framework. "
+                    "Explain the diagnosed tool-call failure findings based strictly on the provided evidence. "
+                    "Do NOT fabricate non-existent evidence or candidates. "
+                    "Return a JSON object conforming to the schema."
+                )
+                user_prompt = (
+                    f"Diagnosed Cause: {cause_category}\n"
+                    f"Deterministic Summary: {deterministic_summary}\n"
+                    f"Valid Evidence Refs: {evidence_refs}\n"
+                    f"Valid Code Candidates: {candidates}\n\n"
+                    "Provide a refined explanation summary citing only from the provided valid references."
+                )
+                schema = {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string"},
+                        "cited_evidence": {"type": "array", "items": {"type": "string"}},
+                        "cited_candidates": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "file": {"type": "string"},
+                                    "function": {"type": "string"},
+                                },
+                                "required": ["file", "function"],
+                            },
+                        },
+                    },
+                    "required": ["summary"],
+                }
+                gen_req = LLMGenerationRequest(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    operation_reference="c1_diagnosis",
+                    prompt_template_version="c1-diagnosis-prompt-v1.0",
+                    response_schema=schema,
+                    temperature=0.0,
+                    max_tokens=1024,
+                    timeout_seconds=5.0,
+                )
+                if user_id:
+                    gen_res = await llm_service.invoke_for_user(user_id, gen_req, db)
+                else:
+                    adapter = llm_service.get_adapter(user_sel.provider if user_sel else "ollama")
+                    gen_res = await adapter.generate(gen_req, model_override=user_sel.model_id if user_sel else None)
+
+                if not gen_res.is_success:
+                    raise RuntimeError(gen_res.error_message or "Model diagnosis presentation failed")
+
+                out = gen_res.structured_data if isinstance(gen_res.structured_data, dict) else {}
+                out["summary"] = out.get("summary") or gen_res.raw_text or deterministic_summary
+                out["prompt_tokens"] = gen_res.usage.prompt_tokens or 0
+                out["completion_tokens"] = gen_res.usage.completion_tokens or 0
+                return out
+
+            provider = ModelAssistedDiagnosisProvider(
+                model_callable=_c1_model_callable,
+                model_name=model_tag,
+                timeout_seconds=5.0,
+            )
 
         results: list[CaseDiagnosisRecord] = []
 

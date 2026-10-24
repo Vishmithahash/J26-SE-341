@@ -6,10 +6,14 @@ from app.components.c2_state_aware_workflow.builder.deterministic import (
     DeterministicCandidateBuilder,
     InsufficientInputError,
 )
+from app.components.c2_state_aware_workflow.builder.model_assisted import (
+    ModelAssistedEFSMBuilder,
+)
 
 __all__ = [
     "BuilderError",
     "DeterministicCandidateBuilder",
     "InsufficientInputError",
     "ModelAssistedProvider",
+    "ModelAssistedEFSMBuilder",
 ]

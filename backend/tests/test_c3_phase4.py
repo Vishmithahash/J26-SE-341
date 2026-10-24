@@ -518,11 +518,11 @@ def test_c2_facts_time_evolution_not_conflicting():
     assert val == C2FactValue.TRUE
 
 
-def test_c2_integration_status_reports_blocked():
-    """check_c2_integration_status reports that live C2 service is blocked."""
+def test_c2_integration_status_reports_registered():
+    """check_c2_integration_status dynamically determines availability from registered capabilities."""
     is_avail, msg = check_c2_integration_status()
-    assert is_avail is False
-    assert "BLOCKED" in msg
+    assert is_avail is True
+    assert "operational" in msg.lower() or "registered" in msg.lower()
 
 
 # ---------------------------------------------------------------------------

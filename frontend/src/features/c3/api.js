@@ -164,6 +164,17 @@ export const c3Api = {
   },
 
   /**
+   * Optional model-assisted drafting of structured task fixture and recovery contract inputs.
+   */
+  async prepareDraftInputs(payload, signal) {
+    return request('/api/v1/c3/cases/prepare-draft', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    });
+  },
+
+  /**
    * Persist a verified frozen suite and candidate case snapshots into project scope.
    */
   async importSuite(projectId, frozenSuite, signal) {

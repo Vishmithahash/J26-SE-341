@@ -18,6 +18,7 @@ import {
   History,
   Plus,
   Info,
+  Layers,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useProject } from '../../context/ProjectContext';
@@ -371,14 +372,24 @@ export const ProjectDetailPage = () => {
               onClick={handleToggleActive}
               className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors ${
                 isActiveProject
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800'
+                  ? 'bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/50'
                   : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50'
               }`}
             >
-              <Check className="w-3.5 h-3.5" />
-              <span>{isActiveProject ? 'Active Project' : 'Select as Active'}</span>
+              {isActiveProject ? <PowerOff className="w-3.5 h-3.5" /> : <Check className="w-3.5 h-3.5" />}
+              <span>{isActiveProject ? 'Deactivate Project' : 'Select as Active'}</span>
             </button>
           )}
+
+          {/* Cross-Component Combined Results */}
+          <Link
+            to={`${basePath}/projects/${projectId}/results`}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-xs font-semibold transition-colors"
+            title="Inspect cross-component integration results and combined QA reports"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Combined results</span>
+          </Link>
 
           {!isArchived && (
             <Link

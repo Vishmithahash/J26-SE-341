@@ -79,8 +79,11 @@ export function useC4Project(onProjectReset) {
     [selectActiveProject]
   );
 
-  const getGeneration = () => generationRef.current;
-  const isCurrentGeneration = (gen) => gen === generationRef.current;
+  const getGeneration = useCallback(() => generationRef.current, []);
+  const isCurrentGeneration = useCallback(
+    (gen) => gen === generationRef.current,
+    []
+  );
 
   return {
     activeProject: activeProject || null,

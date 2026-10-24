@@ -116,10 +116,6 @@ export const C3ValidationPanel = ({
                 </p>
               </div>
             </div>
-
-            <div className="flex items-center gap-2 self-start md:self-center text-[11px] font-mono text-slate-500 shrink-0">
-              <span>endpoint: /api/v1/c3/cases/validate</span>
-            </div>
           </div>
 
           {/* Critical Distinction Notice: STATIC_VALID != Execution Readiness */}

@@ -1,3 +1,5 @@
+import { request } from './api.js';
+
 const STORAGE_PREFIX = 'qa_model_pref_';
 
 export function getModelPreference(userId) {
@@ -11,7 +13,7 @@ export function getModelPreference(userId) {
     if (typeof parsed.modelId !== 'string') return null;
     return {
       connectionType: parsed.connectionType,
-      provider: parsed.provider || (parsed.connectionType === 'local' ? 'ollama' : 'openai-compatible'),
+      provider: parsed.provider || (parsed.connectionType === 'local' ? 'ollama' : 'gemini'),
       modelId: parsed.modelId,
       updatedAt: parsed.updatedAt,
     };
@@ -42,4 +44,50 @@ export function clearModelPreference(userId) {
   } catch {
     // Gracefully handle storage access failure
   }
+}
+
+/**
+ * Fetch server-configured LLM providers and their runtime availability.
+ * Authenticated endpoint: GET /api/v1/llm/providers
+ */
+export async function fetchProviders(signal) {
+  return request('/api/v1/llm/providers', {
+    method: 'GET',
+    signal,
+  });
+}
+
+/**
+ * Fetch authenticated user's authoritative model selection from backend.
+ * Authenticated endpoint: GET /api/v1/llm/selection
+ */
+export async function fetchModelSelection(signal) {
+  return request('/api/v1/llm/selection', {
+    method: 'GET',
+    signal,
+  });
+}
+
+/**
+ * Persist authenticated user's model selection on the backend.
+ * Authenticated endpoint: PUT /api/v1/llm/selection
+ */
+export async function saveModelSelection(selection, signal) {
+  return request('/api/v1/llm/selection', {
+    method: 'PUT',
+    body: JSON.stringify(selection),
+    signal,
+  });
+}
+
+/**
+ * Run a bounded connection and inference test against the specified or active provider.
+ * Authenticated endpoint: POST /api/v1/llm/test-connection
+ */
+export async function testLLMConnection(payload = {}, signal) {
+  return request('/api/v1/llm/test-connection', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    signal,
+  });
 }

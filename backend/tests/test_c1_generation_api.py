@@ -11,6 +11,11 @@ from app.database import Base, get_db
 from app.main import app
 
 
+from app.shared.auth.dependencies import require_active_user
+from app.shared.auth.models import User, UserRole
+from app.shared.projects.models import Project
+
+
 @pytest.fixture
 def db_session():
     engine = create_engine(
@@ -30,13 +35,37 @@ def db_session():
 
 @pytest.fixture
 def client(db_session):
+    admin_user = User(
+        id=1,
+        name="Admin",
+        email="admin@test.com",
+        canonical_email="admin@test.com",
+        password_hash="fake",
+        role=UserRole.ADMIN,
+        is_active=True,
+    )
+    db_session.merge(admin_user)
+    for pid in ["proj_gen_api_test", "proj_limits_test", "proj_alpha_gen", "proj_beta_gen"]:
+        db_session.merge(
+            Project(
+                project_id=pid,
+                owner_user_id=1,
+                name=pid,
+                backend_base_url="http://localhost:8000",
+                backend_health_url="http://localhost:8000/health",
+            )
+        )
+    db_session.commit()
+
     def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_active_user] = lambda: admin_user
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
 
 
 def test_generation_job_lifecycle_and_api_endpoints(client):

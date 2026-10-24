@@ -36,37 +36,56 @@ export const C4DashboardCard = ({ basePath = '/app' }) => {
     setIsLoading(true);
     setError(null);
 
-    Promise.allSettled([
-      c4Api.getExtractionReadiness(projectId),
-      c4Api.getBindings(projectId),
-      c4Api.listExecutionRuns(projectId, { limit: 50 }),
-    ]).then(([readinessRes, bindingsRes, runsRes]) => {
-      if (!isMounted) return;
+    const fetchOverview = async () => {
+      try {
+        const fetchReadiness = typeof c4Api?.getExtractionReadiness === 'function'
+          ? c4Api.getExtractionReadiness(projectId)
+          : Promise.resolve(null);
+        const fetchBindings = typeof c4Api?.listDomainBindings === 'function'
+          ? c4Api.listDomainBindings(projectId)
+          : typeof c4Api?.getBindings === 'function'
+          ? c4Api.getBindings(projectId)
+          : Promise.resolve([]);
+        const fetchRuns = typeof c4Api?.listExecutionRuns === 'function'
+          ? c4Api.listExecutionRuns(projectId, { limit: 50 })
+          : Promise.resolve([]);
 
-      if (readinessRes.status === 'fulfilled') {
-        setReadiness(readinessRes.value);
-      } else {
-        setReadiness(null);
+        const [readinessRes, bindingsRes, runsRes] = await Promise.allSettled([
+          fetchReadiness,
+          fetchBindings,
+          fetchRuns,
+        ]);
+
+        if (!isMounted) return;
+
+        if (readinessRes.status === 'fulfilled') {
+          setReadiness(readinessRes.value);
+        } else {
+          setReadiness(null);
+        }
+
+        if (bindingsRes.status === 'fulfilled' && Array.isArray(bindingsRes.value)) {
+          setBindings(bindingsRes.value);
+        } else {
+          setBindings([]);
+        }
+
+        if (runsRes.status === 'fulfilled' && Array.isArray(runsRes.value)) {
+          setRunsList(runsRes.value);
+        } else {
+          setRunsList([]);
+        }
+      } catch (err) {
+        if (!isMounted) return;
+        setError(err?.message || 'Failed to load policy safety overview');
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
+    };
 
-      if (bindingsRes.status === 'fulfilled' && Array.isArray(bindingsRes.value)) {
-        setBindings(bindingsRes.value);
-      } else {
-        setBindings([]);
-      }
-
-      if (runsRes.status === 'fulfilled' && Array.isArray(runsRes.value)) {
-        setRunsList(runsRes.value);
-      } else {
-        setRunsList([]);
-      }
-
-      setIsLoading(false);
-    }).catch((err) => {
-      if (!isMounted) return;
-      setError(err?.message || 'Failed to load policy safety overview');
-      setIsLoading(false);
-    });
+    fetchOverview();
 
     return () => {
       isMounted = false;

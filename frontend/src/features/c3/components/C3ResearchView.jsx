@@ -1,10 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Sparkles,
   Layers,
-  Terminal,
-  Copy,
-  Check,
   Info,
   GitBranch,
   Split,
@@ -12,14 +9,6 @@ import {
 import { DEMO_RESEARCH_PROTOCOL } from '../fixtures';
 
 export const C3ResearchView = () => {
-  const [copiedCmd, setCopiedCmd] = useState(null);
-
-  const handleCopy = (text, id) => {
-    navigator.clipboard.writeText(text);
-    setCopiedCmd(id);
-    setTimeout(() => setCopiedCmd(null), 2000);
-  };
-
   const proto = DEMO_RESEARCH_PROTOCOL;
 
   return (
@@ -34,14 +23,14 @@ export const C3ResearchView = () => {
           Planned 3-Way Protocol, Canonical Baselines & Ablations
         </h2>
         <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">
-          Component 3 enforces research rigor through a planned 40/20/40 family-partitioned split, comparative evaluation baselines (B1 fixed suite, B2 outcome-only, Full C3 proposed method, and matched clean control), and method ablations (A1–A4). Research experiments and evaluations are executed strictly via developer CLI entry points without fabricated browser executions.
+          Component 3 enforces research rigor through a planned 40/20/40 family-partitioned split, comparative evaluation baselines (B1 fixed suite, B2 outcome-only, Full C3 proposed method, and matched clean control), and method ablations (A1–A4). Research evaluation findings are stored and reviewed through verified evidence records.
         </p>
 
-        {/* CLI Architecture Badge */}
+        {/* Governance Notice */}
         <div className="p-3 rounded-xl bg-purple-950/50 border border-purple-800 text-purple-200 text-xs flex items-start gap-2.5">
           <Info className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
           <div className="leading-relaxed">
-            <span className="font-bold">Developer CLI Architecture:</span> Real recovery evaluation and runner pipelines operate as offline command-line entry points (<code className="font-mono text-purple-300">runtime.evaluate</code>, <code className="font-mono text-purple-300">runtime.suite_runner</code>, <code className="font-mono text-purple-300">runtime.runner</code>). Shell commands are never executed from the browser, and no pseudo-endpoints or fabricated reviewer labels are created client-side.
+            <span className="font-bold">Evaluation Governance:</span> Recovery evaluations and research metrics reflect verified test evidence. Live execution is not connected in this standalone view; evaluations are imported from verified runs or coordinated through shared integration execution services.
           </div>
         </div>
       </div>
@@ -143,100 +132,15 @@ export const C3ResearchView = () => {
         </div>
       </div>
 
-      {/* Developer CLI Terminal Commands */}
-      <div className="p-6 rounded-2xl bg-slate-950 text-slate-200 border border-slate-800 shadow-xs space-y-4">
-        <div>
-          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-emerald-400" />
-            <span>Developer CLI Commands (Advanced Documentation)</span>
-          </h3>
-          <p className="text-xs text-slate-400 leading-relaxed mt-1">
-            Execute real runtime and evaluation pipelines directly from a Python terminal environment. Shell commands are never executed in the browser; unsupported arguments (<code className="font-mono text-slate-300">--split</code>, <code className="font-mono text-slate-300">--domain</code>) are omitted.
-          </p>
-        </div>
-
-        <div className="space-y-3 text-xs font-mono">
-          {/* Command 1: evaluate */}
-          <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-3">
-            <div className="truncate">
-              <span className="text-slate-500">$ </span>
-              <span className="text-emerald-400">
-                python -m app.components.c3_robustness_recovery.runtime.evaluate --evidence-file evidence.json --export-dir evidence_output
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() =>
-                handleCopy(
-                  'python -m app.components.c3_robustness_recovery.runtime.evaluate --evidence-file evidence.json --export-dir evidence_output',
-                  'cmd1'
-                )
-              }
-              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors shrink-0"
-              title="Copy command"
-            >
-              {copiedCmd === 'cmd1' ? (
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-              ) : (
-                <Copy className="w-3.5 h-3.5" />
-              )}
-            </button>
-          </div>
-
-          {/* Command 2: suite_runner */}
-          <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-3">
-            <div className="truncate">
-              <span className="text-slate-500">$ </span>
-              <span className="text-emerald-400">
-                python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --export-dir evidence_output
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() =>
-                handleCopy(
-                  'python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --export-dir evidence_output',
-                  'cmd2'
-                )
-              }
-              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors shrink-0"
-              title="Copy command"
-            >
-              {copiedCmd === 'cmd2' ? (
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-              ) : (
-                <Copy className="w-3.5 h-3.5" />
-              )}
-            </button>
-          </div>
-
-          {/* Command 3: runner */}
-          <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-3">
-            <div className="truncate">
-              <span className="text-slate-500">$ </span>
-              <span className="text-emerald-400">
-                python -m app.components.c3_robustness_recovery.runtime.runner --synthetic --export-dir evidence_output
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() =>
-                handleCopy(
-                  'python -m app.components.c3_robustness_recovery.runtime.runner --synthetic --export-dir evidence_output',
-                  'cmd3'
-                )
-              }
-              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors shrink-0"
-              title="Copy command"
-            >
-              {copiedCmd === 'cmd3' ? (
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-              ) : (
-                <Copy className="w-3.5 h-3.5" />
-              )}
-            </button>
-          </div>
-        </div>
+      {/* Research Protocol Governance Summary */}
+      <div className="p-6 rounded-2xl bg-slate-950 text-slate-200 border border-slate-800 shadow-xs space-y-2">
+        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-purple-400" />
+          <span>Research Protocol Governance</span>
+        </h3>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Experimental splits, comparative baselines, and ablation models evaluate robustness across isolated fault families. All reported metrics derive from stored execution evidence and verified test records.
+        </p>
       </div>
     </div>
   );

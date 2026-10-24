@@ -492,8 +492,8 @@ export const StateAwareWorkflowPage = () => {
           {showPreparationForm ? (
             <ModelPreparationForm
               projectId={activeProjectId}
-              onBuildCandidate={async (input, autoVal) => {
-                await buildCandidateModel(input, autoVal);
+              onBuildCandidate={async (input, autoVal, mode) => {
+                await buildCandidateModel(input, autoVal, mode);
                 setShowPreparationForm(false);
               }}
               onCreateDraft={async (def) => {

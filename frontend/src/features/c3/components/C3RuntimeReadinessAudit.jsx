@@ -1,12 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   ShieldAlert,
   CheckCircle2,
   AlertTriangle,
   Terminal,
   Cpu,
-  ChevronDown,
-  ChevronRight,
   Info,
 } from 'lucide-react';
 import { C3Badge } from './C3Badge';
@@ -17,7 +15,6 @@ export const C3RuntimeReadinessAudit = ({
   taskFixtureMetadata,
   recoveryContract,
 }) => {
-  const [showCliDetails, setShowCliDetails] = useState(true);
 
   // Derive readiness dimensions
   const adapterId = adapterManifest?.adapter_id || 'adapter-payment-01';
@@ -38,7 +35,7 @@ export const C3RuntimeReadinessAudit = ({
               <Cpu className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               <span>Runtime Readiness Findings & Execution Blockers</span>
             </h3>
-            <C3Badge status="TEST_NOT_READY" label="HTTP Runner Blocked" />
+            <C3Badge status="TEST_NOT_READY" label="Live execution not connected" />
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-2xl leading-relaxed">
             Runtime readiness enforces adapter identity, fixture reset capabilities, operational fault triggers, and environment prerequisites. Declared adapter capabilities are not proof of live target execution.
@@ -46,16 +43,16 @@ export const C3RuntimeReadinessAudit = ({
         </div>
       </div>
 
-      {/* Critical Blocker Alert */}
+      {/* Connectivity Alert */}
       <div className="p-4 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/60 space-y-2">
         <div className="flex items-start gap-2.5">
           <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
           <div className="text-xs space-y-1">
             <span className="font-bold text-amber-900 dark:text-amber-200">
-              Live HTTP Trial Execution is Unavailable by Design
+              Live execution is not connected
             </span>
             <p className="text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
-              The backend Component 3 architecture does not expose an HTTP POST endpoint for triggering live trial execution. Live matched trials and bounded suites are executed using hermetic Python runtime runners and developer CLI tools. Completed trial evidence is stored and reviewed via the <strong>Import Evidence</strong> API and Tracked Execution retrieval endpoints.
+              Direct live target execution is not connected in this standalone workspace. Matched trial evidence is ingested via the <strong>Import Evidence</strong> workflow or evaluated through shared integration execution plans.
             </p>
           </div>
         </div>
@@ -133,7 +130,7 @@ export const C3RuntimeReadinessAudit = ({
             Mode: <span className="text-purple-600 dark:text-purple-400 font-semibold">DEMONSTRATION</span>
           </div>
           <p className="text-[10px] text-slate-400">
-            Live AUT (<code className="font-mono">NEXACART_AUT_URL</code>) is unconfigured in this environment. Hermetic demonstration mode is active.
+            Live target endpoint is not configured in this environment. Controlled demonstration mode is active.
           </p>
         </div>
 
@@ -170,44 +167,15 @@ export const C3RuntimeReadinessAudit = ({
         </div>
       </div>
 
-      {/* Developer CLI Workflow Accordion */}
-      <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setShowCliDetails((prev) => !prev)}
-          className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-        >
-          <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-indigo-500" />
-            <span>Developer CLI: How to Execute Trials & Generate Evidence Locally</span>
-          </div>
-          {showCliDetails ? (
-            <ChevronDown className="w-4 h-4 text-slate-400" />
-          ) : (
-            <ChevronRight className="w-4 h-4 text-slate-400" />
-          )}
-        </button>
-
-        {showCliDetails && (
-          <div className="p-4 bg-slate-900 text-slate-200 text-xs font-mono space-y-3">
-            <p className="text-slate-400 text-[11px]">
-              Execute hermetic matched trials or bounded frozen suites from the backend directory:
-            </p>
-            <div className="p-3 bg-black/50 rounded-lg border border-slate-800 space-y-2">
-              <div className="text-slate-400"># 1. Run single matched trial (synthetic demonstration):</div>
-              <div className="text-emerald-400 select-all">
-                python -m app.components.c3_robustness_recovery.runtime.runner --synthetic --export-dir evidence_output
-              </div>
-              <div className="text-slate-400 pt-1"># 2. Run bounded suite of feasible fault cases:</div>
-              <div className="text-emerald-400 select-all">
-                python -m app.components.c3_robustness_recovery.runtime.suite_runner --synthetic --export-dir evidence_output
-              </div>
-            </div>
-            <p className="text-slate-400 text-[11px]">
-              The runner outputs versioned JSON evidence into <code className="text-amber-300">evidence_output/</code>. You can then use the <strong>Import Evidence</strong> action above to persist and inspect the evidence in this workspace.
-            </p>
-          </div>
-        )}
+      {/* Evidence Ingestion & Shared Integration Workflow */}
+      <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden p-4 bg-slate-50 dark:bg-slate-800/40 text-xs space-y-2">
+        <div className="flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-200">
+          <Terminal className="w-4 h-4 text-indigo-500" />
+          <span>Evidence Ingestion & Integration Execution</span>
+        </div>
+        <p className="text-slate-600 dark:text-slate-400 leading-relaxed text-[11px]">
+          Completed trial runs and fault injection evidence records are imported using the <strong>Import Evidence</strong> action above or reviewed through shared cross-component integration plans. For local offline test runners, refer to project documentation.
+        </p>
       </div>
     </div>
   );

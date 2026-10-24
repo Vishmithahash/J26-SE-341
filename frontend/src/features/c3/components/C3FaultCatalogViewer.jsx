@@ -36,7 +36,7 @@ export const C3FaultCatalogViewer = () => {
             <span>Authoritative Fault Families Catalogue</span>
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Phase 1 operational fault catalogue defining static boundaries and supported delivery modes.
+            Operational fault catalogue defining failure semantics, effect phases, and supported modes.
           </p>
         </div>
 
@@ -44,7 +44,7 @@ export const C3FaultCatalogViewer = () => {
           <span className="text-xs text-slate-500 dark:text-slate-400">
             Catalogue Version: <code className="font-mono font-semibold">{catalog?.schema_version || '1.0.0'}</code>
           </span>
-          <C3Badge status="STATIC_ONLY" label="Static Foundation Only" />
+          <C3Badge status="CATALOGUE" label="Fault Catalogue" />
         </div>
       </div>
 
@@ -149,9 +149,19 @@ export const C3FaultCatalogViewer = () => {
                   </div>
 
                   <div className="pt-2 text-[11px] text-slate-400 flex items-center justify-between">
-                    <span>Injection Status:</span>
-                    <span className="font-semibold text-amber-600 dark:text-amber-400">
-                      {fam.injection_implemented ? 'Implemented' : 'Not Implemented (Phase 1)'}
+                    <span>Runtime Support:</span>
+                    <span className={`font-semibold ${
+                      fam.injection_implemented === true
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : fam.injection_implemented === false
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-slate-500 dark:text-slate-400'
+                    }`}>
+                      {fam.injection_implemented === true
+                        ? 'Verified Runtime Support'
+                        : fam.injection_implemented === false
+                        ? 'Not connected'
+                        : 'Not checked'}
                     </span>
                   </div>
                 </div>
