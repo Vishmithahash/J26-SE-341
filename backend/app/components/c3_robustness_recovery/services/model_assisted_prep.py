@@ -158,16 +158,27 @@ async def prepare_draft_inputs(
         "usage": gen_result.usage.model_dump(),
     }
 
+    if not gen_result.is_success:
+        return ModelAssistedDraftResponse(
+            status="FAILED",
+            explanation=f"Model assistance invocation failed: {gen_result.error_message or 'Unknown provider error'}",
+            unresolved_references=["provider_error"],
+            provider_metadata=provider_metadata,
+        )
+
     try:
-        content = gen_result.content.strip()
-        if content.startswith("```"):
-            lines = content.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            content = "\n".join(lines).strip()
-        data = json.loads(content)
+        if gen_result.structured_data and isinstance(gen_result.structured_data, dict):
+            data = gen_result.structured_data
+        else:
+            raw = (gen_result.raw_text or "").strip()
+            if raw.startswith("```"):
+                lines = raw.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                raw = "\n".join(lines).strip()
+            data = json.loads(raw)
     except Exception as exc:  # noqa: BLE001
         return ModelAssistedDraftResponse(
             status="FAILED",
@@ -184,12 +195,73 @@ async def prepare_draft_inputs(
     tf_data = data.get("task_fixture")
     if tf_data and isinstance(tf_data, dict):
         try:
-            # Ensure domain and task id exist
-            tf_data.setdefault("domain", req.domain)
-            tf_data.setdefault("task_id", req.task_id or "task-draft-001")
-            tf_data.setdefault("task_version", req.task_version or "1.0.0")
-            tf_data.setdefault("fixture_id", "fixture-draft-001")
-            tf_data.setdefault("fixture_version", "1.0.0")
+            # Preserve authoritative fixture metadata if supplied
+            if req.existing_task_fixture:
+                auth_tf = req.existing_task_fixture
+                # Detect and flag model altering authoritative fixture ID or version
+                if "fixture_id" in tf_data and tf_data["fixture_id"] != auth_tf.fixture_id:
+                    unresolved.append(
+                        f"unresolved_fixture_reference: model attempted to replace authoritative fixture_id '{auth_tf.fixture_id}' with '{tf_data['fixture_id']}'"
+                    )
+                tf_data["fixture_id"] = auth_tf.fixture_id
+                tf_data["fixture_version"] = auth_tf.fixture_version
+                tf_data["task_id"] = auth_tf.task_id
+                tf_data["task_version"] = auth_tf.task_version
+                tf_data["domain"] = auth_tf.domain
+                if "associated_tool_ids" not in tf_data or not tf_data["associated_tool_ids"]:
+                    tf_data["associated_tool_ids"] = list(auth_tf.associated_tool_ids)
+                if "associated_recovery_contract_ids" not in tf_data or not tf_data["associated_recovery_contract_ids"]:
+                    tf_data["associated_recovery_contract_ids"] = list(auth_tf.associated_recovery_contract_ids)
+
+                # Check reset facilities against authoritative fixture
+                if not auth_tf.declared_reset_support and tf_data.get("declared_reset_support"):
+                    unresolved.append(
+                        "unresolved_reset_support: model invented declared_reset_support not supported by authoritative fixture"
+                    )
+                    tf_data["declared_reset_support"] = False
+                    tf_data["reset_method"] = None
+                elif auth_tf.declared_reset_support:
+                    tf_data["declared_reset_support"] = True
+                    tf_data["reset_method"] = auth_tf.reset_method
+
+                # Check observation support against authoritative fixture
+                if not auth_tf.declared_observation_support and tf_data.get("declared_observation_support"):
+                    unresolved.append(
+                        "unresolved_observation_support: model invented declared_observation_support not supported by authoritative fixture"
+                    )
+                    tf_data["declared_observation_support"] = False
+                elif auth_tf.declared_observation_support:
+                    tf_data["declared_observation_support"] = True
+
+                # Check observation capabilities
+                auth_obs = set(auth_tf.supported_observations)
+                for obs in tf_data.get("supported_observations", []):
+                    if obs not in auth_obs:
+                        unresolved.append(
+                            f"unresolved_observation: '{obs}' not supported by authoritative fixture"
+                        )
+
+                # Check effect observation flags
+                if not auth_tf.supports_committed_effect_observation and tf_data.get("supports_committed_effect_observation"):
+                    unresolved.append(
+                        "unresolved_capability: model claimed supports_committed_effect_observation not supported by authoritative fixture"
+                    )
+                    tf_data["supports_committed_effect_observation"] = False
+                if not auth_tf.supports_partial_effect_observation and tf_data.get("supports_partial_effect_observation"):
+                    unresolved.append(
+                        "unresolved_capability: model claimed supports_partial_effect_observation not supported by authoritative fixture"
+                    )
+                    tf_data["supports_partial_effect_observation"] = False
+            else:
+                # No authoritative fixture: missing facilities must NOT be filled with generic defaults
+                if not tf_data.get("fixture_id"):
+                    unresolved.append("missing_fixture_id: no authoritative fixture provided and model omitted fixture_id")
+                    tf_data.setdefault("fixture_id", "draft-fixture-unverified")
+                tf_data.setdefault("domain", req.domain)
+                tf_data.setdefault("task_id", req.task_id or "task-draft-unverified")
+                tf_data.setdefault("task_version", req.task_version or "1.0.0")
+                tf_data.setdefault("fixture_version", "1.0.0")
+
             draft_tf = TaskFixtureMetadata.model_validate(tf_data)
         except Exception as e:  # noqa: BLE001
             unresolved.append(f"task_fixture_validation_error: {e}")
@@ -201,6 +273,15 @@ async def prepare_draft_inputs(
         try:
             rc_data.setdefault("contract_id", "contract-draft-001")
             rc_data.setdefault("contract_version", "1.0.0")
+            if req.existing_recovery_contract:
+                auth_rc = req.existing_recovery_contract
+                rc_data.setdefault("required_state_assertions", list(auth_rc.required_state_assertions))
+                rc_data.setdefault("max_tool_calls_budget", auth_rc.max_tool_calls_budget)
+                rc_data.setdefault("max_total_timeout_ms", auth_rc.max_total_timeout_ms)
+            else:
+                rc_data.setdefault("required_state_assertions", ["order_created"])
+                rc_data.setdefault("max_tool_calls_budget", 10)
+                rc_data.setdefault("max_total_timeout_ms", 10000)
 
             # Validate attempt and retry consistency without silent mutation
             attempts = rc_data.get("max_task_attempts")
@@ -226,6 +307,15 @@ async def prepare_draft_inputs(
                             f"invalid_terminal_outcome: '{o}' is not a valid TerminalOutcome enum value"
                         )
                 rc_data["permitted_terminal_outcomes"] = valid_outcomes
+
+            # Ground required state assertions against supplied contract if present
+            if req.existing_recovery_contract and "required_state_assertions" in rc_data:
+                auth_assertions = set(req.existing_recovery_contract.required_state_assertions)
+                for assertion in rc_data.get("required_state_assertions", []):
+                    if assertion not in auth_assertions:
+                        unresolved.append(
+                            f"unresolved_assertion_reference: '{assertion}' not found in declared assertion references"
+                        )
 
             draft_rc = RecoveryContract.model_validate(rc_data)
         except Exception as e:  # noqa: BLE001

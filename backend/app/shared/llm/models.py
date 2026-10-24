@@ -32,7 +32,7 @@ class UserModelSelection(Base):
         String(64), default="ollama", nullable=False
     )
     model_id: Mapped[str] = mapped_column(
-        String(128), default="qwen3:4b", nullable=False
+        String(128), default="qwen3.5:4b", nullable=False
     )
     generation_settings: Mapped[dict[str, Any]] = mapped_column(
         JSON, default=dict, nullable=False

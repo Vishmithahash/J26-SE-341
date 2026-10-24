@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = Field(default=SecretStr(""), alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-3.5-flash-lite", alias="GEMINI_MODEL")
     ollama_base_url: str = Field(default="http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
-    ollama_model: str = Field(default="qwen3:4b", alias="OLLAMA_MODEL")
+    ollama_model: str = Field(default="qwen3.5:4b", alias="OLLAMA_MODEL")
 
     @field_validator("database_url", mode="after")
     @classmethod

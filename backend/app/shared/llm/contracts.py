@@ -36,7 +36,7 @@ class ModelSelectionConfig(BaseModel):
 
     connection_type: str = Field(default=ConnectionType.LOCAL.value)
     provider: str = Field(default=LLMProviderType.OLLAMA.value)
-    model_id: str = Field(default="qwen3:4b", min_length=1, max_length=128)
+    model_id: str = Field(default="qwen3.5:4b", min_length=1, max_length=128)
     model: str | None = None
     generation_settings: dict[str, Any] = Field(default_factory=dict)
     updated_at: datetime | None = None
@@ -57,7 +57,7 @@ class ModelSelectionConfig(BaseModel):
                 )
             chosen = m_id if m_id is not None else m
             if chosen is None or not str(chosen).strip():
-                chosen = "qwen3:4b"
+                chosen = "qwen3.5:4b"
             clean_model = str(chosen).strip()
             data["model_id"] = clean_model
             data["model"] = clean_model
@@ -135,9 +135,9 @@ class ModelSelectionConfig(BaseModel):
                     "Setting 'top_p' must be a numeric value between 0.0 and 1.0."
                 )
             elif k == "timeout_seconds" and (
-                isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0
+                isinstance(v, bool) or not isinstance(v, (int, float)) or not (1.0 <= v <= 300.0)
             ):
-                raise ValueError("Setting 'timeout_seconds' must be a positive number.")
+                raise ValueError("Setting 'timeout_seconds' must be a numeric value between 1.0 and 300.0.")
 
     @field_validator("connection_type")
     @classmethod
@@ -225,6 +225,7 @@ class LLMGenerationRequest(BaseModel):
     prompt_template_version: str = "v1.0.0"
     temperature: float = 0.0
     max_tokens: int = 2048
+    top_p: float | None = None
     response_schema: dict[str, Any] | None = None
     timeout_seconds: float = 15.0
     metadata: dict[str, Any] = Field(default_factory=dict)

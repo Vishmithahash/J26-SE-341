@@ -18,6 +18,7 @@ from app.shared.llm.contracts import (
     LLMUsageMetadata,
     ProviderStatusInfo,
 )
+from app.shared.llm.schema_validator import validate_structured_schema
 
 THINK_REGEX = re.compile(r"<think>.*?</think>", re.DOTALL)
 
@@ -77,8 +78,7 @@ class OllamaAdapter(BaseLLMAdapter):
 
             is_target_installed = any(
                 target_model == name
-                or target_model in name
-                or name.startswith(target_model)
+                or (":" not in target_model and name == f"{target_model}:latest")
                 for name in installed_names
             )
 
@@ -139,14 +139,18 @@ class OllamaAdapter(BaseLLMAdapter):
             messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.user_prompt})
 
+        options: dict[str, Any] = {
+            "temperature": request.temperature,
+            "num_predict": request.max_tokens,
+        }
+        if request.top_p is not None:
+            options["top_p"] = request.top_p
+
         body: dict[str, Any] = {
             "model": actual_model,
             "messages": messages,
             "stream": False,
-            "options": {
-                "temperature": request.temperature,
-                "num_predict": request.max_tokens,
-            },
+            "options": options,
         }
 
         # Bounded structured format
@@ -185,10 +189,6 @@ class OllamaAdapter(BaseLLMAdapter):
                 )
 
             data = resp.json()
-            raw_content = data.get("message", {}).get("content", "")
-
-            # Handle Qwen <think> reasoning: Strip internal thought tokens from answer
-            cleaned_text = THINK_REGEX.sub("", raw_content).strip()
 
             # Parse usage telemetry
             prompt_eval = data.get("prompt_eval_count")
@@ -202,7 +202,47 @@ class OllamaAdapter(BaseLLMAdapter):
                 is_usage_known=(prompt_eval is not None and eval_count is not None),
             )
 
-            # If structured output expected, parse JSON
+            # Check completion status and truncation
+            done = data.get("done", True)
+            done_reason = data.get("done_reason")
+            if not done or done_reason == "length":
+                raw_content = data.get("message", {}).get("content", "")
+                cleaned_text = THINK_REGEX.sub("", raw_content).strip()
+                return LLMGenerationResult(
+                    provider=self.provider_name,
+                    requested_model=actual_model,
+                    actual_model=actual_model,
+                    operation_reference=request.operation_reference,
+                    prompt_template_version=request.prompt_template_version,
+                    duration_ms=duration_ms,
+                    is_success=False,
+                    error_type="INCOMPLETE_OUTPUT",
+                    error_message=f"Model response was truncated by provider (done_reason={done_reason or 'length'}).",
+                    raw_text=cleaned_text,
+                    usage=usage,
+                )
+
+            raw_content = data.get("message", {}).get("content", "")
+
+            # Handle Qwen <think> reasoning: Strip internal thought tokens from answer
+            cleaned_text = THINK_REGEX.sub("", raw_content).strip()
+
+            if not cleaned_text:
+                return LLMGenerationResult(
+                    provider=self.provider_name,
+                    requested_model=actual_model,
+                    actual_model=actual_model,
+                    operation_reference=request.operation_reference,
+                    prompt_template_version=request.prompt_template_version,
+                    duration_ms=duration_ms,
+                    is_success=False,
+                    error_type="EMPTY_OUTPUT",
+                    error_message="Model returned empty text output.",
+                    raw_text="",
+                    usage=usage,
+                )
+
+            # If structured output expected, parse and validate JSON
             structured_data = None
             if request.response_schema is not None:
                 try:
@@ -221,6 +261,30 @@ class OllamaAdapter(BaseLLMAdapter):
                         error_message=f"Model output failed JSON parsing: {err}",
                         usage=usage,
                     )
+                is_valid_schema, schema_err = validate_structured_schema(
+                    structured_data, request.response_schema
+                )
+                if not is_valid_schema:
+                    return LLMGenerationResult(
+                        provider=self.provider_name,
+                        requested_model=actual_model,
+                        actual_model=actual_model,
+                        operation_reference=request.operation_reference,
+                        prompt_template_version=request.prompt_template_version,
+                        raw_text=cleaned_text,
+                        duration_ms=duration_ms,
+                        is_success=False,
+                        error_type="INVALID_SCHEMA",
+                        error_message=f"Model output violates required schema: {schema_err}",
+                        usage=usage,
+                    )
+
+            applied_settings = {
+                "temperature": request.temperature,
+                "max_tokens": request.max_tokens,
+            }
+            if request.top_p is not None:
+                applied_settings["top_p"] = request.top_p
 
             return LLMGenerationResult(
                 provider=self.provider_name,
@@ -228,10 +292,7 @@ class OllamaAdapter(BaseLLMAdapter):
                 actual_model=actual_model,
                 operation_reference=request.operation_reference,
                 prompt_template_version=request.prompt_template_version,
-                generation_settings={
-                    "temperature": request.temperature,
-                    "max_tokens": request.max_tokens,
-                },
+                generation_settings=applied_settings,
                 raw_text=cleaned_text,
                 structured_data=structured_data,
                 usage=usage,

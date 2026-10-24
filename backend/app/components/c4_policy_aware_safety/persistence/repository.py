@@ -365,12 +365,16 @@ class C4Repository:
             return None
         return DomainBinding.model_validate(model.binding_data)
 
-    def list_domain_bindings(self, project_id: str) -> list[DomainBinding]:
+    def list_domain_bindings(
+        self, project_id: str, binding_id: str | None = None
+    ) -> list[DomainBinding]:
         stmt = (
             select(C4DomainBindingModel)
             .where(C4DomainBindingModel.project_id == project_id)
-            .order_by(desc(C4DomainBindingModel.version))
         )
+        if binding_id is not None:
+            stmt = stmt.where(C4DomainBindingModel.binding_id == binding_id)
+        stmt = stmt.order_by(desc(C4DomainBindingModel.version))
         models = self.db.execute(stmt).scalars().all()
         return [DomainBinding.model_validate(m.binding_data) for m in models]
 

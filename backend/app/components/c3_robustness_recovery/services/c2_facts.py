@@ -18,6 +18,7 @@ from app.components.c3_robustness_recovery.contracts.evaluation import (
     C2FactValue,
 )
 from app.components.c3_robustness_recovery.contracts.schemas import RecoveryContract
+from app.components.c3_robustness_recovery.runtime.adapter import TargetMode
 from app.components.c3_robustness_recovery.runtime.evidence import (
     MatchedPairEvidence,
     StateObservationReference,
@@ -246,12 +247,14 @@ def get_c2_fact_value(
                 continue
             if entity_id is not None and fact.entity_id != entity_id:
                 continue
+
             if snapshot_id is not None:
                 if fact.snapshot_id != snapshot_id:
                     continue
             elif fact.snapshot_id is not None:
                 # Missing required snapshot scope cannot be satisfied by an arbitrary unrelated snapshot
                 continue
+
             if expected_trial_id is not None and (
                 not fact.supporting_evidence_refs
                 or expected_trial_id not in fact.supporting_evidence_refs
@@ -421,20 +424,25 @@ def evaluate_c2_facts_bridge(
 
     facts: list[C2AssertionFact] = []
     snapshot_id = context_data.get("snapshot_id") or f"snap-{fault_trial_id[:8]}"
-
-    # Project authoritative retained observation reference onto the fault trial record
+    # Initialize observation reference on fault trial if missing without overwriting existing scope in authoritative modes
     if hasattr(evidence, "fault_trial") and evidence.fault_trial:
-        evidence.fault_trial.snapshot_id = snapshot_id
-        evidence.fault_trial.observed_entity_id = expected_entity_id
-        evidence.fault_trial.observation_reference = StateObservationReference(
-            snapshot_id=snapshot_id,
-            snapshot_version="1.0.0",
-            entity_id=expected_entity_id,
-            observation_scope=time_scope,
-            fingerprint=context_data.get("fingerprint")
-            or getattr(evidence.fault_trial, "final_state_fingerprint", None),
+        is_demo = (
+            getattr(evidence.fault_trial, "target_mode", None) == "DEMONSTRATION"
+            or getattr(evidence.fault_trial, "target_mode", None) == TargetMode.DEMONSTRATION
         )
-
+        if (evidence.fault_trial.snapshot_id is None or is_demo) and snapshot_id:
+            evidence.fault_trial.snapshot_id = snapshot_id
+        if (evidence.fault_trial.observed_entity_id is None or is_demo) and expected_entity_id:
+            evidence.fault_trial.observed_entity_id = expected_entity_id
+        if evidence.fault_trial.observation_reference is None or is_demo:
+            evidence.fault_trial.observation_reference = StateObservationReference(
+                snapshot_id=evidence.fault_trial.snapshot_id or snapshot_id,
+                snapshot_version="1.0.0",
+                entity_id=evidence.fault_trial.observed_entity_id or expected_entity_id,
+                observation_scope=time_scope,
+                fingerprint=context_data.get("fingerprint")
+                or getattr(evidence.fault_trial, "final_state_fingerprint", None),
+            )
     # All assertions required by contract + standard rule assertions
     all_target_assertions = set(recovery_contract.required_state_assertions)
     # Also include standard recovery rules assertions if context or contract refers to them

@@ -52,11 +52,13 @@ export function useDomainBindings(projectId, isCurrentGeneration, getGeneration)
       setDomainBindings(bindings);
 
       if (profiles.length > 0) {
-        const defaultProfile = profiles.find((p) => p.domain_id === selectedDomainId) || profiles[0];
-        setSelectedDomainId(defaultProfile.domain_id);
-        if (defaultProfile.binding) {
-          setSelectedBinding(defaultProfile.binding);
-        }
+        setSelectedDomainId((prevId) => {
+          const defaultProfile = profiles.find((p) => p.domain_id === prevId) || profiles[0];
+          if (defaultProfile.binding) {
+            setSelectedBinding(defaultProfile.binding);
+          }
+          return defaultProfile.domain_id;
+        });
       }
     } catch (err) {
       if (isCurrentGeneration(currentGen)) {
@@ -67,19 +69,20 @@ export function useDomainBindings(projectId, isCurrentGeneration, getGeneration)
         setIsLoadingDomains(false);
       }
     }
-  }, [projectId, selectedDomainId, getGeneration, isCurrentGeneration]);
+  }, [projectId, getGeneration, isCurrentGeneration]);
 
   // Check domain runtime readiness
   const checkReadiness = useCallback(
-    async (domainId = selectedDomainId, mode = 'SIMULATED') => {
-      if (!projectId || !domainId) return null;
+    async (domainId, mode = 'SIMULATED') => {
+      const targetDomainId = domainId || selectedDomainId;
+      if (!projectId || !targetDomainId) return null;
 
       setIsLoadingReadiness(true);
       setError(null);
       const currentGen = getGeneration();
 
       try {
-        const report = await c4Api.checkDomainReadiness(projectId, domainId, mode);
+        const report = await c4Api.checkDomainReadiness(projectId, targetDomainId, mode);
         if (!isCurrentGeneration(currentGen)) return null;
 
         setDomainReadiness(report);

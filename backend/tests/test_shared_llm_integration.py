@@ -546,11 +546,28 @@ def test_c4_shared_llm_policy_extraction():
         prompt_template_version="v5.0.0",
     )
 
-    with patch.object(
-        LLMProviderService,
-        "invoke_for_user",
-        new_callable=AsyncMock,
-        return_value=mock_gen_result,
+    from app.components.c4_policy_aware_safety.contracts import (
+        ExtractionReadinessReport,
+        ExtractionReadinessStatus,
+    )
+
+    with (
+        patch.object(
+            LLMProviderService,
+            "invoke_for_user",
+            new_callable=AsyncMock,
+            return_value=mock_gen_result,
+        ),
+        patch.object(
+            provider,
+            "check_readiness",
+            return_value=ExtractionReadinessReport(
+                ready=True,
+                status=ExtractionReadinessStatus.READY,
+                provider_id="gemini",
+                model_identifier="gemini-3.5-flash-lite",
+            ),
+        ),
     ):
         artifact = ArtifactVersionRecord(
             project_id="proj-demo-qa",

@@ -126,13 +126,8 @@ export const ModelSelectionPage = () => {
 
     const targetProvider = type === 'local' ? 'ollama' : 'gemini';
     const providerInfo = targetProvider === 'ollama' ? ollamaProvider : geminiProvider;
-    let defaultModel =
-      providerInfo?.configured_default_model || (type === 'local' ? 'qwen3:4b' : 'gemini-3.5-flash-lite');
-
-    // If local and exact default is not installed but available models exist, use first discovered model
-    if (type === 'local' && providerInfo?.available_models?.length > 0 && !providerInfo.available_models.includes(defaultModel)) {
-      defaultModel = providerInfo.available_models[0];
-    }
+    const defaultModel =
+      providerInfo?.configured_default_model || (type === 'local' ? 'qwen3.5:4b' : 'gemini-3.5-flash-lite');
 
     // Optimistically update form state
     setConnectionType(type);
@@ -250,7 +245,7 @@ export const ModelSelectionPage = () => {
     setFeedback(null);
     setTestResult(null);
 
-    const defaultModel = ollamaProvider?.configured_default_model || 'qwen3:4b';
+    const defaultModel = ollamaProvider?.configured_default_model || 'qwen3.5:4b';
     try {
       const updated = await saveModelSelection({
         connection_type: 'local',
@@ -529,7 +524,7 @@ export const ModelSelectionPage = () => {
                     )}
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Ollama runtime with Qwen model (Default: {ollamaProvider?.configured_default_model || 'qwen3:4b'})
+                    Ollama runtime with Qwen model (Default: {ollamaProvider?.configured_default_model || 'qwen3.5:4b'})
                   </p>
                 </div>
               </button>
@@ -632,7 +627,7 @@ export const ModelSelectionPage = () => {
                 value={modelId}
                 onChange={(e) => setModelId(e.target.value)}
                 placeholder={
-                  connectionType === 'local' ? 'qwen3:4b' : 'gemini-3.5-flash-lite'
+                  connectionType === 'local' ? 'qwen3.5:4b' : 'gemini-3.5-flash-lite'
                 }
                 className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-teal-600 shadow-sm font-mono"
               />

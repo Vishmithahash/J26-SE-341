@@ -18,6 +18,7 @@ from app.shared.llm.contracts import (
     LLMUsageMetadata,
     ProviderStatusInfo,
 )
+from app.shared.llm.schema_validator import validate_structured_schema
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 PERMITTED_GEMINI_MODELS = [
@@ -204,6 +205,8 @@ class GeminiAdapter(BaseLLMAdapter):
             "temperature": request.temperature,
             "maxOutputTokens": request.max_tokens,
         }
+        if request.top_p is not None:
+            generation_config["topP"] = request.top_p
 
         if request.response_schema is not None:
             generation_config["responseMimeType"] = "application/json"
@@ -332,9 +335,29 @@ class GeminiAdapter(BaseLLMAdapter):
                     error_message="Gemini returned no candidates in response",
                 )
 
+            reported_version = data.get("modelVersion")
+            if reported_version:
+                actual_model = reported_version
+
             candidate = candidates[0]
             finish_reason = candidate.get("finishReason", "")
-            if finish_reason == "SAFETY":
+
+            # Truncated output check
+            if finish_reason == "MAX_TOKENS":
+                return LLMGenerationResult(
+                    provider=self.provider_name,
+                    requested_model=actual_model,
+                    actual_model=actual_model,
+                    operation_reference=request.operation_reference,
+                    prompt_template_version=request.prompt_template_version,
+                    duration_ms=duration_ms,
+                    is_success=False,
+                    error_type="INCOMPLETE_OUTPUT",
+                    error_message="Gemini output truncated: maximum token limit reached",
+                )
+
+            # Safety blocks and content filters
+            if finish_reason in ("SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"):
                 return LLMGenerationResult(
                     provider=self.provider_name,
                     requested_model=actual_model,
@@ -344,7 +367,7 @@ class GeminiAdapter(BaseLLMAdapter):
                     duration_ms=duration_ms,
                     is_success=False,
                     error_type="SAFETY_BLOCKED",
-                    error_message="Gemini candidate output blocked by safety filter",
+                    error_message=f"Gemini output blocked: finish reason '{finish_reason}'",
                 )
 
             parts = candidate.get("content", {}).get("parts", [])
@@ -364,7 +387,22 @@ class GeminiAdapter(BaseLLMAdapter):
                 ),
             )
 
-            # If structured output expected, parse JSON
+            # Reject empty output
+            if not raw_text:
+                return LLMGenerationResult(
+                    provider=self.provider_name,
+                    requested_model=actual_model,
+                    actual_model=actual_model,
+                    operation_reference=request.operation_reference,
+                    prompt_template_version=request.prompt_template_version,
+                    duration_ms=duration_ms,
+                    is_success=False,
+                    error_type="EMPTY_OUTPUT",
+                    error_message="Gemini returned empty candidate content",
+                    usage=usage,
+                )
+
+            # If structured output expected, parse JSON and validate schema
             structured_data = None
             if request.response_schema is not None:
                 try:
@@ -383,6 +421,30 @@ class GeminiAdapter(BaseLLMAdapter):
                         error_message=f"Gemini output failed JSON parsing: {err}",
                         usage=usage,
                     )
+                is_valid_schema, schema_err = validate_structured_schema(
+                    structured_data, request.response_schema
+                )
+                if not is_valid_schema:
+                    return LLMGenerationResult(
+                        provider=self.provider_name,
+                        requested_model=actual_model,
+                        actual_model=actual_model,
+                        operation_reference=request.operation_reference,
+                        prompt_template_version=request.prompt_template_version,
+                        raw_text=raw_text,
+                        duration_ms=duration_ms,
+                        is_success=False,
+                        error_type="INVALID_SCHEMA",
+                        error_message=f"Gemini output violates required schema: {schema_err}",
+                        usage=usage,
+                    )
+
+            applied_settings = {
+                "temperature": request.temperature,
+                "max_tokens": request.max_tokens,
+            }
+            if request.top_p is not None:
+                applied_settings["top_p"] = request.top_p
 
             return LLMGenerationResult(
                 provider=self.provider_name,
@@ -390,10 +452,7 @@ class GeminiAdapter(BaseLLMAdapter):
                 actual_model=actual_model,
                 operation_reference=request.operation_reference,
                 prompt_template_version=request.prompt_template_version,
-                generation_settings={
-                    "temperature": request.temperature,
-                    "max_tokens": request.max_tokens,
-                },
+                generation_settings=applied_settings,
                 raw_text=raw_text,
                 structured_data=structured_data,
                 usage=usage,

@@ -43,6 +43,7 @@ export const C3InputPreparation = ({
   const [presetLoaded, setPresetLoaded] = useState('ecommerce');
   const [draftLoading, setDraftLoading] = useState(false);
   const [draftFeedback, setDraftFeedback] = useState(null);
+  const [proposedDraft, setProposedDraft] = useState(null);
 
   // Keep JSON string in sync when entering JSON tab
   useEffect(() => {
@@ -226,6 +227,7 @@ export const C3InputPreparation = ({
   const handleModelDraft = async () => {
     setDraftLoading(true);
     setDraftFeedback(null);
+    setProposedDraft(null);
     try {
       const res = await c3Api.prepareDraftInputs({
         project_id: activeProject?.project_id || 'proj-demo-qa',
@@ -237,36 +239,36 @@ export const C3InputPreparation = ({
         existing_recovery_contract: recoveryContract,
       });
 
-      if (res.draft_task_fixture) {
-        setTaskFixtureMetadata(res.draft_task_fixture);
-      }
-      if (res.draft_recovery_contract) {
-        setRecoveryContract(res.draft_recovery_contract);
-      }
-
       const meta = res.provider_metadata || {};
       const modelInfo = meta.provider ? ` (${meta.provider} / ${meta.actual_model})` : '';
 
       if (res.status === 'SUCCESS') {
+        setProposedDraft({
+          taskFixture: res.draft_task_fixture,
+          recoveryContract: res.draft_recovery_contract,
+        });
         setDraftFeedback({
           type: 'success',
-          message: `AI draft inputs applied successfully${modelInfo}. Review proposed parameters before generation.`,
+          message: `AI draft inputs prepared successfully${modelInfo}. Review proposed parameters and click 'Apply Proposed Draft' below.`,
           unresolved: [],
         });
       } else if (res.status === 'UNRESOLVED_REFERENCES') {
+        setProposedDraft(null);
         setDraftFeedback({
           type: 'warning',
-          message: `AI draft produced with unresolved references${modelInfo}: ${res.explanation || ''}`,
+          message: `AI draft produced with unresolved references${modelInfo}: ${res.explanation || ''}. Configuration was not altered.`,
           unresolved: res.unresolved_references || [],
         });
       } else {
+        setProposedDraft(null);
         setDraftFeedback({
           type: 'error',
-          message: res.explanation || 'Draft generation failed.',
+          message: res.explanation || 'Draft generation failed. Configuration was preserved.',
           unresolved: res.unresolved_references || [],
         });
       }
     } catch (err) {
+      setProposedDraft(null);
       setDraftFeedback({
         type: 'error',
         message: `Model assistance failed: ${err.message || 'Network error'}`,
@@ -419,6 +421,26 @@ export const C3InputPreparation = ({
                   <li key={i}>{u}</li>
                 ))}
               </ul>
+            )}
+            {proposedDraft && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (proposedDraft.taskFixture) setTaskFixtureMetadata(proposedDraft.taskFixture);
+                    if (proposedDraft.recoveryContract) setRecoveryContract(proposedDraft.recoveryContract);
+                    setProposedDraft(null);
+                    setDraftFeedback({
+                      type: 'success',
+                      message: 'Proposed draft successfully accepted and applied to form configuration.',
+                      unresolved: [],
+                    });
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-medium text-[11px] transition-colors shadow-xs"
+                >
+                  Apply Proposed Draft
+                </button>
+              </div>
             )}
           </div>
         </div>

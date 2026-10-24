@@ -490,9 +490,19 @@ def dispatch_component_evaluations(
                 detail="Execution evaluation prevented: missing required C3 candidate fault case in frozen execution inputs.",
             )
 
-        expected_entity_id = c3_inputs.get("expected_entity_id") or (
-            "ord-001" if is_demo_c3 else None
-        )
+        pinned_mappings = c3_inputs.get("pinned_mappings") or c3_inputs.get("mappings")
+        expected_entity_id = c3_inputs.get("expected_entity_id")
+        if not expected_entity_id and c3_fault_trace and c3_fault_trace.final_state:
+            f_state = getattr(c3_fault_trace.final_state, "state", {}) or {}
+            if isinstance(f_state, dict):
+                order_info = f_state.get("order")
+                if isinstance(order_info, dict) and order_info.get("order_id"):
+                    expected_entity_id = str(order_info.get("order_id"))
+        if not expected_entity_id and (
+            is_demo_c3
+            or getattr(primary_trace, "target_mode", None) == TargetMode.CONTROLLED_TEST
+        ):
+            expected_entity_id = "ord-001"
         matched_evidence, c2_facts = project_c3_matched_pair_evidence(
             project_id=project_id,
             case_id=case.case_id,
@@ -501,6 +511,7 @@ def dispatch_component_evaluations(
             clean_trace=primary_trace,
             fault_trace=c3_fault_trace,
             recovery_contract=contract,
+            c2_mappings=pinned_mappings,
             expected_entity_id=expected_entity_id,
         )
 
@@ -511,6 +522,7 @@ def dispatch_component_evaluations(
             recovery_contract=contract,
             matched_evidence=matched_evidence,
             c2_facts=c2_facts,
+            pinned_mappings=pinned_mappings,
         )
         c3_result = evaluate_recovery(c3_req)
 

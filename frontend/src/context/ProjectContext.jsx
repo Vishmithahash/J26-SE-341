@@ -85,11 +85,20 @@ export const ProjectProvider = ({ children }) => {
         clearStoredActiveProjectId(currentUserId);
         setActiveProjectState(null);
       }
-    } catch {
-      // Inaccessible, deleted, or network error
+    } catch (err) {
+      // Handle failure without silently erasing confirmed selection on temporary service errors
       if (requestCounterRef.current === currentRequestId && user?.id === currentUserId) {
-        clearStoredActiveProjectId(currentUserId);
-        setActiveProjectState(null);
+        if (err?.status === 404 || err?.status === 403 || err?.status === 401) {
+          clearStoredActiveProjectId(currentUserId);
+          setActiveProjectState(null);
+        } else {
+          setActiveProjectState({
+            project_id: storedId,
+            name: 'Unavailable Project',
+            isUnavailable: true,
+            unavailableReason: err?.message || 'Project service temporarily unavailable',
+          });
+        }
       }
     } finally {
       if (requestCounterRef.current === currentRequestId && user?.id === currentUserId) {

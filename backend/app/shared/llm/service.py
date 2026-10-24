@@ -110,10 +110,19 @@ class LLMProviderService:
                     provider=config.provider,
                     model_id=config.model_id,
                     generation_settings=config.generation_settings or {},
+                    last_test_status=None,
+                    last_test_at=None,
                     updated_at=now,
                 )
                 db.add(selection)
             else:
+                if (
+                    selection.provider != config.provider
+                    or selection.model_id != config.model_id
+                    or selection.generation_settings != (config.generation_settings or {})
+                ):
+                    selection.last_test_status = None
+                    selection.last_test_at = None
                 selection.connection_type = config.connection_type
                 selection.provider = config.provider
                 selection.model_id = config.model_id
@@ -248,7 +257,7 @@ class LLMProviderService:
             operation_reference="connection_test",
             prompt_template_version="v1.0.0",
             temperature=0.0,
-            max_tokens=100,
+            max_tokens=500,
             response_schema={
                 "type": "object",
                 "properties": {
@@ -257,18 +266,17 @@ class LLMProviderService:
                 },
                 "required": ["status"],
             },
-            timeout_seconds=10.0,
+            timeout_seconds=30.0,
         )
 
         res = await adapter.generate(test_request, model_override=target_model)
 
-        # Probe validation: probe request asked for {"status": "ok"}
-        probe_valid = res.is_success and (
-            (
-                isinstance(res.structured_data, dict)
-                and res.structured_data.get("status") == "ok"
-            )
-            or "ok" in res.raw_text.lower()
+        # Probe validation: probe request asked for exact {"status": "ok", "framework": "agentic_qa"}
+        probe_valid = (
+            res.is_success
+            and isinstance(res.structured_data, dict)
+            and res.structured_data.get("status") == "ok"
+            and res.structured_data.get("framework") == "agentic_qa"
         )
         test_succeeded = res.is_success and probe_valid
 
@@ -345,8 +353,14 @@ class LLMProviderService:
         user_settings = dict(snapshot.generation_settings)
 
         # Merge user settings if not overridden in request
-        if "temperature" in user_settings and request.temperature == 0.0:
+        if "temperature" in user_settings and (request.temperature == 0.0 or request.temperature is None):
             request.temperature = float(user_settings["temperature"])
+        if "max_tokens" in user_settings and request.max_tokens in (4096, None):
+            request.max_tokens = int(user_settings["max_tokens"])
+        if "top_p" in user_settings and request.top_p is None:
+            request.top_p = float(user_settings["top_p"])
+        if "timeout_seconds" in user_settings and request.timeout_seconds in (30.0, None):
+            request.timeout_seconds = float(user_settings["timeout_seconds"])
 
         # 2. Resolve adapter
         adapter = self.get_adapter(snapshot.provider)
@@ -356,6 +370,4 @@ class LLMProviderService:
             request, model_override=snapshot.requested_model
         )
 
-        # Attach frozen selection metadata
-        result.generation_settings.update(user_settings)
         return result

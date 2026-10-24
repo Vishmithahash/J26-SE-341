@@ -100,26 +100,36 @@ def get_projects(
     db: Annotated[Session, Depends(get_db)],
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int | None = Query(default=None, ge=0),
     search: str | None = Query(default=None),
     connection_state: str | None = Query(default=None),
     lifecycle: str | None = Query(default=None),
 ):
     """Retrieve paginated projects scoped to the authenticated user (or all projects for ADMIN)."""
+    if limit is not None:
+        effective_page_size = limit
+        effective_offset = offset if offset is not None else 0
+        effective_page = (effective_offset // effective_page_size) + 1
+    else:
+        effective_page_size = page_size
+        effective_page = page
+
     items, total = list_projects(
         db=db,
         user=current_user,
-        page=page,
-        page_size=page_size,
+        page=effective_page,
+        page_size=effective_page_size,
         search=search,
         connection_state=connection_state,
         lifecycle=lifecycle,
     )
-    pages = math.ceil(total / page_size) if total > 0 else 1
+    pages = math.ceil(total / effective_page_size) if total > 0 else 1
     return ProjectListResponse(
         items=[_to_project_response(p) for p in items],
         total=total,
-        page=page,
-        page_size=page_size,
+        page=effective_page,
+        page_size=effective_page_size,
         pages=pages,
     )
 

@@ -553,21 +553,6 @@ class SharedLlmPolicyExtractionProvider:
                     blockers=[f"Failed to resolve user model selection: {exc}"],
                 )
 
-        # If service invocation is mocked for tests, keep tests independent of live providers
-        from unittest.mock import AsyncMock, MagicMock
-
-        if isinstance(
-            getattr(service, "invoke_for_user", None), (AsyncMock, MagicMock)
-        ) or isinstance(
-            getattr(LLMProviderService, "invoke_for_user", None), (AsyncMock, MagicMock)
-        ):
-            return ExtractionReadinessReport(
-                ready=True,
-                status=ExtractionReadinessStatus.READY,
-                provider_id=target_provider,
-                model_identifier=target_model,
-                blockers=[],
-            )
 
         # Evaluate truthful availability for the selected provider and model
         try:

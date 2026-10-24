@@ -7,6 +7,7 @@ strictly enforcing schema validation, draft lifecycle status, and mandatory huma
 
 import asyncio
 
+from pydantic import TypeAdapter
 from sqlalchemy.orm import Session
 
 from app.components.c2_state_aware_workflow.builder.base import ModelAssistedProvider
@@ -16,9 +17,16 @@ from app.components.c2_state_aware_workflow.builder.deterministic import (
 )
 from app.components.c2_state_aware_workflow.contracts.efsm_model import (
     EFSMModelDefinition,
+    WorkflowInvariant,
 )
 from app.components.c2_state_aware_workflow.contracts.workflow_input import (
     WorkflowInputContract,
+)
+from app.components.c2_state_aware_workflow.predicates.expressions import (
+    StructuredPredicate,
+)
+from app.components.c2_state_aware_workflow.validator.structural import (
+    StructuralValidator,
 )
 from app.shared.llm.contracts import LLMGenerationRequest
 from app.shared.llm.service import LLMProviderService
@@ -153,8 +161,24 @@ class ModelAssistedEFSMBuilder(ModelAssistedProvider):
                             "name": {"type": "string"},
                             "description": {"type": "string"},
                             "source_rule": {"type": "string"},
+                            "predicate": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {
+                                        "type": "string",
+                                        "enum": ["comparison", "presence", "logical", "literal"],
+                                    },
+                                    "left": {"type": "object"},
+                                    "op": {"type": "string"},
+                                    "right": {},
+                                    "target": {"type": "object"},
+                                    "clauses": {"type": "array"},
+                                    "value": {"type": "string"},
+                                },
+                                "required": ["type", "op"],
+                            },
                         },
-                        "required": ["id", "name"],
+                        "required": ["id", "name", "predicate"],
                     },
                 },
             },
@@ -247,12 +271,7 @@ class ModelAssistedEFSMBuilder(ModelAssistedProvider):
                 # Apply validated proposed invariants grounded in declared rules
                 new_invariants = list(base_model.invariants)
                 existing_inv_ids = {inv.id for inv in new_invariants}
-                from app.components.c2_state_aware_workflow.contracts.efsm_model import (
-                    WorkflowInvariant,
-                )
-                from app.components.c2_state_aware_workflow.predicates.expressions import (
-                    StructuredPredicate,
-                )
+                predicate_adapter = TypeAdapter(StructuredPredicate)
 
                 for prop in data.get("proposed_invariants", []):
                     if not isinstance(prop, dict):
@@ -260,27 +279,36 @@ class ModelAssistedEFSMBuilder(ModelAssistedProvider):
                     p_id = prop.get("id")
                     p_name = prop.get("name")
                     p_rule = prop.get("source_rule")
-                    if p_id and p_name and p_id not in existing_inv_ids:
-                        # Grounded check: rule must exist if specified
-                        if p_rule and p_rule not in declared_rule_ids:
-                            continue
-                        new_invariants.append(
-                            WorkflowInvariant(
-                                id=p_id,
-                                name=p_name,
-                                predicate=StructuredPredicate(
-                                    field="status",
-                                    operator="==",
-                                    value="VALID",
-                                ),
-                                description=prop.get("description")
-                                or f"Model-proposed invariant grounded in {p_rule or 'domain rules'}",
-                                source_rule=p_rule,
-                            )
-                        )
-                        existing_inv_ids.add(p_id)
+                    raw_pred = prop.get("predicate")
 
-                return base_model.model_copy(
+                    if not p_id or not p_name or p_id in existing_inv_ids:
+                        continue
+
+                    # Grounded check: rule must exist if specified
+                    if p_rule and p_rule not in declared_rule_ids:
+                        continue
+
+                    if not isinstance(raw_pred, dict):
+                        continue
+
+                    try:
+                        parsed_pred = predicate_adapter.validate_python(raw_pred)
+                    except Exception:  # noqa: BLE001, S112
+                        continue
+
+                    new_invariants.append(
+                        WorkflowInvariant(
+                            id=p_id,
+                            name=p_name,
+                            predicate=parsed_pred,
+                            description=prop.get("description")
+                            or f"Model-proposed invariant grounded in {p_rule or 'domain rules'}",
+                            source_rule=p_rule,
+                        )
+                    )
+                    existing_inv_ids.add(p_id)
+
+                candidate_model = base_model.model_copy(
                     update={
                         "name": refined_name,
                         "description": refined_desc,
@@ -289,6 +317,15 @@ class ModelAssistedEFSMBuilder(ModelAssistedProvider):
                         "invariants": new_invariants,
                     }
                 )
+
+                # Validate the complete candidate model with native structural validator
+                validator = StructuralValidator()
+                errors, _warnings = validator.validate(candidate_model)
+                if errors:
+                    err_msg = "; ".join(e.get("message", "Validation error") for e in errors)
+                    failure_reason = f"Candidate EFSM structural validation failed: {err_msg}"
+                else:
+                    return candidate_model
             else:
                 failure_reason = (
                     gen_res.error_message

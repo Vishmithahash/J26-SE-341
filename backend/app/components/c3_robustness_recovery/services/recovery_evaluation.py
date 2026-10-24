@@ -218,15 +218,15 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
         ):
             return str(contract.assertion_versions[aid])
 
-        # Do not use global demo mappings as authoritative configuration for every project
-        if not is_authoritative:
-            for m in DEFAULT_C2_TO_C3_MAPPINGS:
-                if m.c3_assertion_id == aid:
-                    return m.c3_assertion_version
+        for m in DEFAULT_C2_TO_C3_MAPPINGS:
+            if m.c3_assertion_id == aid:
+                return m.c3_assertion_version
 
         if hasattr(case, "assertion_version") and case.assertion_version:
             return str(case.assertion_version)
-        return "1.0.0"
+
+        # Do not fall back to assertion version 1.0.0 when mapping is missing
+        return None
 
     # -----------------------------------------------------------------------
     # Rule A: Completion (RULE_COMPLETION)
@@ -261,8 +261,44 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             state_unknowns: list[str] = []
             supporting_facts: list[str] = []
 
+            active_mappings = {
+                m.c3_assertion_id if hasattr(m, "c3_assertion_id") else m.get("c3_assertion_id"): m
+                for m in (getattr(request, "pinned_mappings", None) or DEFAULT_C2_TO_C3_MAPPINGS)
+            }
+
             for assertion_id in contract.required_state_assertions:
                 resolved_version = _resolve_assertion_version(assertion_id)
+                if is_authoritative and resolved_version is None:
+                    state_unknowns.append(f"{assertion_id} (missing authoritative mapping)")
+                    continue
+
+                # Check retained observation time scope:
+                if fault_trial and getattr(fault_trial, "observation_reference", None) is not None:
+                    obs_scope = getattr(fault_trial.observation_reference, "observation_scope", None)
+                    if obs_scope is not None and obs_scope != "post_recovery":
+                        state_unknowns.append(
+                            f"{assertion_id} (observation has wrong time scope '{obs_scope}', required 'post_recovery')"
+                        )
+                        continue
+
+                # Check snapshot scope in authoritative mode:
+                if is_authoritative and expected_snapshot is None:
+                    state_unknowns.append(f"{assertion_id} (missing required snapshot scope)")
+                    continue
+
+                # Check entity scope in authoritative mode:
+                mapping = active_mappings.get(assertion_id)
+                is_entity_scoped = True
+                if mapping is not None:
+                    etype = getattr(mapping, "entity_type", None) or (
+                        mapping.get("entity_type") if isinstance(mapping, dict) else None
+                    )
+                    if etype in ("aggregate", "global", "side_effects", "system"):
+                        is_entity_scoped = False
+                if is_authoritative and is_entity_scoped and expected_entity is None:
+                    state_unknowns.append(f"{assertion_id} (missing required entity scope)")
+                    continue
+
                 fact_val = get_c2_fact_value(
                     request.c2_facts,
                     assertion_id,
@@ -690,13 +726,40 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             unverified = False
             checked_facts: list[str] = []
             for assertion_id in contract.required_state_assertions:
+                resolved_version = _resolve_assertion_version(assertion_id)
+                if is_authoritative and resolved_version is None:
+                    unverified = True
+                    continue
+
+                if fault_trial and getattr(fault_trial, "observation_reference", None) is not None:
+                    obs_scope = getattr(fault_trial.observation_reference, "observation_scope", None)
+                    if obs_scope is not None and obs_scope != "post_recovery":
+                        unverified = True
+                        continue
+
+                if is_authoritative and expected_snapshot is None:
+                    unverified = True
+                    continue
+
+                mapping = active_mappings.get(assertion_id)
+                is_entity_scoped = True
+                if mapping is not None:
+                    etype = getattr(mapping, "entity_type", None) or (
+                        mapping.get("entity_type") if isinstance(mapping, dict) else None
+                    )
+                    if etype in ("aggregate", "global", "side_effects", "system"):
+                        is_entity_scoped = False
+                if is_authoritative and is_entity_scoped and expected_entity is None:
+                    unverified = True
+                    continue
+
                 fval = get_c2_fact_value(
                     request.c2_facts,
                     assertion_id,
                     time_scope="post_recovery",
                     entity_id=expected_entity,
                     snapshot_id=expected_snapshot,
-                    assertion_version=_resolve_assertion_version(assertion_id),
+                    assertion_version=resolved_version,
                     expected_trial_id=expected_tid,
                     expected_project_id=expected_pid,
                     expected_pair_id=expected_pair_id,

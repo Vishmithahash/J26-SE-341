@@ -93,6 +93,9 @@ alembic upgrade head
 Revisions:
 - `e75342624f8c`: C3 persistence tables
 - `f1a89c2b4d3e`: Shared `users` table for platform authentication and role-based authorization
+- `20261024_user_model_selections`: Shared user model selections and settings
+- `20261024_002_repair_schemas`: Additive schema repair provisioning missing C1 configs/suites, C2 suites/evaluations/evidence columns, and C3 recovery tables
+
 
 ---
 
@@ -1223,14 +1226,14 @@ GEMINI_MODEL="gemini-3.5-flash-lite"
 
 # Local Ollama Inference (Must be reachable from backend host)
 OLLAMA_BASE_URL="http://127.0.0.1:11434"
-OLLAMA_MODEL="qwen3:4b"
+OLLAMA_MODEL="qwen3.5:4b"
 ```
 
 #### Local Ollama Setup
 1. Install Ollama from [ollama.com](https://ollama.com).
-2. Pull the default Qwen model:
+2. Pull the default team Qwen model:
    ```bash
-   ollama pull qwen3:4b
+   ollama pull qwen3.5:4b
    ```
    *(Note: The server administrator can configure any installed Qwen model tag, e.g. `OLLAMA_MODEL=qwen3.5:4b`, without code changes).*
 3. Verify Ollama is running:
@@ -1257,11 +1260,14 @@ All routes require authentication via `require_active_user`:
 - `PUT /api/v1/llm/selection`: Save/activate the user's provider, connection type (`local` | `hosted`), and `model_id`. Validates permitted provider/connection combinations (`local` -> `ollama`, `hosted` -> `gemini`), rejects conflicting `model` vs `model_id`, validates numeric bounds, and rejects booleans for count fields.
 - `POST /api/v1/llm/test-connection`: Execute a bounded (non-streaming, 10s timeout, max 100 tokens) test inference testing the exact requested `model_id`. Returns `model_id`, `duration_ms`, `status_message`, and structured probe validation (`{"status": "ok", "framework": "agentic_qa"}`). Results are bound strictly to user, provider, and model version.
 
-### 5. Frontend Contract and State Protection
+### 5. Frontend Contract, State Protection, and Workspace Scope
 - **Canonical Field Alignment**: Consistently consumes `is_configured`, `is_available`, `configured_default_model`, and `model_id`.
 - **Installed Qwen Tag Handling**: Respects exact installed and selected Qwen tags (e.g., `qwen3.5:4b`) without forcing `qwen3:4b` through hardcoded frontend fallbacks.
 - **Request-Generation / Stale Response Protection**: Loading, saving, resetting, and test actions use monotonically increasing request IDs (`activeReqIdRef`) to prevent previous-user or late-arriving responses from updating the current view.
 - **Truthful Unverified Badging**: Cached browser `localStorage` preferences display an explicit amber "Unverified (Local Cache)" badge and never display green "Active & Saved" confirmation unless verified by a successful server acknowledgement.
+- **Project Workspace Selection & Deactivation**: Users can explicitly activate or deactivate the active workspace project from both list (`ProjectsListPage`) and detail (`ProjectDetailPage`) views. Deactivating deselects the workspace context without deleting or archiving any underlying database records. Context state survives page refresh, and temporary 503/network failures flag data as unavailable without silently clearing the user's confirmed selection.
+- **C4 API Routing & CORS**: The Vite development proxy forwards `/projects` routes alongside `/api` routes, and the backend provides deployment-aware CORS preflight and sanitized 500 error responses.
+
 
 ### 6. Component Integrations and Assistance Mode Controls
 - **C1 (Tool-Call Correctness)**: `ModelAssistedDiagnosisProvider` uses the selected model to summarize and explain deterministic root-cause findings without inventing code evidence.

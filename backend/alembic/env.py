@@ -3,7 +3,7 @@ from logging.config import fileConfig
 from sqlalchemy import create_engine, pool
 
 import app.components.c1_tool_call_correctness.models
-import app.components.c2_state_aware_workflow
+import app.components.c2_state_aware_workflow.persistence.models
 import app.components.c3_robustness_recovery.models
 import app.shared.auth.models
 import app.shared.integration.models
