@@ -786,3 +786,118 @@ def test_change_password_workflow(client: TestClient, db_session):
     )
     assert new_login.status_code == 200
     assert "access_token" in new_login.json()
+
+
+# ==============================================================================
+# Admin User Activation / Deactivation Tests
+# ==============================================================================
+
+
+def test_admin_can_deactivate_and_activate_user(client: TestClient, db_session: Session):
+    admin = provision_admin(
+        db=db_session,
+        name="Admin Boss",
+        email="boss@example.com",
+        password="boss_password_12345",
+    )
+    settings = app.dependency_overrides[get_settings]()
+    admin_token, _ = create_access_token(user_id=admin.id, settings=settings)
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+    # Register standard user
+    signup_res = client.post(
+        "/api/v1/auth/signup",
+        json={
+            "name": "Target Worker",
+            "email": "worker@example.com",
+            "password": "worker_password_12345",
+        },
+    )
+    assert signup_res.status_code == 201
+    user_id = signup_res.json()["id"]
+
+    # 1. Admin deactivates worker
+    deactivate_res = client.patch(
+        f"/api/v1/admin/users/{user_id}/status",
+        headers=admin_headers,
+        json={"is_active": False},
+    )
+    assert deactivate_res.status_code == 200
+    assert deactivate_res.json()["is_active"] is False
+
+    # Deactivated worker cannot login
+    worker_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "worker@example.com", "password": "worker_password_12345"},
+    )
+    assert worker_login.status_code == 401
+
+    # 2. Admin reactivates worker
+    activate_res = client.patch(
+        f"/api/v1/admin/users/{user_id}/status",
+        headers=admin_headers,
+        json={"is_active": True},
+    )
+    assert activate_res.status_code == 200
+    assert activate_res.json()["is_active"] is True
+
+    # Reactivated worker can login successfully
+    worker_login_success = client.post(
+        "/api/v1/auth/login",
+        json={"email": "worker@example.com", "password": "worker_password_12345"},
+    )
+    assert worker_login_success.status_code == 200
+
+
+def test_admin_cannot_deactivate_self(client: TestClient, db_session: Session):
+    admin = provision_admin(
+        db=db_session,
+        name="Admin Self",
+        email="selfadmin@example.com",
+        password="self_password_12345",
+    )
+    settings = app.dependency_overrides[get_settings]()
+    admin_token, _ = create_access_token(user_id=admin.id, settings=settings)
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+    res = client.patch(
+        f"/api/v1/admin/users/{admin.id}/status",
+        headers=admin_headers,
+        json={"is_active": False},
+    )
+    assert res.status_code == 400
+    assert "cannot deactivate their own account" in res.json()["detail"].lower()
+
+
+def test_standard_user_cannot_update_user_status(client: TestClient, db_session: Session):
+    client.post(
+        "/api/v1/auth/signup",
+        json={
+            "name": "User One",
+            "email": "user1@example.com",
+            "password": "user1_password_12345",
+        },
+    )
+    signup2 = client.post(
+        "/api/v1/auth/signup",
+        json={
+            "name": "User Two",
+            "email": "user2@example.com",
+            "password": "user2_password_12345",
+        },
+    )
+    user2_id = signup2.json()["id"]
+
+    login_res = client.post(
+        "/api/v1/auth/login",
+        json={"email": "user1@example.com", "password": "user1_password_12345"},
+    )
+    token = login_res.json()["access_token"]
+
+    res = client.patch(
+        f"/api/v1/admin/users/{user2_id}/status",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"is_active": False},
+    )
+    assert res.status_code == 403
+

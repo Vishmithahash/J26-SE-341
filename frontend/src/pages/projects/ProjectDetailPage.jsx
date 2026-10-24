@@ -72,7 +72,8 @@ export const ProjectDetailPage = () => {
     setError(null);
     try {
       const res = await projectsApi.getProject(projectId);
-      setProject(res.project);
+      const proj = res?.project || res;
+      setProject(proj);
       setBackendOutcome(res.backend_check || null);
       setAgentOutcome(res.agent_check || null);
 
@@ -105,7 +106,23 @@ export const ProjectDetailPage = () => {
     setSuccessMsg(null);
     try {
       const res = await projectsApi.checkConnection(projectId);
-      setProject(res.project);
+      if (res.project) {
+        setProject(res.project);
+      } else {
+        setProject((prev) =>
+          prev
+            ? {
+                ...prev,
+                connection_state: res.connection_state,
+                configuration_version: res.configuration_version,
+                last_check_timestamp: res.checked_at_utc,
+                ...(res.connection_state === 'CONNECTED'
+                  ? { last_successful_check_timestamp: res.checked_at_utc }
+                  : {}),
+              }
+            : prev
+        );
+      }
       setBackendOutcome(res.backend_outcome);
       setAgentOutcome(res.agent_outcome);
       setSuccessMsg(`Connection check completed: ${res.connection_state}. ${res.summary}`);
@@ -429,6 +446,78 @@ export const ProjectDetailPage = () => {
               <Archive className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Archive</span>
             </button>
+          )}
+        </div>
+      </div>
+
+      {/* Application Endpoints & Configuration URLs */}
+      <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex items-center gap-2">
+            <Server className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            <div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                Application Endpoints & Configuration URLs
+              </h2>
+              <p className="text-xs text-slate-400">
+                Registered service URLs and health check targets for this application
+              </p>
+            </div>
+          </div>
+          {!isArchived && (
+            <Link
+              to={`${basePath}/projects/${projectId}/edit`}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-semibold hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>Edit URLs & Details</span>
+            </Link>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 space-y-1">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Backend Base URL</span>
+            <div className="font-mono text-xs text-slate-900 dark:text-white break-all">
+              {project.backend_base_url || 'N/A'}
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 space-y-1">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Backend Health Check URL</span>
+            <div className="font-mono text-xs text-slate-900 dark:text-white break-all">
+              {project.backend_health_url || 'N/A'}
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 space-y-1">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Agent Endpoint</span>
+            <div className="font-mono text-xs text-slate-900 dark:text-white break-all">
+              {project.agent_endpoint || <span className="text-slate-400 italic">Not configured</span>}
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 space-y-1">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Agent Health Check URL</span>
+            <div className="font-mono text-xs text-slate-900 dark:text-white break-all">
+              {project.agent_health_url || <span className="text-slate-400 italic">Not configured</span>}
+            </div>
+          </div>
+
+          {project.repository_url && (
+            <div className="md:col-span-2 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 space-y-1">
+              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Source Repository URL</span>
+              <div className="font-mono text-xs text-slate-900 dark:text-white break-all">
+                <a
+                  href={project.repository_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-indigo-600 dark:text-indigo-400 hover:underline"
+                >
+                  {project.repository_url}
+                </a>
+              </div>
+            </div>
           )}
         </div>
       </div>

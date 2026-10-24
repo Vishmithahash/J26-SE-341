@@ -61,7 +61,7 @@ export const C3AdminWorkspace = () => {
         .getProject(activeProjectId)
         .then((res) => {
           if (mounted) {
-            setProjectOwnerInfo(res.project?.owner || null);
+            setProjectOwnerInfo(res.project?.owner || res.owner || null);
             setIsLoadingOwner(false);
           }
         })

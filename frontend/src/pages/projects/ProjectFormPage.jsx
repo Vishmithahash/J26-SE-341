@@ -54,20 +54,22 @@ export const ProjectFormPage = () => {
         setError(null);
         try {
           const res = await projectsApi.getProject(projectId);
-          const p = res.project;
-          setName(p.name || '');
-          setDescription(p.description || '');
-          setDomain(p.domain || 'custom');
-          setEnvironment(p.environment || 'development');
-          setBackendBaseUrl(p.backend_base_url || '');
-          setBackendHealthUrl(p.backend_health_url || '');
-          setAgentEndpoint(p.agent_endpoint || '');
-          setAgentHealthUrl(p.agent_health_url || '');
-          setRepositoryUrl(p.repository_url || '');
-          setExpectedVersion(p.configuration_version);
+          const p = res?.project || res;
+          if (p) {
+            setName(p.name || '');
+            setDescription(p.description || '');
+            setDomain(p.domain || 'custom');
+            setEnvironment(p.environment || 'development');
+            setBackendBaseUrl(p.backend_base_url || '');
+            setBackendHealthUrl(p.backend_health_url || '');
+            setAgentEndpoint(p.agent_endpoint || '');
+            setAgentHealthUrl(p.agent_health_url || '');
+            setRepositoryUrl(p.repository_url || '');
+            setExpectedVersion(p.configuration_version);
 
-          if (p.agent_endpoint || p.agent_health_url) {
-            setShowAgentConfig(true);
+            if (p.agent_endpoint || p.agent_health_url) {
+              setShowAgentConfig(true);
+            }
           }
         } catch (err) {
           setError(err.message || 'Failed to load project details.');
