@@ -15,6 +15,11 @@ from app.components.c3_robustness_recovery.contracts.evaluation import (
 from app.components.c3_robustness_recovery.contracts.generation import (
     FaultGenerationRequest,
     FaultGenerationResponse,
+    ModelAssistedDraftRequest,
+    ModelAssistedDraftResponse,
+)
+from app.components.c3_robustness_recovery.services.model_assisted_prep import (
+    prepare_draft_inputs,
 )
 from app.components.c3_robustness_recovery.contracts.schemas import (
     FaultCatalogResponse,
@@ -127,6 +132,27 @@ def validate_case(
     project_id = request.candidate_case.project_id
     verify_c3_project_access(project_id, current_user, db)
     return validate_fault_case(request)
+
+
+@router.post(
+    "/cases/prepare-draft",
+    response_model=ModelAssistedDraftResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Draft Structured Inputs via Selected LLM Provider",
+    description=(
+        "Uses the authenticated user's selected LLM provider to propose structured task fixture "
+        "and recovery contract inputs. Missing references remain unresolved. Resulting inputs must "
+        "still pass deterministic static validation and suite freezing."
+    ),
+)
+async def prepare_draft(
+    request: ModelAssistedDraftRequest,
+    current_user: Annotated[User, Depends(require_c3_active_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ModelAssistedDraftResponse:
+    """Draft structured inputs using selected model with project authorization."""
+    verify_c3_project_access(request.project_id, current_user, db)
+    return await prepare_draft_inputs(request, user_id=str(current_user.id))
 
 
 @router.post(

@@ -15,6 +15,9 @@ from app.components.c2_state_aware_workflow.builder.deterministic import (
     DeterministicCandidateBuilder,
     InsufficientInputError,
 )
+from app.components.c2_state_aware_workflow.builder.model_assisted import (
+    ModelAssistedEFSMBuilder,
+)
 from app.components.c2_state_aware_workflow.contracts.coverage import (
     DetailedObservedCoverage,
 )
@@ -360,6 +363,13 @@ def build_and_propose_model(
     project_id: str,
     workflow_input: WorkflowInputContract,
     db: DbSession,
+    current_user: Annotated[User, Depends(require_active_user)],
+    mode: Annotated[
+        str,
+        Query(
+            description="Builder mode: 'deterministic' (rule-based) or 'model_assisted' (LLM-proposed)"
+        ),
+    ] = "deterministic",
     auto_validate: Annotated[
         bool, Query(description="Automatically trigger validation after build")
     ] = True,
@@ -370,14 +380,24 @@ def build_and_propose_model(
             detail=f"Route project_id '{project_id}' does not match payload project_id '{workflow_input.project_id}'.",
         )
 
-    builder = DeterministicCandidateBuilder()
-    try:
-        model_def = builder.build_candidate_model(workflow_input)
-    except InsufficientInputError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"message": str(exc), "diagnostics": exc.diagnostics},
-        ) from exc
+    if mode == "model_assisted":
+        builder = ModelAssistedEFSMBuilder(user_id=current_user.id, db=db)
+        try:
+            model_def = builder.propose_model(workflow_input)
+        except InsufficientInputError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": str(exc), "diagnostics": exc.diagnostics},
+            ) from exc
+    else:
+        builder = DeterministicCandidateBuilder()
+        try:
+            model_def = builder.build_candidate_model(workflow_input)
+        except InsufficientInputError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": str(exc), "diagnostics": exc.diagnostics},
+            ) from exc
 
     repo = C2ModelRepository(db)
     try:

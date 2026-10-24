@@ -365,12 +365,20 @@ export const c1Api = {
     });
   },
 
+  async listRuns(projectId, options = {}) {
+    return this.listExecutionRuns(projectId, options);
+  },
+
   async getExecutionRun(projectId, runId) {
     const base = buildBaseUrl(projectId);
     return request(`${base}/runs/${encodeURIComponent(runId)}`, {
       method: 'GET',
       headers: getC1Headers(projectId),
     });
+  },
+
+  async getRunDetail(projectId, runId) {
+    return this.getExecutionRun(projectId, runId);
   },
 
   async cancelExecutionRun(projectId, runId) {

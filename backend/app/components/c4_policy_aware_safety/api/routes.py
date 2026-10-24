@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.components.c4_policy_aware_safety.api.dependencies import (
     get_authorized_c4_project,
 )
+from app.shared.auth.dependencies import get_optional_active_user
+from app.shared.auth.models import User
 from app.components.c4_policy_aware_safety.contracts.artifacts import (
     ArtifactCreate,
     ArtifactVersionRecord,
@@ -987,8 +989,10 @@ def export_run_report(
 def check_extraction_readiness(
     project_id: str,
     provider_id: str = Query(default="offline_mock"),
+    current_user: Annotated[User | None, Depends(get_optional_active_user)] = None,
 ):
-    provider = get_extraction_provider(provider_id=provider_id)
+    user_id = str(current_user.id) if current_user else None
+    provider = get_extraction_provider(provider_id=provider_id, user_id=user_id)
     return provider.check_readiness()
 
 
@@ -1002,6 +1006,7 @@ def start_extraction_job(
     project_id: str,
     req: ExtractionJobCreate,
     db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User | None, Depends(get_optional_active_user)] = None,
 ):
     repo = C4Repository(db)
     artifact = repo.get_artifact(project_id, req.artifact_id, req.artifact_version)
@@ -1022,7 +1027,8 @@ def start_extraction_job(
         binding_version=profile.binding.version,
         provider_id=req.provider_id,
     )
-    job = service.start_onboarding(project_id, onboard_req)
+    user_id = str(current_user.id) if current_user else None
+    job = service.start_onboarding(project_id, onboard_req, user_id=user_id)
     if not job.extraction_job_id:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

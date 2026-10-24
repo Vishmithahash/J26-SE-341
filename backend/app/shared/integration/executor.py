@@ -702,70 +702,118 @@ class SharedExecutionCoordinator:
         refs = ComponentReferencesPlan(**ref_payload)
         frozen_inputs = plan_record.plan_payload.get("execution_inputs_snapshot", {})
 
-        is_demo = (
-            frozen_inputs.get("is_demonstration")
-            or frozen_inputs.get("is_demo")
-            or "demo" in (plan_record.name or "").lower()
-            or (
-                isinstance(frozen_inputs.get("c1"), dict)
-                and frozen_inputs.get("c1", {}).get("agent_connection_ref")
-                == "conn_nexacart_staging_agent"
-            )
-            or (refs.c3 and refs.c3.task_id and "demo" in refs.c3.task_id.lower())
-            or (refs.c3 and refs.c3.suite_id and "demo" in refs.c3.suite_id.lower())
-            or (refs.c3 and refs.c3.suite_digest and refs.c3.suite_digest == "a" * 64)
+        # 1. Identify demonstration configuration explicitly without heuristic inference
+        is_demo = bool(
+            frozen_inputs.get("is_demonstration") is True
+            or frozen_inputs.get("is_demo") is True
+            or (plan_record.plan_payload and plan_record.plan_payload.get("is_demonstration") is True)
+            or getattr(plan_record, "is_demonstration", False) is True
         )
 
         has_c1 = (refs.c1 is not None) or ("c1" in frozen_inputs)
-        c1_inputs = frozen_inputs.get("c1")
+        has_c2 = (refs.c2 is not None) or ("c2" in frozen_inputs)
+        has_c3 = (refs.c3 is not None) or ("c3" in frozen_inputs)
+        has_c4 = (refs.c4 is not None) or ("c4" in frozen_inputs)
 
-        resolved_prompt = (
-            request.task_prompt_override
-            or (c1_inputs.get("task_prompt") if isinstance(c1_inputs, dict) else None)
-        )
+        c1_raw = frozen_inputs.get("c1")
+        c2_raw = frozen_inputs.get("c2")
+        c3_raw = frozen_inputs.get("c3")
+        c4_raw = frozen_inputs.get("c4")
+
+        c1_inputs = c1_raw if isinstance(c1_raw, dict) else {}
+        c2_inputs = c2_raw if isinstance(c2_raw, dict) else {}
+        c3_inputs = c3_raw if isinstance(c3_raw, dict) else {}
+        c4_inputs = c4_raw if isinstance(c4_raw, dict) else {}
+
+        resolved_prompt = request.task_prompt_override
+        if not resolved_prompt and c1_inputs:
+            resolved_prompt = c1_inputs.get("task_prompt") or c1_inputs.get("task")
+        if not resolved_prompt and c2_inputs:
+            c2_test_def = c2_inputs.get("test_definition") or {}
+            resolved_prompt = c2_test_def.get("task") or c2_inputs.get("task") or c2_inputs.get("task_prompt")
+        if not resolved_prompt and c3_inputs:
+            c3_case_snap = c3_inputs.get("case") or c3_inputs.get("selected_case") or {}
+            resolved_prompt = c3_case_snap.get("task") or c3_inputs.get("task") or c3_inputs.get("task_prompt")
+        if not resolved_prompt and c4_inputs:
+            resolved_prompt = c4_inputs.get("task_prompt") or c4_inputs.get("task")
+
         if not resolved_prompt:
-            if has_c1 and c1_inputs is not None and not is_demo:
+            has_explicit_component_input = (
+                (has_c1 and c1_raw is not None)
+                or (has_c2 and c2_raw is not None)
+                or (has_c3 and c3_raw is not None)
+                or (has_c4 and c4_raw is not None)
+                or (frozen_inputs.get("is_demonstration") is False)
+            )
+            if has_explicit_component_input and not is_demo:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Execution dispatch prevented: missing required task prompt in frozen execution inputs.",
                 )
-            resolved_prompt = (
-                "Process customer order ord-001 and issue refund if necessary."
-            )
+            resolved_prompt = "Execute target test plan" if not is_demo else "Demonstration execution task prompt"
         default_prompt = resolved_prompt
 
-        c1_tools = [
-            t.get("name") if isinstance(t, dict) else getattr(t, "name", "")
-            for t in (c1_inputs.get("tools", []) if isinstance(c1_inputs, dict) else [])
-        ]
-        c1_permitted = (
-            (c1_inputs.get("permitted_tools") if isinstance(c1_inputs, dict) else None)
-            or [t for t in c1_tools if t]
-        )
-        active_tools = list(c1_permitted)
-        c3_in = frozen_inputs.get("c3", {})
-        c3_case_snap = c3_in.get("case") or c3_in.get("selected_case") or {}
-        c3_tool = (
-            c3_case_snap.get("tool_id")
-            or (refs.c3.target_tool_id if refs.c3 else None)
-            or c3_in.get("tool_id")
-        )
-        if c3_tool and c3_tool not in active_tools:
-            active_tools.append(c3_tool)
+        # 3. Resolve actual permitted tools from pinned component inputs
+        active_tools: list[str] = []
+        if request.permitted_tools_override:
+            active_tools = list(request.permitted_tools_override)
+        else:
+            # From C1
+            c1_tools = [
+                t.get("name") if isinstance(t, dict) else getattr(t, "name", "")
+                for t in (c1_inputs.get("tools", []) if isinstance(c1_inputs, dict) else [])
+            ]
+            c1_permitted = c1_inputs.get("permitted_tools") or [t for t in c1_tools if t]
+            for t in c1_permitted:
+                if t and t not in active_tools:
+                    active_tools.append(t)
 
-        if not request.permitted_tools_override and not active_tools:
-            if has_c1 and c1_inputs is not None and not is_demo:
+            # From C2
+            c2_def = c2_inputs.get("definition") or {}
+            c2_event_mappings = c2_def.get("event_mappings") or []
+            for em in c2_event_mappings:
+                tool_name = em.get("tool_name") if isinstance(em, dict) else getattr(em, "tool_name", None)
+                if tool_name and tool_name not in active_tools:
+                    active_tools.append(tool_name)
+            c2_tool_specs = c2_def.get("tool_specifications") or []
+            for ts in c2_tool_specs:
+                tool_name = ts.get("name") if isinstance(ts, dict) else getattr(ts, "name", None)
+                if tool_name and tool_name not in active_tools:
+                    active_tools.append(tool_name)
+
+            # From C3
+            c3_case_snap = c3_inputs.get("case") or c3_inputs.get("selected_case") or {}
+            c3_tool = (
+                c3_case_snap.get("tool_id")
+                or (refs.c3.target_tool_id if refs.c3 else None)
+                or c3_inputs.get("tool_id")
+            )
+            if c3_tool and c3_tool not in active_tools:
+                active_tools.append(c3_tool)
+
+            # From C4
+            c4_tools = c4_inputs.get("permitted_tools") or c4_inputs.get("tools") or []
+            for t in c4_tools:
+                tool_name = t.get("name") if isinstance(t, dict) else t
+                if tool_name and tool_name not in active_tools:
+                    active_tools.append(tool_name)
+
+        if not active_tools:
+            has_explicit_component_input = (
+                (has_c1 and c1_raw is not None)
+                or (has_c2 and c2_raw is not None)
+                or (has_c3 and c3_raw is not None)
+                or (has_c4 and c4_raw is not None)
+                or (frozen_inputs.get("is_demonstration") is False)
+            )
+            if has_explicit_component_input and not is_demo:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Execution dispatch prevented: missing required tool configuration in frozen execution inputs.",
                 )
-            permitted_tools = ["order_placement", "process_refund", "inventory_check"]
+            permitted_tools = ["target_execution_tool"] if not is_demo else ["demo_tool"]
         else:
-            permitted_tools = (
-                request.permitted_tools_override
-                or (active_tools if active_tools else None)
-                or ["order_placement", "process_refund", "inventory_check"]
-            )
+            permitted_tools = active_tools
 
         # 3. Create and persist execution intent before dispatch
         execution_id = f"exec-{uuid.uuid4().hex[:12]}"

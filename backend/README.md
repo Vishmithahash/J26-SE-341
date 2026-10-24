@@ -1203,3 +1203,67 @@ The shared integration infrastructure unites the four research components (C1, C
 
 For the full architectural specification, API/CLI references, and operational matrix, see [docs/backend_integration.md](docs/backend_integration.md).
 
+---
+
+## Shared QA Framework LLM Integration (Local Ollama/Qwen & Hosted Google Gemini)
+
+The QA framework integrates a unified, authoritative model layer to assist test engineers in preparing candidate inputs, proposing state-machine models, extracting candidate policy rules, and explaining derived findings.
+
+### 1. Framework Model vs. AUT LLM Agent Separation
+- **QA Framework Model**: Used strictly for QA generation, preparation, and presentation tasks (C1 explanation, C2 draft EFSM proposal, C3 input preparation, C4 candidate policy extraction).
+- **Application Under Test (AUT) Agent**: The external system being tested (e.g., NexaCart). Selecting Gemini or Qwen for the QA framework **does not** modify the AUT agent, mark live AUT integration as ready, or replace deterministic evaluation with an LLM opinion.
+
+### 2. Supported Providers and Configuration
+Configuration values are loaded via backend settings (`backend/app/config.py`). Update `backend/.env` with local values:
+
+```env
+# Hosted Google Gemini API (Server-side key, SecretStr)
+GEMINI_API_KEY="your-gemini-api-key-here"
+GEMINI_MODEL="gemini-3.5-flash-lite"
+
+# Local Ollama Inference (Must be reachable from backend host)
+OLLAMA_BASE_URL="http://127.0.0.1:11434"
+OLLAMA_MODEL="qwen3:4b"
+```
+
+#### Local Ollama Setup
+1. Install Ollama from [ollama.com](https://ollama.com).
+2. Pull the default Qwen model:
+   ```bash
+   ollama pull qwen3:4b
+   ```
+   *(Note: The server administrator can configure any installed Qwen model tag, e.g. `OLLAMA_MODEL=qwen3.5:4b`, without code changes).*
+3. Verify Ollama is running:
+   ```bash
+   curl http://127.0.0.1:11434/api/tags
+   ```
+
+#### Hosted Google Gemini Setup
+1. Obtain an API key from Google AI Studio.
+2. Set `GEMINI_API_KEY` in `backend/.env` or as an environment variable.
+3. Supported models include `gemini-3.5-flash-lite` (default) and `gemini-3.8-flash`.
+
+### 3. Database Migration
+User model selections are stored in the database table `user_model_selections` (`20261024_user_model_selections`):
+```powershell
+alembic upgrade head
+```
+
+### 4. Authoritative Authenticated API Routes
+All routes require authentication via `require_active_user`:
+- `GET /api/v1/llm/providers`: Discovery of configured providers, installed models, and truthful reachability status.
+- `GET /api/v1/llm/selection`: Get the current authenticated user's authoritative saved model selection.
+- `PUT /api/v1/llm/selection`: Save/activate the user's provider, connection type (`local` | `hosted`), and model.
+- `POST /api/v1/llm/test-connection`: Execute a bounded (non-streaming, 10s timeout, max 100 tokens) test inference to verify provider credentials and responsiveness.
+
+### 5. Component Integrations
+- **C1 (Tool-Call Correctness)**: `ModelAssistedDiagnosisProvider` uses the selected model to summarize and explain deterministic root-cause findings without inventing code evidence.
+- **C2 (State-Aware Workflow)**: `ModelAssistedEFSMBuilder` proposes candidate draft EFSM workflows based on business rules and tool specs. Proposals require human review and approval; they are never auto-approved.
+- **C3 (Robustness & Recovery)**: `prepare_draft_inputs` drafts candidate task fixtures and recovery contracts based on adapter manifests and tool specifications, explicitly flagging unresolved references.
+- **C4 (Policy-Aware Safety)**: `SharedLlmPolicyExtractionProvider` extracts structured policy candidates adhering to `c4_candidate_v1` schemas with strict offline validation and excerpt preservation.
+
+### 6. Safeguards and Error Handling
+- **No Transaction Holding**: Database transactions are committed before external HTTP requests and never held open during model inference.
+- **Credential Protection**: API keys are passed in request headers (`x-goog-api-key`), never logged, placed in URLs, or exported to frontend bundles.
+- **Truthful Status**: Outages, missing models, invalid credentials, and timeouts produce distinct, classified errors rather than silent fallbacks.
+

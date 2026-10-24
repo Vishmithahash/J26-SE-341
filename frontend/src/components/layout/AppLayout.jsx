@@ -4,6 +4,8 @@ import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { useTheme } from '../../context/ThemeContext';
 
+import { ErrorBoundary } from '../common/ErrorBoundary';
+
 export const AppLayout = () => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -29,7 +31,9 @@ export const AppLayout = () => {
           }`}
         >
           <div className="max-w-7xl mx-auto">
-            <Outlet />
+            <ErrorBoundary title="Workspace Page Error">
+              <Outlet />
+            </ErrorBoundary>
           </div>
         </main>
       </div>

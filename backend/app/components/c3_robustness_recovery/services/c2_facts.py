@@ -190,7 +190,13 @@ def get_c2_fact_value(
         ):
             continue
 
-        is_offline_demo_fact = fact.provenance in (
+        is_imported_untrusted = bool(
+            fact.details.get("imported") is True
+            or fact.details.get("self_reported") is True
+            or fact.provenance == "OFFLINE_EXPORT"
+        )
+
+        is_offline_demo_fact = is_imported_untrusted or fact.provenance in (
             "C2_FIXTURE",
             "C2_DEMO_FIXTURE",
             "TEST_FIXTURE",
@@ -202,7 +208,10 @@ def get_c2_fact_value(
 
         is_fact_authoritative = (
             require_strict_scope and not is_offline_demo_fact
-        ) or fact.provenance in ("SERVER_EVALUATED", "SHARED_RUN", "C2_EVALUATOR_BRIDGE")
+        ) or (
+            not is_imported_untrusted
+            and fact.provenance in ("SERVER_EVALUATED", "SHARED_RUN", "C2_EVALUATOR_BRIDGE")
+        )
 
         # Trial scope enforcement: do not disable trial checks because supplied facts omit trial IDs
         if expected_trial_id is not None and fact.details.get("trial_id") != expected_trial_id:
@@ -222,7 +231,11 @@ def get_c2_fact_value(
                 continue
             if entity_id is not None and fact.entity_id != entity_id:
                 continue
-            if snapshot_id is not None and fact.snapshot_id != snapshot_id:
+            if snapshot_id is not None:
+                if fact.snapshot_id != snapshot_id:
+                    continue
+            elif fact.snapshot_id is not None:
+                # Missing required snapshot scope cannot be satisfied by an arbitrary unrelated snapshot
                 continue
             if expected_trial_id is not None and (
                 not fact.supporting_evidence_refs

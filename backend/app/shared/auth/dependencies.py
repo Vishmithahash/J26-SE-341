@@ -93,3 +93,25 @@ def require_admin(
             detail="Administrator access required.",
         )
     return current_user
+
+
+def get_optional_active_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> User | None:
+    """Extract authenticated active user if credentials present, otherwise return None."""
+    if credentials is None or not credentials.credentials:
+        return None
+    try:
+        payload = decode_access_token(credentials.credentials, settings)
+        sub = payload.get("sub")
+        if not sub:
+            return None
+        user_id = int(sub)
+        user = db.get(User, user_id)
+        if user and user.is_active:
+            return user
+    except Exception:
+        return None
+    return None

@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.components.c1_tool_call_correctness.api.dependencies import (
     verify_project_access,
 )
+from app.shared.auth.dependencies import require_active_user
+from app.shared.auth.models import User
 from app.components.c1_tool_call_correctness.contracts.configuration import (
     ProjectConfigCreate,
     ProjectConfigResponse,
@@ -824,6 +826,7 @@ async def diagnose_run_endpoint(
     run_id: str,
     request: DiagnosisRequest,
     db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_active_user)],
 ):
     try:
         return await diagnosis_service.execute_diagnosis(
@@ -831,6 +834,7 @@ async def diagnose_run_endpoint(
             project_id=project_id,
             run_id=run_id,
             request=request,
+            user_id=current_user.id if current_user else None,
         )
     except ValueError as e:
         raise HTTPException(

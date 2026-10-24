@@ -170,6 +170,13 @@ export const c4Api = {
   },
 
   /**
+   * Alias for listDomainBindings for dashboard card compatibility.
+   */
+  async getBindings(projectId, bindingId = null) {
+    return this.listDomainBindings(projectId, bindingId);
+  },
+
+  /**
    * Retrieve a domain binding by ID and version.
    */
   async getDomainBinding(projectId, bindingId, version) {

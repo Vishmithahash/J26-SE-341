@@ -5,7 +5,7 @@ Phase: Phase 3 - Automatic generation, frozen suites, remaining faults and suppo
 """
 
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
@@ -124,3 +124,34 @@ class FaultGenerationResponse(BaseModel):
     runtime_verified: Literal[False] = False
     execution_ready: Literal[False] = False
     recovery_verdict: None = None
+
+
+class ModelAssistedDraftRequest(BaseModel):
+    """Request payload for drafting structured inputs via the selected LLM."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: SafeStr = Field(default="proj-demo-qa", max_length=128)
+    task_id: SafeStr | None = None
+    task_version: SafeStr | None = "1.0.0"
+    tool_id: SafeStr | None = None
+    tool_version: SafeStr | None = "1.0.0"
+    domain: SafeStr = Field(default="ecommerce", max_length=64)
+    instructions: SafeStr | None = None
+    existing_task_fixture: TaskFixtureMetadata | None = None
+    existing_adapter_manifest: AdapterCapabilityManifest | None = None
+    existing_recovery_contract: RecoveryContract | None = None
+
+
+class ModelAssistedDraftResponse(BaseModel):
+    """Response payload with model-drafted structured inputs and resolution metadata."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: SafeStr  # "SUCCESS" | "UNRESOLVED_REFERENCES" | "FAILED"
+    draft_task_fixture: TaskFixtureMetadata | None = None
+    draft_adapter_manifest: AdapterCapabilityManifest | None = None
+    draft_recovery_contract: RecoveryContract | None = None
+    unresolved_references: list[SafeStr] = Field(default_factory=list)
+    explanation: SafeStr | None = None
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)

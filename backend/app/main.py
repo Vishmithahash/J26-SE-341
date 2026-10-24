@@ -14,6 +14,7 @@ from app.database import engine
 from app.health import router as health_router
 from app.shared.auth.router import router as shared_auth_router
 from app.shared.integration.router import router as shared_integration_router
+from app.shared.llm.router import router as shared_llm_router
 from app.shared.projects.router import router as shared_projects_router
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
 app.include_router(health_router)
 app.include_router(shared_auth_router)
 app.include_router(shared_projects_router)
+app.include_router(shared_llm_router)
 app.include_router(shared_integration_router)
 app.include_router(c1_router)
 app.include_router(c4_router)

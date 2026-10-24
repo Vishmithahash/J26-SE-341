@@ -34,6 +34,7 @@ from app.components.c3_robustness_recovery.runtime.evidence import (
     ReadinessStatus,
 )
 from app.components.c3_robustness_recovery.services.c2_facts import (
+    DEFAULT_C2_TO_C3_MAPPINGS,
     get_c2_fact_value,
     validate_c2_facts,
 )
@@ -189,7 +190,43 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
     if not expected_entity and hasattr(case, "expected_entity_id"):
         expected_entity = case.expected_entity_id
 
-    expected_version = "1.0.0"
+    # Resolve expected snapshot from observations, event details, or trial evidence
+    if fault_trial and fault_trial.events:
+        for ev in reversed(fault_trial.events):
+            det = getattr(ev, "details", {}) or {}
+            if det.get("snapshot_id"):
+                expected_snapshot = str(det.get("snapshot_id"))
+                break
+            if det.get("after_snapshot_id"):
+                expected_snapshot = str(det.get("after_snapshot_id"))
+                break
+    if not expected_snapshot and hasattr(fault_trial, "snapshot_id") and fault_trial.snapshot_id:
+        expected_snapshot = fault_trial.snapshot_id
+    if not expected_snapshot and hasattr(contract, "expected_snapshot_id") and contract.expected_snapshot_id:
+        expected_snapshot = contract.expected_snapshot_id
+    if not expected_snapshot and hasattr(case, "expected_snapshot_id") and case.expected_snapshot_id:
+        expected_snapshot = case.expected_snapshot_id
+    if not expected_snapshot and hasattr(request.matched_evidence, "metadata") and isinstance(request.matched_evidence.metadata, dict):
+        expected_snapshot = request.matched_evidence.metadata.get("snapshot_id")
+    if not expected_snapshot and request.c2_facts:
+        matching_snaps = {
+            f.snapshot_id for f in request.c2_facts
+            if f.snapshot_id and f.details.get("trial_id") == expected_tid
+        }
+        if len(matching_snaps) == 1:
+            expected_snapshot = next(iter(matching_snaps))
+
+    # Helper function to resolve assertion version from pinned mappings and contracts
+    def _resolve_assertion_version(aid: str) -> str:
+        if hasattr(contract, "assertion_versions") and isinstance(contract.assertion_versions, dict):
+            if aid in contract.assertion_versions:
+                return str(contract.assertion_versions[aid])
+        for m in DEFAULT_C2_TO_C3_MAPPINGS:
+            if m.c3_assertion_id == aid:
+                return m.c3_assertion_version
+        if hasattr(case, "assertion_version") and case.assertion_version:
+            return str(case.assertion_version)
+        return "1.0.0"
 
     # -----------------------------------------------------------------------
     # Rule A: Completion (RULE_COMPLETION)
@@ -225,13 +262,14 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             supporting_facts: list[str] = []
 
             for assertion_id in contract.required_state_assertions:
+                resolved_version = _resolve_assertion_version(assertion_id)
                 fact_val = get_c2_fact_value(
                     request.c2_facts,
                     assertion_id,
                     time_scope="post_recovery",
                     entity_id=expected_entity,
                     snapshot_id=expected_snapshot,
-                    assertion_version=expected_version,
+                    assertion_version=resolved_version,
                     expected_trial_id=expected_tid,
                     expected_project_id=expected_pid,
                     expected_pair_id=expected_pair_id,
@@ -463,7 +501,7 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
             time_scope="post_recovery",
             entity_id=expected_entity,
             snapshot_id=expected_snapshot,
-            assertion_version=expected_version,
+            assertion_version=_resolve_assertion_version("duplicate_side_effect_detected"),
             expected_trial_id=expected_tid,
             expected_project_id=expected_pid,
             expected_pair_id=expected_pair_id,
@@ -537,7 +575,7 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                 time_scope="post_recovery",
                 entity_id=expected_entity,
                 snapshot_id=expected_snapshot,
-                assertion_version=expected_version,
+                assertion_version=_resolve_assertion_version("idempotency_key_reused"),
                 expected_trial_id=expected_tid,
                 expected_project_id=expected_pid,
                 expected_pair_id=expected_pair_id,
@@ -549,7 +587,7 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                 time_scope="post_recovery",
                 entity_id=expected_entity,
                 snapshot_id=expected_snapshot,
-                assertion_version=expected_version,
+                assertion_version=_resolve_assertion_version("target_idempotency_enforced"),
                 expected_trial_id=expected_tid,
                 expected_project_id=expected_pid,
                 expected_pair_id=expected_pair_id,
@@ -561,7 +599,7 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                 time_scope="post_recovery",
                 entity_id=expected_entity,
                 snapshot_id=expected_snapshot,
-                assertion_version=expected_version,
+                assertion_version=_resolve_assertion_version("duplicate_side_effect_detected"),
                 expected_trial_id=expected_tid,
                 expected_project_id=expected_pid,
                 expected_pair_id=expected_pair_id,
@@ -652,7 +690,7 @@ def evaluate_recovery(request: RecoveryEvaluationRequest) -> RecoveryEvaluationR
                     time_scope="post_recovery",
                     entity_id=expected_entity,
                     snapshot_id=expected_snapshot,
-                    assertion_version=expected_version,
+                    assertion_version=_resolve_assertion_version(assertion_id),
                     expected_trial_id=expected_tid,
                     expected_project_id=expected_pid,
                     expected_pair_id=expected_pair_id,
