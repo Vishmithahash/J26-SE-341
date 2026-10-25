@@ -67,7 +67,16 @@ class BoundedNLPolicyExtractor:
         Execute bounded extraction on artifact and validate candidates against domain bindings.
         Returns: (candidate_rules, provider_metadata)
         """
-        opts = options or {}
+        # The binding's vocabulary lets the model use real role/tool/resource names instead of
+        # inventing selectors that the binding validation below would reject.
+        opts = {
+            "binding_vocabulary": {
+                "roles": [r.role_name for r in binding.roles],
+                "tools": [t.tool_name for t in binding.tools],
+                "resources": [r.resource_type for r in binding.resources],
+            },
+            **(options or {}),
+        }
         raw_candidates, meta = self.provider.extract_candidates(artifact, opts)
 
         candidate_rules: list[CandidateRule] = []
@@ -300,6 +309,23 @@ class BoundedNLPolicyExtractor:
 
             # 5. Predicate Semantics, Units, and Conditions
             app_pred = None
+            for prefix in ("applicability", "compliance"):
+                field_value = raw.get(f"{prefix}_field")
+                if isinstance(field_value, str) and field_value.startswith("<"):
+                    raw[f"{prefix}_field"] = None  # unfilled template placeholder
+                    continue
+                op_value = raw.get(f"{prefix}_operator")
+                if field_value and op_value is not None and op_value not in PredicateOperator.__members__:
+                    issues.append(
+                        ValidationIssue(
+                            code=ValidationIssueCode.UNSUPPORTED_CONDITION,
+                            message=f"Unsupported {prefix} operator '{op_value}' from the extractor.",
+                            field=f"{prefix}_conditions.operator",
+                            severity=Severity.HIGH,
+                            blocking=True,
+                        )
+                    )
+                    raw[f"{prefix}_field"] = None
             if raw.get("applicability_field"):
                 # Unit check: if threshold without verified units
                 if (

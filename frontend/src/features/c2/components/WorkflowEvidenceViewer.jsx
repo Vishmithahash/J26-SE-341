@@ -15,6 +15,7 @@ export const WorkflowEvidenceViewer = ({
   evaluation,
   evidence,
   isLoadingEvidence,
+  plannedCase = null,
 }) => {
   const [expandedEvents, setExpandedEvents] = useState({});
   const [activeTab, setActiveTab] = useState('events'); // 'events' | 'divergence' | 'completeness'
@@ -46,6 +47,8 @@ export const WorkflowEvidenceViewer = ({
   const firstDivergence = evaluation.first_divergence || null;
   const uncertainty = evaluation.divergence_localisation_uncertainty || null;
   const expectedStates = evaluation.expected_states || [];
+  const isMutant = plannedCase?.category === 'mutated';
+  const plannedPath = isMutant ? [] : plannedCase?.private_reference_paths?.[0] || [];
   const observedStates = evaluation.observed_states || [];
   const acceptedAlternatives = evaluation.accepted_alternatives || [];
   const violations = evaluation.violations || [];
@@ -173,21 +176,47 @@ export const WorkflowEvidenceViewer = ({
           {/* Expected States */}
           <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 space-y-2">
             <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
-              Expected Reference State Sequence:
+              Planned Reference Path:
             </span>
             <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
-              {expectedStates.length === 0 ? (
-                <span className="text-slate-400 italic">None recorded</span>
+              {isMutant ? (
+                <span className="text-slate-500 italic">
+                  Controlled mutant of its parent's live trace: the oracle is expected to reject it (FAIL = mutation detected).
+                </span>
+              ) : plannedPath.length === 0 ? (
+                <span className="text-slate-400 italic">Not available</span>
               ) : (
-                expectedStates.map((st, i) => (
+                plannedPath.map((st, i) => (
                   <React.Fragment key={i}>
                     <span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                       {st}
                     </span>
-                    {i < expectedStates.length - 1 && <ArrowRight className="w-3 h-3 text-slate-400" />}
+                    {i < plannedPath.length - 1 && <ArrowRight className="w-3 h-3 text-slate-400" />}
                   </React.Fragment>
                 ))
               )}
+            </div>
+            {!isMutant && plannedPath.length > 0 && (
+              <p className="text-[10px] text-slate-400">
+                One planned path; the trace is aligned with every path the model permits, so another permitted route also conforms.
+              </p>
+            )}
+
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-1">
+              <span className="text-[10px] font-semibold text-slate-400 uppercase">
+                Expected Outcome State(s):
+              </span>
+              <div className="flex flex-wrap gap-1">
+                {expectedStates.length === 0 ? (
+                  <span className="text-slate-400 italic text-[10px]">None recorded</span>
+                ) : (
+                  expectedStates.map((st, i) => (
+                    <span key={i} className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-mono text-[10px]">
+                      {st}
+                    </span>
+                  ))
+                )}
+              </div>
             </div>
 
             {/* Accepted Alternatives */}

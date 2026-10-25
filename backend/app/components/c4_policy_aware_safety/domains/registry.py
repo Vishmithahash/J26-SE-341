@@ -9,6 +9,10 @@ from app.components.c4_policy_aware_safety.domains.booking import BOOKING_DOMAIN
 from app.components.c4_policy_aware_safety.domains.ecommerce import (
     ECOMMERCE_DOMAIN_PROFILE,
 )
+from app.components.c4_policy_aware_safety.domains.nexacart_live import (
+    NEXACART_DOMAIN_ID,
+    NEXACART_DOMAIN_PROFILE,
+)
 
 
 class DomainRegistry:
@@ -18,6 +22,7 @@ class DomainRegistry:
         self._profiles: dict[str, DomainProfileDefinition] = {
             ECOMMERCE_DOMAIN_PROFILE.domain_id: ECOMMERCE_DOMAIN_PROFILE,
             BOOKING_DOMAIN_PROFILE.domain_id: BOOKING_DOMAIN_PROFILE,
+            NEXACART_DOMAIN_PROFILE.domain_id: NEXACART_DOMAIN_PROFILE,
         }
 
     def register_profile(self, profile: DomainProfileDefinition) -> None:
@@ -36,6 +41,21 @@ class DomainRegistry:
     ) -> dict[str, Any]:
         """Check live vs simulated readiness for a domain."""
         profile = self.get_profile(domain_id)
+
+        if execution_mode.upper() == "LIVE" and domain_id == NEXACART_DOMAIN_ID:
+            # Real readiness: NexaCart health, QA admin credentials and harness availability.
+            from app.shared.aut.nexacart import get_nexacart_client
+
+            is_ready, blockers = get_nexacart_client().check_readiness()
+            return {
+                "domain_id": profile.domain_id,
+                "name": profile.name,
+                "execution_mode": "LIVE",
+                "is_ready": is_ready,
+                "status": "READY" if is_ready else "BLOCKED",
+                "blockers": blockers,
+                "capabilities": list(profile.capabilities),
+            }
 
         if execution_mode.upper() == "LIVE":
             return {

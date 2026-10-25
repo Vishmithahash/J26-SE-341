@@ -8,7 +8,8 @@ import { c4Api } from '../api/c4Api.js';
 
 export function usePolicyExtraction(projectId, isCurrentGeneration, getGeneration) {
   const [providerReadiness, setProviderReadiness] = useState(null);
-  const [selectedProvider, setSelectedProvider] = useState('offline_mock');
+  // Default: the user's selected QA model (local Ollama unless changed); the regex mock stays selectable.
+  const [selectedProvider, setSelectedProvider] = useState('shared_llm');
   const [isLoadingReadiness, setIsLoadingReadiness] = useState(false);
   const [candidates, setCandidates] = useState([]);
   const [selectedCandidate, setSelectedCandidate] = useState(null);
@@ -144,7 +145,19 @@ export function usePolicyExtraction(projectId, isCurrentGeneration, getGeneratio
         if (!isCurrentGeneration(currentGen)) return null;
 
         setActiveJob(job);
-        setSuccessMessage(`Extraction job ${job.job_id} initiated (${job.status}).`);
+        // The job only reports rule IDs; load the extracted rules into the review gate.
+        const extractedIds = job.candidates_extracted || [];
+        if (extractedIds.length > 0) {
+          const extracted = await c4Api.listCandidateRules(projectId, extractedIds);
+          if (!isCurrentGeneration(currentGen)) return null;
+          setCandidates((prev) => [
+            ...extracted,
+            ...prev.filter((r) => !extractedIds.includes(r.rule_id)),
+          ]);
+        }
+        setSuccessMessage(
+          `Extraction job ${job.job_id} ${job.status}: ${extractedIds.length} candidate rule(s) ready for review.`
+        );
         return job;
       } catch (err) {
         if (isCurrentGeneration(currentGen)) {

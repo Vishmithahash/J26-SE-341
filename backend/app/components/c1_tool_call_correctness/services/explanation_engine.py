@@ -1,3 +1,5 @@
+import json
+import re
 from typing import Any
 
 from app.components.c1_tool_call_correctness.contracts.diagnosis import (
@@ -32,8 +34,16 @@ class ExplanationEngine:
         check_results: list[CheckLevelResult],
         captured_events: list[CapturedToolEvent],
         trace_completeness: TraceCompleteness,
+        expectations: list[Any] | None = None,
+        requirements: dict[str, dict[str, Any]] | None = None,
+        task_prompt: str | None = None,
     ) -> list[CheckExplanationDetail]:
-        """Derives structured explanations for all failing or inconclusive checks in a case execution."""
+        """Derives structured explanations for all failing or inconclusive checks in a case execution.
+
+        With the case's frozen ``expectations``, the configuration's ``requirements`` and the
+        ``task_prompt`` the agent received, each explanation also names the requirement text,
+        where the expected value comes from and where the observed value plausibly came from.
+        """
         explanations: list[CheckExplanationDetail] = []
         events_by_id = {e.event_id: e for e in captured_events}
         events_by_tool: dict[str, list[CapturedToolEvent]] = {}
@@ -51,6 +61,15 @@ class ExplanationEngine:
                 events_by_id=events_by_id,
                 events_by_tool=events_by_tool,
                 trace_completeness=trace_completeness,
+            )
+            self._add_context(
+                explanation,
+                check,
+                captured_events,
+                events_by_id,
+                expectations or [],
+                requirements or {},
+                task_prompt,
             )
             explanations.append(explanation)
 
@@ -73,11 +92,11 @@ class ExplanationEngine:
         evidence_supported_findings: list[str] = []
         uncertainties: list[str] = []
 
-        # Find matching tool event if applicable
+        # Find the tool event the check refers to (not merely the first call of that tool)
         tool_events = events_by_tool.get(check.target_tool or "", [])
         matched_event: CapturedToolEvent | None = None
         if tool_events:
-            matched_event = tool_events[0]
+            matched_event = self._event_for_check(check, events_by_id, tool_events)
             matched_call_id = matched_event.event_id
             relevant_args = matched_event.arguments
             recorded_output = matched_event.tool_response or matched_event.tool_error
@@ -211,6 +230,36 @@ class ExplanationEngine:
                 f"Runtime failure recorded in tool execution trace for '{check.target_tool}'."
             )
 
+        # 6b. Rejected call(s) followed by a successful retry
+        elif reason == ExecutionReasonCode.SELF_CORRECTED_AFTER_REJECTED_CALL.value:
+            rejected = [
+                e
+                for e in captured_events
+                if e.tool_name == check.target_tool and e.status.value == "FAILED"
+            ]
+            what_observed = (
+                f"Self-corrected after a rejected call: the application rejected "
+                f"{len(rejected)} call(s) to '{check.target_tool}' before the agent's "
+                "successful call."
+            )
+            violated_req = (
+                f"Rule '{rule}': '{check.target_tool}' may be called at most "
+                f"{str(check.expected_value).split('max=')[-1]} time(s); a rejected call "
+                "still counts as an incorrect tool call."
+            )
+            expected_behavior = (
+                f"Exactly the allowed number of correct calls ({check.expected_value})."
+            )
+            observed_behavior = check.explanation
+            for e in rejected:
+                evidence_supported_findings.append(
+                    f"Rejected call #{e.call_index} with arguments {e.arguments}: "
+                    f"{e.tool_error or 'rejected by the application'}."
+                )
+            evidence_supported_findings.append(
+                "A later call to the same tool succeeded (the agent corrected itself)."
+            )
+
         # 7. Incomplete Trace / Missing Evidence
         elif reason in (
             ExecutionReasonCode.INCOMPLETE_TRACE_MISSING_TOOL.value,
@@ -256,3 +305,112 @@ class ExplanationEngine:
             evidence_supported_findings=evidence_supported_findings,
             uncertainties=uncertainties,
         )
+
+    @staticmethod
+    def _event_for_check(
+        check: CheckLevelResult,
+        events_by_id: dict[str, CapturedToolEvent],
+        tool_events: list[CapturedToolEvent],
+    ) -> CapturedToolEvent:
+        """The call a check refers to: named in its explanation or evidence, else the first call."""
+        for token in re.findall(r"\[([^\]\s]+)\]", check.explanation or ""):
+            if token in events_by_id:
+                return events_by_id[token]
+        for ref in check.evidence_refs:
+            event_id = ref.removeprefix("ev_")
+            if event_id in events_by_id and events_by_id[event_id] in tool_events:
+                return events_by_id[event_id]
+        return tool_events[0]
+
+    @staticmethod
+    def _argument_provenance(
+        value: Any,
+        event: CapturedToolEvent,
+        captured_events: list[CapturedToolEvent],
+        task_prompt: str | None,
+    ) -> tuple[SourceRelationshipStatus, str] | None:
+        """Where an argument value plausibly came from, judged only from the recorded run.
+
+        This is an inference from value equality (INFERRED), never an observed provenance link.
+        Very short values are only attributed to the request text, not to tool outputs.
+        """
+        if value is None or value == "":
+            return None
+        text = str(value)
+        if len(text) >= 4:
+            for earlier in sorted(captured_events, key=lambda e: e.call_index):
+                if (
+                    earlier.call_index >= event.call_index
+                    or earlier.tool_response is None
+                ):
+                    continue
+                if text in json.dumps(earlier.tool_response, default=str):
+                    return (
+                        SourceRelationshipStatus.INFERRED,
+                        (
+                            f"The value {text!r} appears in the output of call #{earlier.call_index} "
+                            f"({earlier.tool_name}), recorded before this call: the agent most likely "
+                            "took it from there (inferred from the trace, not an explicit provenance link)."
+                        ),
+                    )
+        if task_prompt and text in task_prompt:
+            return (
+                SourceRelationshipStatus.INFERRED,
+                (
+                    f"The value {text!r} appears in the customer's request text: the agent most likely "
+                    "copied it from the request (inferred from the trace)."
+                ),
+            )
+        return (
+            SourceRelationshipStatus.UNKNOWN,
+            (
+                f"The value {text!r} appears neither in an earlier tool output nor in the request: "
+                "its origin is unknown (it may have been invented by the agent)."
+            ),
+        )
+
+    def _add_context(
+        self,
+        explanation: CheckExplanationDetail,
+        check: CheckLevelResult,
+        captured_events: list[CapturedToolEvent],
+        events_by_id: dict[str, CapturedToolEvent],
+        expectations: list[Any],
+        requirements: dict[str, dict[str, Any]],
+        task_prompt: str | None,
+    ) -> None:
+        """Requirement text, expected-value source and argument provenance for one explanation."""
+        req_ids = list(check.requirement_refs)
+        for spec in expectations:
+            if getattr(spec, "tool_name", None) != check.target_tool:
+                continue
+            for constraint in getattr(spec, "argument_constraints", []):
+                if constraint.argument_name != check.target_argument:
+                    continue
+                req_ids += [r for r in constraint.requirement_refs if r not in req_ids]
+                rel = constraint.source_relationship
+                if rel is not None and explanation.expected_value_source is None:
+                    explanation.expected_value_source = (
+                        f"{rel.source_record_id}.{rel.source_path} "
+                        f"({rel.relationship_type.value}) = {constraint.expected_value!r}"
+                    )
+        explanation.requirements = [
+            {"req_id": rid, **requirements[rid]}
+            for rid in req_ids
+            if rid in requirements
+        ]
+
+        event = events_by_id.get(explanation.matched_call_id or "")
+        if event is None or not check.target_argument:
+            return
+        if check.target_argument not in event.arguments:
+            return
+        found = self._argument_provenance(
+            event.arguments[check.target_argument], event, captured_events, task_prompt
+        )
+        if found is None:
+            return
+        status, note = found
+        explanation.argument_provenance = note
+        if explanation.source_relationship_status != SourceRelationshipStatus.OBSERVED:
+            explanation.source_relationship_status = status

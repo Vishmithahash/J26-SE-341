@@ -1,6 +1,7 @@
 import ast
 import hashlib
 import os
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -125,6 +126,11 @@ class SourceInspector:
             # Not a readable text/python file
             return None
 
+        if target_file.suffix in (".ts", ".js"):
+            return self._inspect_typescript(
+                target_file, text, function_name, source_hash
+            )
+
         try:
             tree = ast.parse(text, filename=str(target_file))
         except SyntaxError:
@@ -171,3 +177,95 @@ class SourceInspector:
                 )
 
         return None
+
+    def _inspect_typescript(
+        self, target_file: Path, text: str, function_name: str, source_hash: str
+    ) -> InspectedFunction | None:
+        """Locate a TypeScript/JavaScript method without executing or compiling anything.
+
+        For a tool implementation such as NexaCart's ``execute(args, context)`` the reported
+        ``parameters`` are the argument keys the body actually reads (``args['x']``,
+        ``args["x"]``, ``args.x``): that is what an argument-mapping defect changes.
+        """
+        header = re.compile(
+            rf"^[ \t]*(?:(?:public|private|protected|static|async|export|function)\s+)*"
+            rf"{re.escape(function_name)}\s*\(",
+            re.MULTILINE,
+        )
+        match = header.search(text)
+        if match is None:
+            return None
+        # Skip the parameter list (balanced parentheses), then find the body's opening brace.
+        idx = match.end() - 1
+        depth = 0
+        while idx < len(text):
+            if text[idx] == "(":
+                depth += 1
+            elif text[idx] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            idx += 1
+        params_text = text[match.end() : idx]
+        body_start = text.find("{", idx)
+        if body_start < 0:
+            return None
+        body_end = _matching_brace(text, body_start)
+        if body_end < 0:
+            return None
+        body = text[body_start : body_end + 1]
+        arg_name = (params_text.split(":")[0].split(",")[0].strip() or "args").lstrip(
+            "_"
+        )
+        keys = set(
+            re.findall(
+                rf"\b_?{re.escape(arg_name)}\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]",
+                body,
+            )
+        ) | set(
+            re.findall(rf"\b_?{re.escape(arg_name)}\.([A-Za-z_][A-Za-z0-9_]*)", body)
+        )
+        doc = re.search(r"/\*\*(.*?)\*/\s*$", text[: match.start()], re.DOTALL)
+        rel_path = str(target_file.relative_to(self.repo_root)).replace("\\", "/")
+        return InspectedFunction(
+            file_path=rel_path,
+            function_name=function_name,
+            line_start=text.count("\n", 0, match.start()) + 1,
+            line_end=text.count("\n", 0, body_end) + 1,
+            parameters=sorted(keys),
+            docstring=" ".join(doc.group(1).replace("*", " ").split()) if doc else None,
+            source_hash=source_hash,
+        )
+
+
+def _matching_brace(text: str, open_idx: int) -> int:
+    """Index of the brace closing ``text[open_idx]``, skipping strings and comments; -1 if none."""
+    depth = 0
+    i = open_idx
+    quote: str | None = None
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"', "`"):
+            quote = ch
+        elif text.startswith("//", i):
+            nl = text.find("\n", i)
+            i = len(text) if nl < 0 else nl
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = len(text) if end < 0 else end + 2
+            continue
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1

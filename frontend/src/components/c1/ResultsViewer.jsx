@@ -31,12 +31,14 @@ import { DiagnosisPanel } from './DiagnosisPanel';
 import { CorrectionReviewPanel } from './CorrectionReviewPanel';
 import { ReportingModal } from './ReportingModal';
 import { ExecutionProvenanceBadge } from './ExecutionProvenanceBadge';
+import { liveAgentRunInfo } from './provenanceUtils';
 
 export const ResultsViewer = ({
   projectId,
   initialRunId,
   onSelectRun,
   currentUser,
+  correctionEnabled = true,
 }) => {
   const [runsList, setRunsList] = useState([]);
   const [selectedRunId, setSelectedRunId] = useState(initialRunId || '');
@@ -177,6 +179,7 @@ export const ResultsViewer = ({
   }, [runDetail, verdictFilter, searchQuery]);
 
   const summary = runDetail?.summary;
+  const liveRun = liveAgentRunInfo(caseExecutionDetail);
 
   return (
     <div className="space-y-6">
@@ -312,6 +315,47 @@ export const ResultsViewer = ({
             <span>
               Pass counts reflect automated check evaluations. Correctness pass rates are distinct from benchmark accuracy, which requires independently verified reference labels.
             </span>
+          </div>
+        </div>
+      )}
+
+      {/* Per-case outcomes over repetitions (agent variability) */}
+      {summary && summary.repetitions > 1 && Object.keys(summary.repetition_summary || {}).length > 0 && (
+        <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-2">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+            Repeated runs: {summary.repetitions} per case (outcomes per case, not new cases)
+          </h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-slate-500">
+                  <th className="py-1 pr-3 font-semibold">Case</th>
+                  <th className="py-1 pr-3 font-semibold">Runs</th>
+                  <th className="py-1 pr-3 font-semibold">PASS</th>
+                  <th className="py-1 pr-3 font-semibold">FAIL</th>
+                  <th className="py-1 pr-3 font-semibold">INCONCLUSIVE</th>
+                  <th className="py-1 pr-3 font-semibold">Error</th>
+                  <th className="py-1 pr-3 font-semibold">Pass rate (definite verdicts)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(summary.repetition_summary).map(([caseId, r]) => (
+                  <tr key={caseId} className="border-t border-slate-100 dark:border-slate-800">
+                    <td className="py-1 pr-3 font-mono">{caseId}</td>
+                    <td className="py-1 pr-3">{r.runs}</td>
+                    <td className="py-1 pr-3">{r.PASS}</td>
+                    <td className="py-1 pr-3">{r.FAIL}</td>
+                    <td className="py-1 pr-3">{r.INCONCLUSIVE}</td>
+                    <td className="py-1 pr-3">{r.ERROR}</td>
+                    <td className="py-1 pr-3">
+                      {r.pass_rate === null || r.pass_rate === undefined
+                        ? 'n/a'
+                        : `${Math.round(r.pass_rate * 100)}%`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -490,10 +534,41 @@ export const ResultsViewer = ({
                     </div>
                   </div>
                 )}
+
+                {/* Live NexaCart agent run (real application evidence) */}
+                {liveRun && (
+                  <div className="space-y-1">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                      Live NexaCart Agent Run
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 text-xs text-slate-700 dark:text-slate-300 space-y-1">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
+                        <div>Agent run: <span className="font-mono">{liveRun.agentRunId || 'not reported'}</span></div>
+                        <div>Model: <span className="font-mono">{[liveRun.provider, liveRun.model].filter(Boolean).join(' / ') || 'not reported'}</span></div>
+                        <div>Agent status: <strong>{liveRun.agentStatus || 'n/a'}</strong> ({liveRun.outcome || 'n/a'})</div>
+                        <div>NexaCart fixture: <span className="font-mono">{liveRun.fixtureId || 'n/a'}</span></div>
+                        {liveRun.durationMs !== null && (
+                          <div>Agent duration: {(liveRun.durationMs / 1000).toFixed(1)} s</div>
+                        )}
+                        {liveRun.harnessVersion && <div>QA harness: v{liveRun.harnessVersion}</div>}
+                      </div>
+                      {liveRun.error && (
+                        <div className="text-red-700 dark:text-red-400">Error: {liveRun.error}</div>
+                      )}
+                      {liveRun.finalAnswer && (
+                        <div>
+                          <span className="font-semibold">Agent final answer:</span>{' '}
+                          <span className="whitespace-pre-wrap">{liveRun.finalAnswer}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Phase 3: Root Cause Diagnosis & Code Attribution Panel */}
               <DiagnosisPanel
+                correctionEnabled={correctionEnabled}
                 projectId={projectId}
                 runId={selectedRunId}
                 caseId={caseExecutionDetail.case_id}
@@ -506,7 +581,7 @@ export const ResultsViewer = ({
               />
 
               {/* Phase 3: Sandbox Verification & Developer Review Panel */}
-              {showCorrectionPanel && activeDiagnosis && (
+              {correctionEnabled && showCorrectionPanel && activeDiagnosis && (
                 <CorrectionReviewPanel
                   projectId={projectId}
                   diagnosisId={activeDiagnosis.diagnosis_id}
@@ -703,6 +778,7 @@ export const ResultsViewer = ({
         <ReportingModal
           projectId={projectId}
           activeRunId={selectedRunId}
+          correctionEnabled={correctionEnabled}
           onClose={() => setShowReportingModal(false)}
         />
       )}

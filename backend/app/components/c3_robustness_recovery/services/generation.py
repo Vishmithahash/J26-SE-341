@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from app.components.c3_robustness_recovery.contracts.generation import (
     FaultGenerationRequest,
     FaultGenerationResponse,
-    FrozenSuite,
     GenerationCounters,
     GenerationPolicy,
     GenerationStatus,
@@ -147,13 +146,7 @@ def _derive_payloads_for_combination(
 
 def generate_feasible_cases(
     request: FaultGenerationRequest,
-) -> tuple[
-    GenerationStatus,
-    list[CandidateFaultCase],
-    GenerationCounters,
-    list[ValidationReason],
-    FrozenSuite | None,
-]:
+) -> FaultGenerationResponse:
     """Pure, deterministic generation, validation, and selection of feasible fault cases."""
     policy: GenerationPolicy = request.policy
     metadata = request.task_fixture_metadata
@@ -381,25 +374,38 @@ def generate_feasible_cases(
                     break
 
     if not feasible_pool:
-        return (
-            GenerationStatus.NO_FEASIBLE_CASES,
-            [],
-            counters,
-            rejection_reasons,
-            None,
+        return FaultGenerationResponse(
+            validation_scope=ValidationScope.STATIC_ONLY,
+            generation_status=GenerationStatus.NO_FEASIBLE_CASES,
+            frozen_suite=None,
+            counters=counters,
+            reasons=rejection_reasons,
+            pending_checks=[],
+            runtime_verified=False,
+            execution_ready=False,
+            recovery_verdict=None,
         )
 
-    # 3. Round-Robin Coverage Selection Across (tool_id, fault_family) Groups
-    grouped_pool: dict[tuple[str, str], list[tuple[CandidateFaultCase, str]]] = (
+    # 3. Round-Robin Coverage Selection
+    # ROUND_ROBIN: (tool_id, fault_family) groups, shuffled with policy.seed.
+    # TOOL_FAMILY_PHASE: one group per feasible (tool, fault family, effect phase) cell, lowest
+    # occurrence first, so a small budget covers every cell before repeating one.
+    by_phase = policy.coverage_strategy == "TOOL_FAMILY_PHASE"
+    grouped_pool: dict[tuple[str, ...], list[tuple[CandidateFaultCase, str]]] = (
         defaultdict(list)
     )
     for cand, fp in feasible_pool:
         key = (cand.tool_id, cand.fault_family.value)
+        if by_phase:
+            key = (*key, cand.effect_phase.value)
         grouped_pool[key].append((cand, fp))
 
-    # Shuffle each group deterministically using policy.seed
     for items in grouped_pool.values():
-        rng.shuffle(items)
+        if by_phase:
+            items.sort(key=lambda item: (item[0].occurrence, item[1]))
+        else:
+            # Shuffle each group deterministically using policy.seed
+            rng.shuffle(items)
 
     selected_pool: list[tuple[CandidateFaultCase, str]] = []
     group_keys = sorted(grouped_pool.keys())

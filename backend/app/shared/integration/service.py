@@ -36,6 +36,9 @@ from app.components.c2_state_aware_workflow.persistence.models import (
     C2TestSuite,
     C2WorkflowModel,
 )
+from app.components.c3_robustness_recovery.examples.nexacart_recovery import (
+    NEXACART_TASKS,
+)
 from app.components.c3_robustness_recovery.models.persistence import (
     C3SuiteModel,
 )
@@ -982,20 +985,8 @@ class IntegrationService:
                         s.model_dump(mode="json") for s in resolved_specs
                     ],
                     "agent_connection_ref": c1_rec.agent_connection_ref,
-                    "context_data": c1_context or {
-                        "fixture_order_9821": {
-                            "order_id": "ORD-9821",
-                            "customer_id": "CUST-8831",
-                            "status": "DELIVERED",
-                            "items": {
-                                "ITEM-44": {
-                                    "name": "Wireless Ergonomic Mouse",
-                                    "price": 35.00,
-                                    "refundable": True,
-                                }
-                            },
-                        }
-                    },
+                    # Only a context pinned by the suite case; live runs add the real fixture context.
+                    "context_data": c1_context or {},
                 }
         if (
             ref_plan.c2
@@ -1100,7 +1091,25 @@ class IntegrationService:
                     "recovery_contract_snapshot": c3_rec.recovery_contract_snapshot,
                     "task_fixture_metadata_snapshot": c3_rec.task_fixture_metadata_snapshot,
                     "expected_entity_id": ref_plan.c3.expected_entity_id,
+                    # Versioned C2->C3 assertion bindings pinned with the plan (None -> C3 defaults)
+                    "pinned_mappings": data.metadata.get("c2_to_c3_mappings"),
                 }
+                # C3's own task instruction and final-answer rules, frozen with the plan. They come
+                # from plan metadata, else from the registered NexaCart C3 task. C3's clean and fault
+                # trials use this instruction; other components keep the shared prompt.
+                c3_task = NEXACART_TASKS.get(
+                    (sel_case or {}).get("task_id") or c3_rec.task_id or ""
+                )
+                c3_prompt = data.metadata.get("c3_task_prompt") or (
+                    c3_task.instruction if c3_task else None
+                )
+                c3_rules = data.metadata.get("c3_terminal_outcome_rules") or (
+                    c3_task.outcome_rules.model_dump() if c3_task else None
+                )
+                if c3_prompt:
+                    execution_inputs["c3"]["task_prompt"] = c3_prompt
+                if c3_rules:
+                    execution_inputs["c3"]["terminal_outcome_rules"] = c3_rules
         if (
             ref_plan.c4
             and readiness.component_statuses.get(
@@ -1129,6 +1138,15 @@ class IntegrationService:
                     "content_hash": c4_rec.content_hash,
                     "referenced_artifact_versions": c4_rec.referenced_artifact_versions,
                 }
+
+        # Live NexaCart fixture definition and untrusted-content seed are pinned with the plan.
+        live_target = {
+            key: data.metadata[key]
+            for key in ("nexacart_fixture", "untrusted_content", "task_prompt")
+            if data.metadata.get(key) is not None
+        }
+        if live_target:
+            execution_inputs["live_target"] = live_target
 
         inputs_digest = canonical_json_digest(execution_inputs)
 

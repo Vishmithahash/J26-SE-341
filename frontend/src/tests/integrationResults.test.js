@@ -273,7 +273,8 @@ describe('Shared Integration Results and Frontend Compatibility Tests', () => {
 
       assert.doesNotMatch(content, /python -m app\.c3\.runners\.http_runner/);
       assert.doesNotMatch(content, /NEXACART_AUT_URL/);
-      assert.match(content, /Live execution is not connected/);
+      assert.match(content, /getLiveReadiness/);
+      assert.doesNotMatch(content, /Live execution is not connected/);
     });
 
     it('removes terminal shell commands block from C3ResearchView.jsx', () => {

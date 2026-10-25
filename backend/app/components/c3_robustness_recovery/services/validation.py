@@ -49,8 +49,12 @@ def get_fault_catalog() -> FaultCatalogResponse:
             constraints_summary=(
                 "Requires timing_ms between 0 and 600,000 ms. Can simulate delays exceeding caller timeout."
             ),
-            injection_implemented=False,
-            note="Injection is not implemented in Phase 1.",
+            injection_implemented=True,
+            runtime_support=[
+                "NexaCart QA harness fault gateway (live): BEFORE_EFFECT, AFTER_COMMIT; delivered at once as an UPSTREAM_TIMEOUT (504) tool result, no wall-clock wait",
+                "In-process demonstration interceptor: BEFORE_EFFECT, AFTER_COMMIT (lost response)",
+            ],
+            note="Injected live by NexaCart and in demonstration runs. Live timeouts are returned at once; the caller-timeout wait is not reproduced.",
         ),
         FaultFamilyCatalogItem(
             family=FaultFamily.TRANSIENT_5XX,
@@ -69,8 +73,12 @@ def get_fault_catalog() -> FaultCatalogResponse:
             constraints_summary=(
                 "Requires http_status in range 500-599. Does not imply every 5xx error is safe to retry."
             ),
-            injection_implemented=False,
-            note="Injection is not implemented in Phase 1.",
+            injection_implemented=True,
+            runtime_support=[
+                "NexaCart QA harness fault gateway (live): BEFORE_EFFECT, AFTER_COMMIT; HTTP 503 only",
+                "In-process demonstration interceptor: BEFORE_EFFECT",
+            ],
+            note="Injected live by NexaCart (503) and in demonstration runs.",
         ),
         FaultFamilyCatalogItem(
             family=FaultFamily.RATE_LIMIT_429,
@@ -87,8 +95,12 @@ def get_fault_catalog() -> FaultCatalogResponse:
             constraints_summary=(
                 "http_status is strictly 429. retry_after_seconds may be absent or non-negative (0 is distinct from absent)."
             ),
-            injection_implemented=False,
-            note="Injection is not implemented in Phase 1.",
+            injection_implemented=True,
+            runtime_support=[
+                "NexaCart QA harness fault gateway (live): BEFORE_EFFECT; HTTP 429 with retry-after hint",
+                "In-process demonstration interceptor: BEFORE_EFFECT",
+            ],
+            note="Injected live by NexaCart and in demonstration runs.",
         ),
         FaultFamilyCatalogItem(
             family=FaultFamily.TOOL_UNAVAILABILITY,
@@ -110,8 +122,12 @@ def get_fault_catalog() -> FaultCatalogResponse:
             constraints_summary=(
                 "Requires unavailability mode, retryable flag, and optional bounded release_seconds."
             ),
-            injection_implemented=False,
-            note="Injection is not implemented in Phase 1.",
+            injection_implemented=True,
+            runtime_support=[
+                "NexaCart QA harness fault gateway (live): BEFORE_EFFECT; TOOL_UNAVAILABLE (503)",
+                "In-process demonstration interceptor: BEFORE_EFFECT",
+            ],
+            note="Injected live by NexaCart and in demonstration runs.",
         ),
         FaultFamilyCatalogItem(
             family=FaultFamily.MALFORMED_RESPONSE,
@@ -136,8 +152,12 @@ def get_fault_catalog() -> FaultCatalogResponse:
             constraints_summary=(
                 "Requires malformed mode and optional bounded raw fragment up to 2048 chars."
             ),
-            injection_implemented=False,
-            note="Injection is not implemented in Phase 1.",
+            injection_implemented=True,
+            runtime_support=[
+                "NexaCart QA harness fault gateway (live): BEFORE_EFFECT, AFTER_COMMIT; result truncated to half of its JSON text",
+                "In-process demonstration interceptor: BEFORE_EFFECT",
+            ],
+            note="Injected live by NexaCart (truncated JSON) and in demonstration runs.",
         ),
     ]
 
@@ -145,10 +165,11 @@ def get_fault_catalog() -> FaultCatalogResponse:
         schema_version="1.0.0",
         families=families,
         count=5,
-        injection_active=False,
+        injection_active=True,
         note=(
-            "All operational fault families are defined for static validation. "
-            "Runtime injection is not implemented in Phase 1."
+            "All five families are injected at run time: live by the NexaCart QA harness fault "
+            "gateway (Live NexaCart Runs) and in-process for demonstration runs. The combinations a "
+            "target supports come from its capability manifest; static validation never runs a target."
         ),
     )
 
@@ -493,25 +514,9 @@ def validate_fault_case(
             )
 
     # 8. Recovery Contract & Safety Constraints
-    if (
-        case.effect_phase == EffectPhase.AFTER_COMMIT
-        and manifest_tool
-        and manifest_tool.mutability == ToolMutability.SIDE_EFFECTING
-        and not recovery.allow_duplicate_side_effects
-        and recovery.max_retries is not None
-        and recovery.max_retries > 0
-        and not recovery.allow_retry_on_unverified_commit
-    ):
-        reasons.append(
-            ValidationReason(
-                code="UNSAFE_RETRY_ON_COMMITTED_EFFECT",
-                message=(
-                    "Retrying after an unverified committed side-effect without duplicate-effect "
-                    "permission is unsafe and constitutes a recovery violation."
-                ),
-                field_path="recovery_contract.allow_duplicate_side_effects",
-            )
-        )
+    # A contract that permits retries but forbids retrying an unverified commit is what the
+    # unsafe-retry rule evaluates at run time, so it is a valid case. It is only unjudgeable when
+    # the fixture cannot observe committed effects (rejected in step 6 above).
 
     # 9. Timeout & Duration Distinctions
     if case.fault_family == FaultFamily.TIMEOUT_DISCONNECTION:

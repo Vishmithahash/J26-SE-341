@@ -11,6 +11,8 @@ class EvidenceChannel(str, Enum):
     AUT_DATABASE_DIFF = "AUT_DATABASE_DIFF"
     HTTP_TRAFFIC = "HTTP_TRAFFIC"
     CONSOLE_OUTPUT = "CONSOLE_OUTPUT"
+    # In-memory QA fixture records; never evidence about the application under test.
+    SYNTHETIC_FIXTURE = "SYNTHETIC_FIXTURE"
 
 
 class CodeMapping(BaseModel):

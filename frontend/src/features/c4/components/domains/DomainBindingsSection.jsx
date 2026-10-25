@@ -45,6 +45,10 @@ export function DomainBindingsSection({
 
   // Find currently selected profile
   const currentProfile = domainProfiles.find((p) => p.domain_id === selectedDomainId) || domainProfiles[0];
+  // Backend readiness report: { is_ready, status, execution_mode, blockers }.
+  const readinessIsReady = Boolean(domainReadiness?.is_ready ?? domainReadiness?.ready);
+  const readinessMode = domainReadiness?.execution_mode || 'SIMULATED';
+  const readinessBlockers = domainReadiness?.blockers || domainReadiness?.live_blockers || [];
   const binding = selectedBinding || currentProfile?.binding;
 
   const handleLookup = (e) => {
@@ -62,7 +66,7 @@ export function DomainBindingsSection({
       artifactVersion: selectedArtifact.version,
       bindingId: currentProfile.binding.binding_id,
       bindingVersion: currentProfile.binding.version,
-      providerId: 'offline_mock',
+      providerId: 'shared_llm',
       reviewer: 'dev_reviewer',
     });
   };
@@ -89,7 +93,7 @@ export function DomainBindingsSection({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => onCheckReadiness(selectedDomainId)}
+              onClick={() => onCheckReadiness(selectedDomainId, currentProfile?.is_live_available ? 'LIVE' : 'SIMULATED')}
               disabled={isLoadingReadiness || !isProjectReady}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
             >
@@ -163,24 +167,29 @@ export function DomainBindingsSection({
               </span>
               <span
                 className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                  domainReadiness.ready
+                  readinessIsReady
                     ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
                     : 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'
                 }`}
               >
-                {domainReadiness.ready ? 'READY (Simulated)' : 'BLOCKED'}
+                {readinessIsReady ? `READY (${readinessMode === 'LIVE' ? 'Live' : 'Simulated'})` : 'BLOCKED'}
               </span>
             </div>
 
             <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
-              <div>Adapter: {domainReadiness.adapter_id || 'simulated-c4-app'} (Deterministic Simulation Engine)</div>
-              {domainReadiness.live_blockers && domainReadiness.live_blockers.length > 0 && (
+              <div>
+                Mode: {readinessMode}{' '}
+                {readinessMode === 'LIVE'
+                  ? `(adapter ${currentProfile?.adapter_id || 'live'})`
+                  : '(Deterministic Simulation Engine)'}
+              </div>
+              {readinessBlockers.length > 0 && (
                 <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 block mb-1">
                     Live AUT Execution Blockers:
                   </span>
                   <ul className="space-y-0.5 text-[11px] font-mono text-amber-800 dark:text-amber-300 pl-3 list-disc">
-                    {domainReadiness.live_blockers.map((blk, idx) => (
+                    {readinessBlockers.map((blk, idx) => (
                       <li key={idx}>{blk}</li>
                     ))}
                   </ul>

@@ -29,6 +29,9 @@ from app.components.c2_state_aware_workflow.validator.structural import (
     StructuralValidator,
 )
 from app.shared.llm.contracts import LLMGenerationRequest
+
+# Upper bound for the worker-thread wait; per-request timeouts are at most 300 s.
+MAX_LLM_WAIT_SECONDS = 330.0
 from app.shared.llm.service import LLMProviderService
 
 
@@ -193,7 +196,8 @@ class ModelAssistedEFSMBuilder(ModelAssistedProvider):
             response_schema=schema,
             temperature=0.0,
             max_tokens=2048,
-            timeout_seconds=12.0,
+            # qwen3.5's reasoning trace alone exceeded the 180 s budget; the refinement needs none
+            metadata={"ollama_think": False},
         )
 
         failure_reason: str | None = None
@@ -211,7 +215,8 @@ class ModelAssistedEFSMBuilder(ModelAssistedProvider):
                     future = pool.submit(
                         asyncio.run, self._async_invoke(service, gen_req)
                     )
-                    gen_res = future.result(timeout=15.0)
+                    # The request carries its own configured timeout; this only guards the worker thread.
+                    gen_res = future.result(timeout=MAX_LLM_WAIT_SECONDS)
             else:
                 gen_res = asyncio.run(self._async_invoke(service, gen_req))
 

@@ -5,8 +5,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
+from app.components.c3_robustness_recovery.api.live_router import (
+    router as live_router,
+)
 from app.components.c3_robustness_recovery.api.persistence_router import (
     router as persistence_router,
+)
+from app.components.c3_robustness_recovery.api.review_router import (
+    router as review_router,
 )
 from app.components.c3_robustness_recovery.contracts.evaluation import (
     RecoveryEvaluationRequest,
@@ -94,6 +100,8 @@ router = APIRouter(
 )
 
 router.include_router(persistence_router)
+router.include_router(live_router)
+router.include_router(review_router)
 
 
 @router.get(
@@ -103,7 +111,8 @@ router.include_router(persistence_router)
     summary="Get Operational Fault Families Catalogue",
     description=(
         "Returns the catalogue of the five operational fault families supported by "
-        "Component 3. All injection capabilities are currently marked as not implemented."
+        "Component 3 and where each is injected at run time (NexaCart QA harness fault gateway for "
+        "live runs, in-process interceptor for demonstration runs)."
     ),
 )
 def fault_catalog() -> FaultCatalogResponse:

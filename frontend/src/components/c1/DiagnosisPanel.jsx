@@ -32,6 +32,7 @@ export const DiagnosisPanel = ({
   caseVerdict,
   existingDiagnosis,
   onRequestCorrection,
+  correctionEnabled = true,
 }) => {
   const [diagnosis, setDiagnosis] = useState(existingDiagnosis || null);
   const [isLoading, setIsLoading] = useState(false);
@@ -175,6 +176,27 @@ export const DiagnosisPanel = ({
               <span>Engine: {diagnosis.explanation_version} ({diagnosis.explanation_method})</span>
               <span>Req Version: {diagnosis.requirement_version}</span>
             </div>
+            {/* Regenerate, e.g. to compare the deterministic and model-assisted presentations */}
+            <div className="pt-2 flex items-center justify-end gap-3">
+              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useModelAssisted}
+                  onChange={(e) => setUseModelAssisted(e.target.checked)}
+                  className="rounded text-indigo-600 focus:ring-indigo-500"
+                />
+                <span>Model-Assisted Presentation</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleRunDiagnosis}
+                disabled={isLoading}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-md border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 disabled:opacity-50"
+              >
+                <Sparkles className="w-3 h-3" />
+                {isLoading ? 'Diagnosing...' : 'Regenerate Diagnosis'}
+              </button>
+            </div>
           </div>
 
           {/* Detailed Check Explanations */}
@@ -218,6 +240,33 @@ export const DiagnosisPanel = ({
                     <div className="text-[11px] text-slate-600 dark:text-slate-400">
                       <strong>Violated Requirement:</strong> {exp.violated_requirement}
                     </div>
+
+                    {exp.requirements && exp.requirements.length > 0 && (
+                      <div className="text-[11px] text-slate-700 dark:text-slate-300 space-y-0.5">
+                        <strong>Relevant requirement{exp.requirements.length > 1 ? 's' : ''}:</strong>
+                        {exp.requirements.map((r) => (
+                          <div key={r.req_id} className="pl-2">
+                            <span className="font-mono">{r.req_id}</span>
+                            {r.version ? ` v${r.version}` : ''} — <strong>{r.title}</strong>
+                            {r.description ? `: ${r.description}` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {exp.expected_value_source && (
+                      <div className="text-[11px] text-slate-700 dark:text-slate-300">
+                        <strong>Expected value source:</strong>{' '}
+                        <span className="font-mono">{exp.expected_value_source}</span>
+                      </div>
+                    )}
+
+                    {exp.argument_provenance && (
+                      <div className="text-[11px] text-indigo-700 dark:text-indigo-300">
+                        <strong>Argument provenance ({exp.source_relationship_status}):</strong>{' '}
+                        {exp.argument_provenance}
+                      </div>
+                    )}
 
                     {exp.evidence_supported_findings && exp.evidence_supported_findings.length > 0 && (
                       <div className="text-[11px] text-emerald-700 dark:text-emerald-400">
@@ -284,7 +333,8 @@ export const DiagnosisPanel = ({
             </div>
           )}
 
-          {/* Correction Request Section */}
+          {/* Correction Request Section (code correction + sandbox: enabled per build) */}
+          {correctionEnabled && (
           <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
             <div>
               {isEligibleForCorrection ? (
@@ -312,6 +362,7 @@ export const DiagnosisPanel = ({
               </button>
             )}
           </div>
+          )}
         </div>
       )}
     </div>

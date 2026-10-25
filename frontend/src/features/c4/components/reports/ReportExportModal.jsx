@@ -9,6 +9,29 @@
 import React, { useState } from 'react';
 import { X, Download, CheckCircle2, Info } from 'lucide-react';
 
+// Live NexaCart provenance for the Markdown report (empty for simulated runs).
+function liveAgentRunMarkdown(reportData) {
+  const live = reportData?.evaluation_report_summary?.live_nexacart;
+  if (!live) return '';
+  const calls = (live.tool_calls || [])
+    .map(
+      (c) =>
+        `${c.call_index}. \`${c.tool_name}\` ${JSON.stringify(c.arguments)} — ${c.success ? 'ok' : `error: ${c.error}`}`
+    )
+    .join('\n');
+  return `## Live NexaCart Agent Run
+- **Agent Run ID:** ${live.nexacart_agent_run_id}
+- **Model:** ${live.agent_model} (${live.agent_status})
+- **Untrusted Payload Delivered:** ${live.injection_delivered ? 'yes' : 'no'}
+
+### Tool Calls
+${calls || 'The agent called no tools.'}
+
+### Final Answer
+${(live.final_answer || '').split('\n').map((line) => `> ${line}`).join('\n')}
+`;
+}
+
 export function ReportExportModal({ isOpen, onClose, runRecord, runReport }) {
   const [exportFormat, setExportFormat] = useState('json');
   const [downloadSuccess, setDownloadSuccess] = useState(false);
@@ -59,6 +82,7 @@ ${f.missing_evidence && f.missing_evidence.length > 0 ? `- **Observation Limitat
     : 'No individual rule findings recorded for this run.'
 }
 
+${liveAgentRunMarkdown(reportData)}
 ## Evidence Integrity Notice
 - **Publication Status:** Local Export Only (Shared Reporting Service is unconfigured or absent).
 - **Provenance Authority:** Authentic backend-evaluated evidence package.

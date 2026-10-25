@@ -64,6 +64,24 @@ export const PROVENANCE_CONFIG = {
     isLive: true,
     description: 'Real-time execution against live NexaCart application or external agent.',
   },
+  live_nexacart_agent: {
+    label: 'Live NexaCart Agent',
+    badge: 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+    isLive: true,
+    description: "NexaCart's own LLM agent ran the generated task on a fresh harness fixture.",
+  },
+  live_trace_mutation: {
+    label: 'Live-Trace Mutant',
+    badge: 'bg-fuchsia-100 dark:bg-fuchsia-950 text-fuchsia-700 dark:text-fuchsia-300 border-fuchsia-200 dark:border-fuchsia-800',
+    isLive: false,
+    description: 'Controlled mutant of a real NexaCart trace (oracle sensitivity), not an observed agent failure.',
+  },
+  not_executed: {
+    label: 'Not Executed',
+    badge: 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700',
+    isLive: false,
+    description: 'Model or test was not ready, so no agent run took place.',
+  },
   scripted_synthetic_demonstration: {
     label: 'Scripted Demonstration',
     badge: 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800',

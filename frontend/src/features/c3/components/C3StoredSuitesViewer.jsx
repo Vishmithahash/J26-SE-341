@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Archive,
   RotateCw,
@@ -16,6 +17,8 @@ import { useC3ProjectSuites } from '../hooks/useC3ProjectSuites.js';
 import { c3Api } from '../api.js';
 import { C3Badge } from './C3Badge.jsx';
 import { DEMONSTRATION_FROZEN_SUITE } from '../fixtures.js';
+
+const LIVE_NEXACART_ADAPTER_ID = 'nexacart_qa_harness';
 
 export const C3StoredSuitesViewer = ({ projectId }) => {
   const { suites, totalSuites, isLoading, error, isDbUnavailable, refresh } =
@@ -296,32 +299,40 @@ export const C3StoredSuitesViewer = ({ projectId }) => {
                       </div>
 
                       {/* Controlled Execution Action Bar */}
-                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                              Controlled Trial Runner
-                            </span>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold font-mono">
-                              DEMONSTRATION ADAPTER
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                            Launch native sequential trials with fresh isolated fixtures, occurrence-bounded injection, and full evidence retention.
-                          </p>
+                      {s.frozen_suite?.adapter_manifest?.adapter_id === LIVE_NEXACART_ADAPTER_ID ? (
+                        <div className="p-3 rounded-xl bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-900 text-[11px] text-teal-800 dark:text-teal-200">
+                          This suite was generated from the live NexaCart harness. Run it with NexaCart&apos;s own
+                          agent from the <span className="font-semibold">Live NexaCart Runs</span> tab; the
+                          demonstration runner only runs demonstration-adapter suites.
                         </div>
+                      ) : (
+                        <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                              <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                Controlled Trial Runner
+                              </span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold font-mono">
+                                DEMONSTRATION ADAPTER
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                              Launch native sequential trials with fresh isolated fixtures, occurrence-bounded injection, and full evidence retention.
+                            </p>
+                          </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleRunControlledTrials(s)}
-                          disabled={isRunningControlled || s.isDemoFixture || !projectId}
-                          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 transition-colors shrink-0 shadow-xs cursor-pointer"
-                        >
-                          <Play className={`w-3.5 h-3.5 ${isRunningControlled ? 'animate-spin' : ''}`} />
-                          <span>{isRunningControlled ? 'Running Trials...' : 'Run Controlled Trials'}</span>
-                        </button>
-                      </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRunControlledTrials(s)}
+                            disabled={isRunningControlled || s.isDemoFixture || !projectId}
+                            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 transition-colors shrink-0 shadow-xs cursor-pointer"
+                          >
+                            <Play className={`w-3.5 h-3.5 ${isRunningControlled ? 'animate-spin' : ''}`} />
+                            <span>{isRunningControlled ? 'Running Trials...' : 'Run Controlled Trials'}</span>
+                          </button>
+                        </div>
+                      )}
 
                       {/* Controlled Execution Error */}
                       {controlledRunError && (

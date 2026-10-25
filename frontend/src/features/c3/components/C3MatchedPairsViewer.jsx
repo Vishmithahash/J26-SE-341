@@ -37,6 +37,7 @@ export const C3MatchedPairsViewer = ({
   isDbUnavailable = false,
   onRefresh,
   onLoadOfflineDemo,
+  verdictsByPair = {},
 }) => {
   const [selectedPair, setSelectedPair] = useState(null);
   const [exposureFilter, setExposureFilter] = useState('ALL');
@@ -194,7 +195,8 @@ export const C3MatchedPairsViewer = ({
                   const cleanQual = pair.clean_qualification || evidence.clean_qualification || 'UNKNOWN';
                   const exposureStat = pair.exposure_status || evidence.exposure_status || 'EXPOSURE_UNKNOWN';
                   const comparability = evidence.fixture_comparability || 'EQUIVALENT_LOGICAL_STATE';
-                  const recoveryVerdict = evidence.recovery_verdict || pair.recovery_verdict || null;
+                  const recoveryVerdict =
+                    evidence.recovery_verdict || pair.recovery_verdict || verdictsByPair[pairId] || null;
 
                   return (
                     <tr
@@ -509,6 +511,44 @@ export const C3MatchedPairsViewer = ({
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Live target evidence (NexaCart agent runs) */}
+              {selectedPair.configuration_snapshot?.aut_trials && (
+                <div className="p-4 rounded-xl border border-teal-200 dark:border-teal-900/60 bg-teal-50/30 dark:bg-teal-950/20 space-y-3">
+                  <span className="font-bold text-teal-900 dark:text-teal-200 block text-xs">
+                    Live NexaCart Agent Runs ({selectedPair.configuration_snapshot.agent?.provider || 'agent'}{' '}
+                    {selectedPair.configuration_snapshot.agent?.model || ''})
+                  </span>
+                  {['clean', 'fault'].map((role) => {
+                    const t = selectedPair.configuration_snapshot.aut_trials[role] || {};
+                    return (
+                      <div key={role} className="space-y-1 text-[11px]">
+                        <div className="font-semibold text-slate-800 dark:text-slate-200 uppercase">
+                          {role} trial
+                        </div>
+                        <div className="font-mono text-slate-600 dark:text-slate-400 break-all">
+                          Agent run: {t.agent_run_id || '—'} | Fixture order: {t.fixture_order_number || '—'} |
+                          Outcome: {t.caller_outcome || '—'}
+                        </div>
+                        <div className="font-mono text-slate-600 dark:text-slate-400">
+                          Calls:{' '}
+                          {(t.tool_calls || [])
+                            .map((c) => `#${c.call_index} ${c.tool_name} ${c.success ? 'ok' : 'failed'}`)
+                            .join(' → ') || '—'}
+                        </div>
+                        {t.outcome_classification && (
+                          <div className="text-slate-500 dark:text-slate-400">
+                            Classification: {t.outcome_classification.reason}
+                          </div>
+                        )}
+                        <blockquote className="border-l-2 border-teal-400 pl-2 text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
+                          {t.final_answer || 'No final answer recorded.'}
+                        </blockquote>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 

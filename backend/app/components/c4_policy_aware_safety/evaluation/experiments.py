@@ -206,6 +206,10 @@ class ExperimentService:
             per_domain_metrics=per_domain,
             per_category_metrics=per_category,
             uncertainty_summary=aggregated_metrics,
+            evidence_basis="SIMULATED_FROM_REFERENCE_LABELS",
+            limitations=[
+                "Predictions are produced by an offline simulator from the dataset's reference labels: the full C4 strategy reproduces the label by construction and baselines/ablations follow scripted rules. These are not empirical results on agent runs; real evaluation needs reviewer-labelled live runs."
+            ],
             completed_at=datetime.now(UTC),
         )
 

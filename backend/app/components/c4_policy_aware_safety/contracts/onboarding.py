@@ -45,7 +45,10 @@ class OnboardingJobCreate(BaseModel):
     artifact_version: int = Field(default=1, ge=1, description="Version of the source policy artifact")
     binding_id: str = Field(..., description="Domain binding ID matching domain profile")
     binding_version: int = Field(default=1, ge=1, description="Domain binding version")
-    provider_id: str = Field(default="offline_mock", description="Extraction provider identifier")
+    provider_id: str = Field(
+        default="shared_llm",
+        description="Extraction provider ('shared_llm' = selected QA model, Ollama by default; 'offline_mock' for tests)",
+    )
     reviewer: str = Field(default="dev_reviewer", description="Reviewer identifier for acceptance boundary")
     is_synthetic_review: bool = Field(
         default=True, description="True if using simulated/development reviewer metadata"

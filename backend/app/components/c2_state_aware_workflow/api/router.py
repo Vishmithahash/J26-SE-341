@@ -94,6 +94,7 @@ from app.components.c2_state_aware_workflow.integrations.service import (
 )
 from app.components.c2_state_aware_workflow.persistence.models import (
     C2EvaluationResult,
+    C2ExecutionEvidence,
     C2Experiment,
     C2TestCase,
     C2TestSuite,
@@ -981,7 +982,45 @@ class DemonstrationRunRequest(BaseModel):
     target_order_id: int = 503
 
 
-def _format_evaluation_response(record: C2EvaluationResult) -> EvaluationResultContract:
+_PROVENANCE_SUMMARY_KEYS = (
+    "actual_execution_origin",
+    "is_live_execution",
+    "runner_id",
+    "application",
+    "agent_run_id",
+    "agent_provider",
+    "agent_model",
+    "agent_status",
+    "final_answer",
+    "parent_test_id",
+    "parent_run_id",
+    "mutation_type",
+    "derived_from_live_execution",
+)
+
+
+def _provenance_summary(db: Session | None, record: C2EvaluationResult) -> dict | None:
+    """Execution origin of the evaluated evidence (live agent, live-trace mutant, scripted)."""
+    if db is None or not record.execution_evidence_id:
+        return None
+    evidence = db.get(C2ExecutionEvidence, record.execution_evidence_id)
+    if evidence is None:
+        return None
+    prov = evidence.execution_provenance or {}
+    summary = {k: prov[k] for k in _PROVENANCE_SUMMARY_KEYS if k in prov}
+    if "actual_execution_origin" not in summary:
+        is_live = evidence.execution_mode == "live_agent" or prov.get("is_simulation") is False
+        summary["actual_execution_origin"] = (
+            "live_agent_run" if is_live else evidence.execution_mode
+        )
+        summary["is_live_execution"] = is_live
+    summary["execution_mode"] = evidence.execution_mode
+    return summary
+
+
+def _format_evaluation_response(
+    record: C2EvaluationResult, db: Session | None = None
+) -> EvaluationResultContract:
     cov_dict = record.coverage or {}
     summary_data = {
         k: v for k, v in cov_dict.items() if k in WorkflowCoverageSummary.model_fields
@@ -1021,6 +1060,7 @@ def _format_evaluation_response(record: C2EvaluationResult) -> EvaluationResultC
         detailed_coverage=det_cov,
         evaluator_timing_ms=record.evaluator_timing_ms,
         evaluated_at=record.created_at,
+        collector_provenance=_provenance_summary(db, record),
     )
 
 
@@ -1086,7 +1126,7 @@ def get_evaluation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Evaluation result '{evaluation_id}' not found for project '{project_id}'.",
         )
-    return _format_evaluation_response(record)
+    return _format_evaluation_response(record, db)
 
 
 # 21. List Evaluation Results
@@ -1108,7 +1148,7 @@ def list_evaluations(
         test_id=test_id,
         verdict=verdict,
     )
-    return [_format_evaluation_response(r) for r in records]
+    return [_format_evaluation_response(r, db) for r in records]
 
 
 # 22. Clearly Labelled Synthetic Demonstration Runner
@@ -1928,3 +1968,11 @@ def export_experiment_metrics(
         return Response(content=csv_content, media_type="text/csv")
 
     return summary
+
+
+# Live NexaCart execution (project-scoped; inherits authorize_c2_project_access)
+from app.components.c2_state_aware_workflow.api.live_router import (
+    router as live_router,
+)
+
+router.include_router(live_router)

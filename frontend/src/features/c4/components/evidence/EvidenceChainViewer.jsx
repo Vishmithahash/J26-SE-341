@@ -31,6 +31,33 @@ export function EvidenceChainViewer({ finding, runRecord = null }) {
   const observedEffect = finding?.observed_effect;
   const explanation = finding?.explanation;
 
+  // Step 1 comes from the instruction sources recorded in the run's evidence (live runs). Untrusted
+  // content is shown first because it is what an injection finding is about. Runs without recorded
+  // sources fall back to the rule-ID heuristic.
+  const recordedSources = runRecord?.evaluation_report_summary?.evidence?.instruction_sources || [];
+  const shownSource =
+    recordedSources.find((src) => src.trust_classification === 'UNTRUSTED_CONTENT') || recordedSources[0];
+  const isUntrustedIndirect = finding?.rule_id?.includes('INDIRECT');
+  const source = shownSource
+    ? {
+        label: shownSource.source_id,
+        trust: shownSource.trust_classification,
+        untrusted: shownSource.trust_classification === 'UNTRUSTED_CONTENT',
+        detail: shownSource.source_type,
+      }
+    : {
+        label: isUntrustedIndirect ? 'untrusted_document_source' : 'user_task_prompt',
+        trust: isUntrustedIndirect
+          ? TRUST_CLASSIFICATIONS.UNTRUSTED_INDIRECT_CONTENT
+          : TRUST_CLASSIFICATIONS.TRUSTED_GOVERNANCE,
+        untrusted: isUntrustedIndirect,
+        detail: null,
+      };
+  // Backend SourceReference fields are supporting_excerpt / start_char / end_char.
+  const excerpt = ruleRef?.supporting_excerpt ?? ruleRef?.excerpt;
+  const offsetStart = ruleRef?.start_char ?? ruleRef?.char_offset_start;
+  const offsetEnd = ruleRef?.end_char ?? ruleRef?.char_offset_end;
+
   return (
     <div className="space-y-6">
       {/* Evidence Chain Flow Header */}
@@ -48,24 +75,24 @@ export function EvidenceChainViewer({ finding, runRecord = null }) {
               <span>1. Instruction Source</span>
               <span className="w-2 h-2 rounded-full bg-indigo-500" />
             </div>
-            <p className="text-xs font-semibold text-slate-900 dark:text-slate-100 font-mono">
-              {finding?.rule_id?.includes('INDIRECT') ? 'untrusted_document_source' : 'user_task_prompt'}
+            <p className="text-xs font-semibold text-slate-900 dark:text-slate-100 font-mono break-all">
+              {source.label}
             </p>
             <div className="flex items-center gap-1">
               <span
                 className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                  finding?.rule_id?.includes('INDIRECT')
+                  source.untrusted
                     ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/70 dark:text-rose-300'
                     : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300'
                 }`}
               >
-                {finding?.rule_id?.includes('INDIRECT')
-                  ? TRUST_CLASSIFICATIONS.UNTRUSTED_INDIRECT_CONTENT
-                  : TRUST_CLASSIFICATIONS.TRUSTED_GOVERNANCE}
+                {source.trust}
               </span>
             </div>
             <span className="text-[10px] text-slate-400 block">
               Origin: {runRecord?.execution_mode || 'SIMULATED_TEST_RUN'}
+              {source.detail ? ` • ${source.detail}` : ''}
+              {recordedSources.length > 1 ? ` • ${recordedSources.length} recorded sources` : ''}
             </span>
           </div>
 
@@ -147,11 +174,11 @@ export function EvidenceChainViewer({ finding, runRecord = null }) {
             </span>
           </div>
           <div className="p-3 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 font-serif leading-relaxed whitespace-pre-wrap select-text">
-            "{ruleRef.excerpt}"
+            "{excerpt}"
           </div>
-          {ruleRef.char_offset_start !== undefined && (
+          {offsetStart !== undefined && offsetStart !== null && (
             <span className="text-[10px] text-slate-400 block font-mono">
-              Offset: chars [{ruleRef.char_offset_start}:{ruleRef.char_offset_end}]
+              Offset: chars [{offsetStart}:{offsetEnd}]
             </span>
           )}
         </div>

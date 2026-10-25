@@ -35,15 +35,28 @@ export function ExecutionModal({
   error,
   successMessage,
 }) {
+  // A frozen case is bound to the contract and domain binding it was generated for; run it against
+  // those, not against whatever contract/binding the workspace currently has selected.
+  const caseTarget = testCase
+    ? {
+        caseId: testCase.case_id,
+        caseVersion: testCase.case_version,
+        contractId: testCase.contract_id || acceptedContract?.contract_id,
+        contractVersion: testCase.contract_version || acceptedContract?.version,
+        bindingId: testCase.domain_id || domainBinding?.binding_id,
+        bindingVersion: testCase.binding_version || domainBinding?.version,
+      }
+    : null;
+
   useEffect(() => {
-    if (isOpen && testCase && domainBinding && acceptedContract) {
+    if (isOpen && testCase && (testCase.domain_id || domainBinding)) {
       onCheckReadiness({
         caseId: testCase.case_id,
         caseVersion: testCase.case_version,
-        contractId: acceptedContract.contract_id,
-        contractVersion: acceptedContract.version,
-        bindingId: domainBinding.binding_id,
-        bindingVersion: domainBinding.version,
+        contractId: testCase.contract_id || acceptedContract?.contract_id,
+        contractVersion: testCase.contract_version || acceptedContract?.version,
+        bindingId: testCase.domain_id || domainBinding?.binding_id,
+        bindingVersion: testCase.binding_version || domainBinding?.version,
         mode: executionMode,
         behavior: simulatedBehavior,
       });
@@ -65,12 +78,7 @@ export function ExecutionModal({
     if (isExecuting || !readinessReport?.is_ready) return;
 
     onExecuteCase({
-      caseId: testCase.case_id,
-      caseVersion: testCase.case_version,
-      contractId: acceptedContract?.contract_id || testCase.contract_id,
-      contractVersion: acceptedContract?.version || testCase.contract_version,
-      bindingId: domainBinding?.binding_id || testCase.domain_id,
-      bindingVersion: domainBinding?.version || testCase.binding_version,
+      ...caseTarget,
       mode: executionMode,
       behavior: simulatedBehavior,
       key: idempotencyKey,

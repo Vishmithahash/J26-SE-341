@@ -670,6 +670,81 @@ export const c2Api = {
   async freezeDataset(projectId, datasetId, version) {
     return this.freezeExperimentDataset(projectId, datasetId, version);
   },
+
+  // ---------------------------------------------------------------------------
+  // Live NexaCart execution (C2 individual workflow on the real application)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * NexaCart health, QA admin credentials and harness capabilities. Creates no data.
+   * GET /api/v1/c2/projects/{project_id}/live/nexacart/readiness
+   */
+  async getLiveReadiness(projectId) {
+    if (!projectId) throw new Error('projectId is required to check live NexaCart readiness');
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/live/nexacart/readiness`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * NexaCart reference workflows with their import, approval and suite status.
+   * GET /api/v1/c2/projects/{project_id}/live/nexacart/workflows
+   */
+  async listLiveWorkflows(projectId) {
+    if (!projectId) throw new Error('projectId is required to list NexaCart workflows');
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/live/nexacart/workflows`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Import a NexaCart reference EFSM as a DRAFT model (validate and approve it on the Models tab).
+   * POST /api/v1/c2/projects/{project_id}/live/nexacart/workflows/{model_id}/import
+   */
+  async importLiveWorkflow(projectId, modelId) {
+    if (!projectId || !modelId) throw new Error('projectId and modelId are required to import a workflow');
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/live/nexacart/workflows/${encodeURIComponent(
+        modelId
+      )}/import`,
+      { method: 'POST' }
+    );
+  },
+
+  /**
+   * Start a background live execution of generated cases (poll getLiveExecution).
+   * POST /api/v1/c2/projects/{project_id}/live/nexacart/executions
+   */
+  async startLiveExecution(projectId, { suiteId, testIds } = {}) {
+    if (!projectId || !suiteId) throw new Error('projectId and suiteId are required to start a live execution');
+    return request(`${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/live/nexacart/executions`, {
+      method: 'POST',
+      body: JSON.stringify({ suite_id: suiteId, test_ids: testIds && testIds.length ? testIds : null }),
+    });
+  },
+
+  /**
+   * GET /api/v1/c2/projects/{project_id}/live/nexacart/executions/{execution_id}
+   */
+  async getLiveExecution(projectId, executionId) {
+    if (!projectId || !executionId) throw new Error('projectId and executionId are required');
+    return request(
+      `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/live/nexacart/executions/${encodeURIComponent(
+        executionId
+      )}`,
+      { method: 'GET' }
+    );
+  },
+
+  /**
+   * GET /api/v1/c2/projects/{project_id}/live/nexacart/executions?suite_id=
+   */
+  async listLiveExecutions(projectId, suiteId = null) {
+    if (!projectId) throw new Error('projectId is required to list live executions');
+    let url = `${C2_BASE_PATH}/projects/${encodeURIComponent(projectId)}/live/nexacart/executions`;
+    if (suiteId) url += `?suite_id=${encodeURIComponent(suiteId)}`;
+    return request(url, { method: 'GET' });
+  },
 };
 
 

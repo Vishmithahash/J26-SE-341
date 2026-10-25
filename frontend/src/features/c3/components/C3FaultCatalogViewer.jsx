@@ -38,6 +38,9 @@ export const C3FaultCatalogViewer = () => {
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             Operational fault catalogue defining failure semantics, effect phases, and supported modes.
           </p>
+          {catalog?.note && (
+            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 max-w-3xl">{catalog.note}</p>
+          )}
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -148,21 +151,31 @@ export const C3FaultCatalogViewer = () => {
                     </div>
                   </div>
 
-                  <div className="pt-2 text-[11px] text-slate-400 flex items-center justify-between">
-                    <span>Runtime Support:</span>
-                    <span className={`font-semibold ${
-                      fam.injection_implemented === true
-                        ? 'text-emerald-600 dark:text-emerald-400'
-                        : fam.injection_implemented === false
-                        ? 'text-amber-600 dark:text-amber-400'
-                        : 'text-slate-500 dark:text-slate-400'
-                    }`}>
-                      {fam.injection_implemented === true
-                        ? 'Verified Runtime Support'
-                        : fam.injection_implemented === false
-                        ? 'Not connected'
-                        : 'Not checked'}
-                    </span>
+                  <div className="pt-2 text-[11px] text-slate-400 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span>Runtime Injection:</span>
+                      <span className={`font-semibold ${
+                        fam.injection_implemented === true
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : fam.injection_implemented === false
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-slate-500 dark:text-slate-400'
+                      }`}>
+                        {fam.injection_implemented === true
+                          ? 'Implemented'
+                          : fam.injection_implemented === false
+                          ? 'Not implemented'
+                          : 'Not checked'}
+                      </span>
+                    </div>
+                    {fam.runtime_support?.length > 0 && (
+                      <ul className="list-disc list-inside space-y-0.5 text-slate-500 dark:text-slate-400">
+                        {fam.runtime_support.map((s) => (
+                          <li key={s}>{s}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {fam.note && <p className="text-slate-500 dark:text-slate-400">{fam.note}</p>}
                   </div>
                 </div>
               </div>

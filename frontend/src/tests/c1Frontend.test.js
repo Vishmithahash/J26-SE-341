@@ -32,6 +32,7 @@ import {
   PROVENANCE_TYPES,
   PROVENANCE_METADATA,
   getExecutionProvenance,
+  liveAgentRunInfo,
 } from '../components/c1/provenanceUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -446,6 +447,115 @@ describe('Component 1 Tool-Call Correctness Frontend Tests (Phases 1, 2, and 3)'
 
       const provenance = getExecutionProvenance(replayedRun);
       assert.equal(provenance, PROVENANCE_TYPES.IMPORTED_REPLAY);
+    });
+
+    it('treats only non-terminal runs as in flight so a reloaded page resumes tracking them', async () => {
+      const { isRunInFlight } = await import('../components/c1/c1Api.js');
+      assert.equal(isRunInFlight('RUNNING'), true);
+      assert.equal(isRunInFlight('PENDING'), true);
+      assert.equal(isRunInFlight('COMPLETED'), false);
+      assert.equal(isRunInFlight('ABORTED'), false);
+      const src = fs.readFileSync(
+        path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../components/c1/RunDashboard.jsx'),
+        'utf-8'
+      );
+      assert.match(src, /pastRuns\.find\(\(r\) => isRunInFlight\(r\.status\)\)/);
+    });
+
+    it('uses the backend-corroborated provenance of a run summary in the run history', () => {
+      const listedRun = { run_id: 'run_1', status: 'COMPLETED', execution_provenance: 'LIVE_EXECUTION' };
+      assert.equal(getExecutionProvenance(listedRun), PROVENANCE_TYPES.LIVE_EXECUTION);
+      // a running live run with no recorded case yet stays unverified
+      assert.equal(
+        getExecutionProvenance({ run_id: 'run_2', status: 'RUNNING', execution_provenance: null }),
+        PROVENANCE_TYPES.UNKNOWN_ORIGIN
+      );
+    });
+
+    it('classifies a live NexaCart agent run as live only when NexaCart reported an agent run', () => {
+      const liveCase = {
+        execution_status: 'EXECUTED',
+        raw_trace: {
+          adapter: 'NEXACART_LIVE_AGENT_ADAPTER',
+          is_live_execution: true,
+          simulated: false,
+          agent_run_id: 'run-7f79',
+          agent_provider: 'OLLAMA',
+          agent_model: 'qwen3.5:4b',
+          agent_status: 'COMPLETED',
+          caller_outcome: 'SUCCESS',
+          nexacart_fixture_id: 'fx-1',
+          duration_ms: 51234,
+          final_answer: 'Your refund was processed.',
+        },
+      };
+      const run = {
+        effective_config: { agent_connection_ref: 'nexacart-harness://localhost:3100/api/v1/qa/harness' },
+        case_executions: [liveCase],
+      };
+      assert.equal(getExecutionProvenance(run), PROVENANCE_TYPES.LIVE_EXECUTION);
+
+      const errored = {
+        ...run,
+        case_executions: [
+          {
+            execution_status: 'EXECUTION_ERROR',
+            raw_trace: { adapter: 'NEXACART_LIVE_AGENT_ADAPTER', is_live_execution: true, error: 'BLOCKED' },
+          },
+        ],
+      };
+      assert.equal(getExecutionProvenance(errored), PROVENANCE_TYPES.UNKNOWN_ORIGIN);
+
+      // NexaCart started its agent, then the LLM provider timed out: still a live run.
+      const providerTimeout = {
+        ...run,
+        case_executions: [
+          {
+            execution_status: 'EXECUTION_ERROR',
+            raw_trace: {
+              adapter: 'NEXACART_LIVE_AGENT_ADAPTER',
+              is_live_execution: true,
+              agent_run_id: 'run-x',
+              agent_status: 'FAILED',
+            },
+          },
+        ],
+      };
+      assert.equal(getExecutionProvenance(providerTimeout), PROVENANCE_TYPES.LIVE_EXECUTION);
+
+      const info = liveAgentRunInfo(liveCase);
+      assert.equal(info.agentRunId, 'run-7f79');
+      assert.equal(info.model, 'qwen3.5:4b');
+      assert.equal(info.durationMs, 51234);
+      assert.equal(liveAgentRunInfo({ raw_trace: { adapter: 'SIMULATED_FAKE_ADAPTER' } }), null);
+    });
+
+    it('hides the defect lab and code correction unless the build enables them', () => {
+      assert.equal(typeof c1Api.getFeatures, 'function');
+      const page = fs.readFileSync(path.resolve(__dirname, '../pages/c1/ToolCallCorrectnessPage.jsx'), 'utf8');
+      assert.equal(page.includes('{codeCorrectionEnabled && ('), true);
+      assert.equal(page.includes('correctionEnabled={codeCorrectionEnabled}'), true);
+      const diag = fs.readFileSync(path.resolve(__dirname, '../components/c1/DiagnosisPanel.jsx'), 'utf8');
+      assert.equal(diag.includes('{correctionEnabled && ('), true);
+      assert.equal(diag.includes('exp.argument_provenance'), true);
+      assert.equal(diag.includes('exp.expected_value_source'), true);
+      // a diagnosis can be regenerated, e.g. with the model-assisted presentation
+      assert.equal(diag.includes('Regenerate Diagnosis'), true);
+      const report = fs.readFileSync(path.resolve(__dirname, '../components/c1/ReportingModal.jsx'), 'utf8');
+      assert.equal(report.includes('{correctionEnabled && <th className="py-2 px-3">Candidate Fix</th>}'), true);
+      const viewer = fs.readFileSync(path.resolve(__dirname, '../components/c1/ResultsViewer.jsx'), 'utf8');
+      assert.equal((viewer.match(/correctionEnabled=\{correctionEnabled\}/g) || []).length, 2);
+    });
+
+    it('exposes the live NexaCart configuration import and readiness calls', async () => {
+      assert.equal(typeof c1Api.importNexaCartLiveConfig, 'function');
+      assert.equal(typeof c1Api.getNexaCartLiveReadiness, 'function');
+      const editor = fs.readFileSync(
+        path.resolve(__dirname, '../components/c1/ConfigurationEditor.jsx'),
+        'utf8'
+      );
+      assert.equal(editor.includes('Import Live NexaCart'), true);
+      assert.equal(editor.includes('c1Api.importNexaCartLiveConfig(projectId)'), true);
     });
 
     it('falls back safely to UNKNOWN_ORIGIN for unverified, missing, or corrupt records', () => {

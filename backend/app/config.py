@@ -34,10 +34,40 @@ class Settings(BaseSettings):
     auth_jwt_audience: str | None = Field(default=None, alias="AUTH_JWT_AUDIENCE")
 
     # LLM Provider Configuration
+    # Hosted Gemini consumes credits; it is never called unless explicitly enabled.
+    gemini_enabled: bool = Field(default=False, alias="GEMINI_ENABLED")
     gemini_api_key: SecretStr = Field(default=SecretStr(""), alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-3.5-flash-lite", alias="GEMINI_MODEL")
     ollama_base_url: str = Field(default="http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="qwen3.5:4b", alias="OLLAMA_MODEL")
+    # Defaults applied when neither the caller nor the user's saved selection sets a limit.
+    llm_default_timeout_seconds: float = Field(
+        default=180.0, gt=0, le=900, alias="LLM_DEFAULT_TIMEOUT_SECONDS"
+    )
+    llm_default_max_tokens: int = Field(
+        default=2048, ge=16, le=32768, alias="LLM_DEFAULT_MAX_TOKENS"
+    )
+
+    # NexaCart application under test (external QA harness, see NexaCart src/qa/harness)
+    nexacart_base_url: str = Field(
+        default="http://localhost:3000/api/v1", alias="NEXACART_BASE_URL"
+    )
+    nexacart_qa_admin_email: str = Field(default="", alias="NEXACART_QA_ADMIN_EMAIL")
+    nexacart_qa_admin_password: SecretStr = Field(
+        default=SecretStr(""), alias="NEXACART_QA_ADMIN_PASSWORD"
+    )
+    # Must exceed NexaCart's AGENT_RUN_TIMEOUT_MS because one call waits for a whole agent run.
+    nexacart_agent_run_timeout_seconds: float = Field(
+        default=400.0, gt=0, le=1800, alias="NEXACART_AGENT_RUN_TIMEOUT_SECONDS"
+    )
+    # NexaCart backend root (read-only): C1 code-level diagnosis of NexaCart tool code and the
+    # source of disposable copies for candidate-correction verification. Empty = unavailable.
+    nexacart_source_root: str = Field(default="", alias="NEXACART_SOURCE_ROOT")
+    # C1 candidate code correction + sandbox verification (defect lab). Off by default: the
+    # progress-presentation-1 build shows the testing and explanation workflow only.
+    c1_code_correction_enabled: bool = Field(
+        default=False, alias="C1_CODE_CORRECTION_ENABLED"
+    )
 
     @field_validator("database_url", mode="after")
     @classmethod

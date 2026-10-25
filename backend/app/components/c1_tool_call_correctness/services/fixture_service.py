@@ -54,12 +54,12 @@ class SyntheticFixtureService:
 
         evidence_ref = EvidenceRef(
             evidence_id=f"ev_fix_{session_id[:8]}",
-            channel=EvidenceChannel.AUT_DATABASE_DIFF,
+            channel=EvidenceChannel.SYNTHETIC_FIXTURE,
             uri_or_pointer=f"sandbox://sessions/{session_id}/fixtures",
             checksum=checksum,
             captured_at=datetime.now(UTC),
             summary=(
-                f"Synthetic fixture sandbox initialized with {len(fixture_plan.synthetic_records)} records "
+                f"Synthetic in-memory fixture (not application data) initialized with {len(fixture_plan.synthetic_records)} records "
                 f"for capability '{fixture_plan.fixture_capability_ref}'."
             ),
         )

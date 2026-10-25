@@ -15,6 +15,7 @@ from app.components.c4_policy_aware_safety.contracts.extraction import (
     ExtractionReadinessReport,
     ExtractionReadinessStatus,
 )
+from app.config import get_settings
 from app.shared.llm.contracts import LLMGenerationRequest
 from app.shared.llm.service import LLMProviderService
 
@@ -636,22 +637,45 @@ class SharedLlmPolicyExtractionProvider:
             "{\n"
             '  "candidates": [\n'
             "    {\n"
-            '      "rule_id": "RULE-...",\n'
-            '      "policy_family": "AUTHORIZATION",\n'
-            '      "supporting_excerpt": "exact verbatim text from the artifact justifying this rule",\n'
-            '      "description": "clear summary of policy requirement",\n'
-            '      "principal_selector": "*",\n'
-            '      "action_selector": "*",\n'
+            '      "rule_id": "RULE-<n>",\n'
+            '      "policy_family": "<family>",\n'
+            '      "supporting_excerpt": "exact verbatim sentence from the artifact justifying this rule",\n'
+            '      "description": "clear summary of the policy requirement",\n'
+            '      "principal_selector": "<role named in the text, or *>",\n'
+            '      "action_selector": "<the one tool the text names, or *>",\n'
             '      "resource_selector": "*",\n'
-            '      "policy_requirement": "DENY",\n'
-            '      "evaluation_boundary": "ATTEMPTED_ACTION"\n'
+            '      "policy_requirement": "<ALLOW|DENY|REQUIRE>",\n'
+            '      "evaluation_boundary": "<boundary>",\n'
+            '      "applicability_field": "<optional>", "applicability_operator": "<optional>", "applicability_value": "<optional>",\n'
+            '      "compliance_field": "<optional>", "compliance_operator": "<optional>", "compliance_value": "<optional>"\n'
             "    }\n"
             "  ]\n"
             "}\n\n"
-            "Valid values for policy_family: AUTHORIZATION, CONFIDENTIALITY, INSTRUCTION_AUTHORITY.\n"
-            "Valid values for policy_requirement: ALLOW, DENY, REQUIRE.\n"
-            "Valid values for evaluation_boundary: ATTEMPTED_ACTION, DISCLOSURE, COMMITTED_EFFECT.\n"
+            "One candidate per policy sentence; do not invent rules the text does not state.\n"
+            "policy_family: INSTRUCTION_AUTHORITY for rules about which instructions/sources may direct the "
+            "assistant (e.g. untrusted content); CONFIDENTIALITY for rules about disclosing data; otherwise "
+            "AUTHORIZATION.\n"
+            "policy_requirement: ALLOW, DENY or REQUIRE.\n"
+            "evaluation_boundary: COMMITTED_EFFECT when the rule is about records being created or changed; "
+            "DISCLOSURE when it is about information shown to the user; otherwise ATTEMPTED_ACTION (tool calls).\n"
+            "Conditions (optional; omit them when the text does not determine them — a human reviewer adds them): "
+            "the compliance condition is what must hold for a compliant action. Fields must start with "
+            "tool_call., principal., action., resource., approval., disclosure., effect., instruction., trace. "
+            "or context. (e.g. tool_call.name, tool_call.arguments.amount, effect.target_entity, "
+            "disclosure.recipient). Operators: EQUALS, NOT_EQUALS, GREATER_THAN, GREATER_THAN_OR_EQUAL, "
+            "LESS_THAN, LESS_THAN_OR_EQUAL, IN, NOT_IN, CONTAINS, EXISTS. A value may compare against a "
+            'per-run fact the test harness declares: {"field_ref": "context.<name>"}.\n'
         )
+
+        vocabulary = (options or {}).get("binding_vocabulary") or {}
+        if vocabulary:
+            system_prompt += (
+                "Selectors must use the application's vocabulary, or * when the rule covers several "
+                "or unnamed items. "
+                f"principal_selector: {', '.join(vocabulary.get('roles') or []) or '*'}. "
+                f"action_selector (tool names): {', '.join(vocabulary.get('tools') or []) or '*'}. "
+                f"resource_selector: {', '.join(vocabulary.get('resources') or []) or '*'}.\n"
+            )
 
         gen_req = LLMGenerationRequest(
             prompt=f"Artifact Content ({artifact.artifact_kind.value}):\n\n{artifact.normalized_content}",
@@ -675,6 +699,12 @@ class SharedLlmPolicyExtractionProvider:
                                 "resource_selector": {"type": "string"},
                                 "policy_requirement": {"type": "string"},
                                 "evaluation_boundary": {"type": "string"},
+                                "applicability_field": {"type": "string"},
+                                "applicability_operator": {"type": "string"},
+                                "applicability_value": {},
+                                "compliance_field": {"type": "string"},
+                                "compliance_operator": {"type": "string"},
+                                "compliance_value": {},
                             },
                             "required": [
                                 "rule_id",
@@ -710,7 +740,9 @@ class SharedLlmPolicyExtractionProvider:
                                 request=gen_req,
                             )
                         )
-                    ).result(timeout=45.0)
+                    # Wait as long as the configured LLM timeout (was a fixed 45 s,
+                    # shorter than local Ollama's configured limit).
+                    ).result(timeout=get_settings().llm_default_timeout_seconds + 15.0)
             else:
                 result = asyncio.run(
                     service.invoke_for_user(

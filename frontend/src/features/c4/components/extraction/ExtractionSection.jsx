@@ -18,7 +18,7 @@ import {
 export function ExtractionSection({
   selectedArtifact,
   providerReadiness,
-  selectedProvider = 'offline_mock',
+  selectedProvider = 'shared_llm',
   onSelectProvider,
   onCheckReadiness,
   isLoadingReadiness,

@@ -183,9 +183,9 @@ async def test_gap_c_blocked_runs_cleanup_status_and_exposure_flag():
 def test_gap_d_flexible_target_prerequisites():
     """Gap D: Live prerequisites check genuine target facilities, keep live mode BLOCKED when absent."""
     is_avail, missing = check_real_target_prerequisites()
-    # In hermetic test environment, target endpoint and keys are absent
+    # The demonstration runner never runs live targets; it points to the live runner instead
     assert is_avail is False
-    assert any("NEXACART_AUT_URL" in m for m in missing)
+    assert any("NexaCartLiveSuiteRunner" in m for m in missing)
 
 
 # ---------------------------------------------------------------------------

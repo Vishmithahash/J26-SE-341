@@ -21,7 +21,7 @@ export function usePolicyRegression(projectId, isCurrentGeneration, getGeneratio
   const [baselineContractVersion, setBaselineContractVersion] = useState(1);
   const [candidateContractId, setCandidateContractId] = useState('');
   const [candidateContractVersion, setCandidateContractVersion] = useState(2);
-  const [bindingId, setBindingId] = useState('binding-ecommerce-c4');
+  const [bindingId, setBindingId] = useState('');
   const [bindingVersion, setBindingVersion] = useState(1);
   const [executionMode, setExecutionMode] = useState(REGRESSION_EXECUTION_MODES.FRESH_EXECUTION);
   const [idempotencyKey, setIdempotencyKey] = useState(generateUUID());
@@ -89,8 +89,8 @@ export function usePolicyRegression(projectId, isCurrentGeneration, getGeneratio
           baseline_contract_version: baseVer,
           candidate_contract_id: candId,
           candidate_contract_version: candVer,
-          binding_id: params.bindingId || bindingId,
-          binding_version: Number(params.bindingVersion ?? bindingVersion),
+          binding_id: params.bindingId || bindingId || null,
+          binding_version: params.bindingId || bindingId ? Number(params.bindingVersion ?? bindingVersion) : null,
         };
 
         const comparison = await c4Api.comparePolicyContracts(projectId, payload);
@@ -146,8 +146,9 @@ export function usePolicyRegression(projectId, isCurrentGeneration, getGeneratio
       try {
         const payload = {
           comparison_id: compId,
-          binding_id: targetBindingId || bindingId,
-          binding_version: Number(targetBindingVersion ?? bindingVersion),
+          // Empty: the backend uses the binding of the baseline contract's test cases.
+          binding_id: targetBindingId || bindingId || null,
+          binding_version: targetBindingId || bindingId ? Number(targetBindingVersion ?? bindingVersion) : null,
         };
 
         const plan = await c4Api.createRegressionPlan(projectId, payload);

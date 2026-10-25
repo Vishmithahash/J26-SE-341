@@ -30,7 +30,7 @@ export const C3ResearchView = () => {
         <div className="p-3 rounded-xl bg-purple-950/50 border border-purple-800 text-purple-200 text-xs flex items-start gap-2.5">
           <Info className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
           <div className="leading-relaxed">
-            <span className="font-bold">Evaluation Governance:</span> Recovery evaluations and research metrics reflect verified test evidence. Live execution is not connected in this standalone view; evaluations are imported from verified runs or coordinated through shared integration execution services.
+            <span className="font-bold">Evaluation Governance:</span> Recovery evaluations and research metrics reflect verified test evidence. Evaluations come from live NexaCart runs (Live NexaCart Runs tab), imported verified runs, or shared integration execution services. Baseline and ablation comparisons have not yet been run on live traces.
           </div>
         </div>
       </div>

@@ -284,4 +284,7 @@ class ExperimentReportRecord(BaseModel):
     per_domain_metrics: dict[str, Any] = Field(default_factory=dict)
     per_category_metrics: dict[str, Any] = Field(default_factory=dict)
     uncertainty_summary: dict[str, Any] = Field(default_factory=dict)
+    # Where the predictions come from; SIMULATED results must not be reported as empirical findings.
+    evidence_basis: str = "SIMULATED_FROM_REFERENCE_LABELS"
+    limitations: list[str] = Field(default_factory=list)
     completed_at: datetime | None = None

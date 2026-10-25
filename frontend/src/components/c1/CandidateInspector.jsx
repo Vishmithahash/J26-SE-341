@@ -301,6 +301,10 @@ export const CandidateInspector = ({
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
                         <CheckCircle className="w-3 h-3" /> Valid
                       </span>
+                    ) : candidate.is_valid && /quota/i.test(candidate.rejection_reason || '') ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                        <CheckCircle className="w-3 h-3" /> Valid, not selected
+                      </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-full bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800">
                         <XCircle className="w-3 h-3" /> Rejected
@@ -401,7 +405,7 @@ export const CandidateInspector = ({
                                   </div>
                                   {spec.argument_constraints.map((ac, acIdx) => (
                                     <div key={acIdx} className="text-[11px] text-slate-600 dark:text-slate-400 font-mono">
-                                      • <strong className="text-slate-800 dark:text-slate-200">{ac.field_path}</strong>: {ac.presence_requirement}
+                                      • <strong className="text-slate-800 dark:text-slate-200">{ac.argument_name || ac.field_path}</strong>: {ac.presence || ac.presence_requirement}
                                       {ac.operator && (
                                         <span> | {ac.operator} ({JSON.stringify(ac.expected_value)})</span>
                                       )}
@@ -512,6 +516,7 @@ export const CandidateInspector = ({
                   type="text"
                   required
                   value={suiteId}
+                  onFocus={(e) => e.target.select()}
                   onChange={(e) => setSuiteId(e.target.value)}
                   placeholder="e.g. suite_c1_refunds_v1"
                   className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-mono"
@@ -526,6 +531,7 @@ export const CandidateInspector = ({
                   type="text"
                   required
                   value={suiteName}
+                  onFocus={(e) => e.target.select()}
                   onChange={(e) => setSuiteName(e.target.value)}
                   placeholder="e.g. Tool Call Correctness Accepted Suite"
                   className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"

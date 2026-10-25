@@ -106,11 +106,15 @@ export function useDomainBindings(projectId, isCurrentGeneration, getGeneration)
     }
   }, [projectId, loadDomainData]);
 
+  // Live-capable domains (e.g. NexaCart) are checked against the real target, others in simulation.
+  const selectedIsLive = Boolean(
+    domainProfiles.find((p) => p.domain_id === selectedDomainId)?.is_live_available
+  );
   useEffect(() => {
     if (projectId && selectedDomainId) {
-      checkReadiness(selectedDomainId);
+      checkReadiness(selectedDomainId, selectedIsLive ? 'LIVE' : 'SIMULATED');
     }
-  }, [projectId, selectedDomainId, checkReadiness]);
+  }, [projectId, selectedDomainId, selectedIsLive, checkReadiness]);
 
   // Register a new version of a domain binding
   const registerBinding = useCallback(
@@ -185,7 +189,7 @@ export function useDomainBindings(projectId, isCurrentGeneration, getGeneration)
           artifact_version: artifactVersion,
           binding_id: bindingId,
           binding_version: bindingVersion,
-          provider_id: providerId || 'offline_mock',
+          provider_id: providerId || 'shared_llm',
           reviewer: reviewer || 'dev_reviewer',
           is_synthetic_review: false,
         };

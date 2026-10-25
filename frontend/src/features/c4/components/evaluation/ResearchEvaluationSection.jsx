@@ -214,7 +214,7 @@ export function ResearchEvaluationSection({ evaluation, projectId }) {
                 disabled={isRegisteringDataset || !projectId}
                 className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs transition-colors shrink-0 disabled:opacity-50"
               >
-                {isRegisteringDataset ? 'Registering...' : 'Register Split Dataset'}
+                {isRegisteringDataset ? 'Registering...' : 'Register Synthetic Demo Dataset'}
               </button>
             </div>
 
@@ -458,8 +458,9 @@ export function ResearchEvaluationSection({ evaluation, projectId }) {
                 Experiment ID: {activeExperiment.experiment_id}
               </span>
             )}
-            <p className="text-[11px] text-slate-400 italic">
-              Strategy names identify evaluation logic; backend executions use configured local adapters.
+            <p className="text-[11px] text-amber-600 dark:text-amber-400 italic">
+              Simulated: experiments derive predictions from the dataset's reference labels (no agent runs are
+              evaluated). Use them to demonstrate the evaluation pipeline, not as empirical results.
             </p>
           </div>
           <button
@@ -483,6 +484,17 @@ export function ResearchEvaluationSection({ evaluation, projectId }) {
       </div>
 
       {/* Step 4: Consolidated Metrics Dashboard across all 6 proposal categories */}
+      {experimentReport && experimentReport.evidence_basis !== 'EMPIRICAL' && (
+        <div
+          role="note"
+          className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300"
+        >
+          <span className="font-bold">Evidence basis: {experimentReport.evidence_basis || 'SIMULATED'}. </span>
+          {(experimentReport.limitations || []).join(' ') ||
+            'These metrics are simulated and must not be reported as empirical results.'}
+        </div>
+      )}
+
       {experimentReport && (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm space-y-6 animate-in fade-in">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-4">

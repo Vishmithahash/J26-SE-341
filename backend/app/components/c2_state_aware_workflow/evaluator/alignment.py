@@ -42,6 +42,18 @@ from app.components.c2_state_aware_workflow.predicates.evaluator import (
 from app.components.c2_state_aware_workflow.predicates.tristate import TriState
 
 
+def _snapshot_value(snapshot: dict[str, Any], path: str) -> Any:
+    """Value of a flat key, or of a dotted path in a nested snapshot (None when absent)."""
+    if path in snapshot:
+        return snapshot[path]
+    current: Any = snapshot
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
 class FeasibleConfiguration(BaseModel):
     """A feasible active configuration during trace-to-EFSM alignment."""
 
@@ -483,6 +495,21 @@ class TraceToEFSMAlignmentEngine:
                             violation_type = ViolationType.MISSING_EFFECT
                             reason_msg = f"Missing expected state effect for '{event.tool_name}' from state '{s}'."
 
+                # Entity continuity on applications keyed by order number (e.g. NexaCart):
+                # the call targeted a different order than the fixture's order.
+                expected_number = fixture_ctx.get("orderNumber")
+                actual_number = event.arguments.get("orderNumber")
+                if (
+                    expected_number is not None
+                    and actual_number is not None
+                    and actual_number != expected_number
+                ):
+                    violation_type = ViolationType.ENTITY_MISMATCH
+                    reason_msg = (
+                        f"Entity continuity violation: '{event.tool_name}' targeted order "
+                        f"'{actual_number}', but the workflow's order is '{expected_number}'."
+                    )
+
                 first_div = FirstDivergenceDetail(
                     event_index=event.event_index,
                     event_id=event.event_id,
@@ -565,8 +592,8 @@ class TraceToEFSMAlignmentEngine:
         initial_state_snapshot = first_obs.before_state if first_obs else {}
 
         for pf in self.model.protected_fields:
-            init_val = initial_state_snapshot.get(pf.field_path)
-            final_val = final_state_snapshot.get(pf.field_path)
+            init_val = _snapshot_value(initial_state_snapshot, pf.field_path)
+            final_val = _snapshot_value(final_state_snapshot, pf.field_path)
             if init_val is not None and final_val != init_val:
                 violation = ViolationDetail(
                     violation_type=ViolationType.PROTECTED_FIELD_MUTATED,

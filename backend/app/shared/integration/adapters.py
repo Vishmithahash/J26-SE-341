@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -90,6 +90,9 @@ class ExecutionTrace(BaseModel):
     injection_details: dict[str, Any] | None = None
     cleanup_successful: bool = True
     cleanup_reusable: bool = True
+    # Live targets only: real identifiers and observations reported by the application under test
+    # (agent run ID, fixture context, intermediate snapshots, fault receipts). None for test doubles.
+    aut_metadata: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -178,38 +181,106 @@ class BaseTargetAdapter(ABC):
 
 
 class LiveNexaCartTargetAdapter(BaseTargetAdapter):
-    """Authoritative adapter for live NexaCart target application.
+    """Live adapter for NexaCart through its external QA harness (``/api/v1/qa/harness``).
 
-    Reports honest readiness: since live NexaCart external service endpoints are not running,
-    it returns BLOCKED. Live mode must NEVER fall back silently to simulation.
+    Every fixture, tool call, snapshot and fault receipt comes from NexaCart itself.
+    Readiness is BLOCKED (never simulated) when NexaCart, the harness or credentials are missing.
     """
 
-    def __init__(self, base_url: str | None = None):
-        self.base_url = base_url or "http://localhost:8080"
+    # C3 fault families -> NexaCart fault gateway families
+    FAULT_FAMILY_MAP: ClassVar[dict[str, str]] = {
+        "TIMEOUT_DISCONNECTION": "TIMEOUT_DISCONNECTION",
+        "TRANSIENT_5XX": "TRANSIENT_5XX",
+        "RATE_LIMIT_429": "RATE_LIMIT_429",
+        "TOOL_UNAVAILABILITY": "TOOL_UNAVAILABLE",
+        "TOOL_UNAVAILABLE": "TOOL_UNAVAILABLE",
+        "MALFORMED_RESPONSE": "MALFORMED_OUTPUT",
+        "MALFORMED_OUTPUT": "MALFORMED_OUTPUT",
+    }
+
+    def __init__(self, client: Any | None = None):
+        if client is None:
+            from app.shared.aut.nexacart import get_nexacart_client
+
+            client = get_nexacart_client()
+        self.client = client
+        self.base_url = getattr(client, "base_url", None)
+        self._fixtures: dict[str, dict[str, Any]] = {}
+        self._tool_side_effects: dict[str, bool] = {}
 
     def check_readiness(self) -> tuple[TargetReadinessStatus, list[str]]:
-        """Check live external NexaCart endpoints.
-
-        Does not invent endpoints or assume an open port proves execution capability.
-        """
-        # Live NexaCart external microservice is not hosted in this monolith repo
-        return (
-            TargetReadinessStatus.BLOCKED,
-            [
-                (
-                    f"Live target service at '{self.base_url}' is unreachable or not configured. "
-                    "No live external NexaCart reset/agent/fault-hook endpoints are active. "
-                    "External readiness is BLOCKED. Simulation fallback is rejected in LIVE_AUT mode."
-                )
-            ],
-        )
+        ready, reasons = self.client.check_readiness()
+        if not ready:
+            return TargetReadinessStatus.BLOCKED, [
+                f"Live NexaCart target is not ready: {r}" for r in reasons
+            ]
+        return TargetReadinessStatus.READY, []
 
     def prepare_fixture(
         self, namespace: str, seed_data: dict[str, Any] | None = None
     ) -> StateSnapshot:
-        raise RuntimeError(
-            "Cannot prepare live fixture: Live NexaCart service is BLOCKED."
+        seed = seed_data or {}
+        created = self.client.create_fixture(seed.get("nexacart_fixture") or {})
+        self._fixtures[namespace] = {
+            "fixture_id": created["fixtureId"],
+            "context": created.get("context") or {},
+            "untrusted_content": seed.get("untrusted_content"),
+        }
+        state = created.get("snapshot") or {}
+        return StateSnapshot(
+            snapshot_id=f"nxc-fixture-{created['fixtureId']}",
+            time_scope="initial",
+            state=state,
+            fingerprint=compute_snapshot_fingerprint(state),
         )
+
+    def prepared_fixture(self, namespace: str) -> dict[str, Any] | None:
+        """NexaCart fixture id and context of a prepared namespace (copy), or None."""
+        fixture = self._fixtures.get(namespace)
+        return copy.deepcopy(fixture) if fixture is not None else None
+
+    def set_untrusted_payload(self, namespace: str, payload: str) -> None:
+        """Record the payload text as NexaCart rendered it (used to confirm delivery)."""
+        untrusted = self._fixtures[namespace].get("untrusted_content")
+        if untrusted is not None:
+            untrusted["payload"] = payload
+
+    def _load_tool_side_effects(self) -> None:
+        if self._tool_side_effects:
+            return
+        capabilities = self.client.get_capabilities()
+        self._tool_side_effects = {
+            t["name"]: bool(t.get("isStateChanging"))
+            for t in capabilities.get("tools", [])
+        }
+
+    def _fault_profile(self, hook: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not hook:
+            return None
+        family = self.FAULT_FAMILY_MAP.get(str(hook.get("fault_family", "")).upper())
+        if family is None:
+            raise ValueError(
+                f"Fault family '{hook.get('fault_family')}' is not supported by the NexaCart fault gateway."
+            )
+        phase_hint = f"{hook.get('effect_phase', '')} {hook.get('interception_hook', '')}".upper()
+        if "PARTIAL" in phase_hint:
+            raise ValueError(
+                "PARTIAL_EFFECT faults are not supported by the NexaCart fault gateway."
+            )
+        effect_phase = "AFTER_COMMIT" if "AFTER" in phase_hint else "BEFORE_EFFECT"
+        if not hook.get("target_tool"):
+            raise ValueError("Fault injection requires a target tool.")
+        profile: dict[str, Any] = {
+            "targetTool": hook["target_tool"],
+            "occurrence": int(hook.get("occurrence") or 1),
+            "faultFamily": family,
+            "effectPhase": effect_phase,
+        }
+        if hook.get("max_faults") is not None:
+            profile["maxFaults"] = int(hook["max_faults"])
+        if hook.get("retry_after_seconds") is not None:
+            profile["retryAfterSeconds"] = int(hook["retry_after_seconds"])
+        return profile
 
     def execute_session(
         self,
@@ -223,12 +294,190 @@ class LiveNexaCartTargetAdapter(BaseTargetAdapter):
         deadline_monotonic: float | None = None,
         check_cancellation: Callable[[], bool] | None = None,
     ) -> ExecutionTrace:
-        raise RuntimeError(
-            "Cannot execute session in LIVE_AUT mode: target service is BLOCKED."
+        """Run NexaCart's own agent once. NexaCart enforces its own tool allowlist and budgets."""
+        fixture = self._fixtures.get(namespace)
+        if fixture is None:
+            raise RuntimeError(
+                f"No live NexaCart fixture prepared for namespace '{namespace}'."
+            )
+        if not task_prompt:
+            raise ValueError("Live execution requires a pinned task prompt.")
+        self._load_tool_side_effects()
+
+        result = self.client.run_agent(
+            fixture["fixture_id"],
+            task_prompt,
+            qa_run_id=f"{trial_role.lower()}-{namespace}",
+            fault_profile=self._fault_profile(fault_injection_hook),
+        )
+        agent_run = result.get("agentRun") or {}
+        tool_calls = agent_run.get("toolCalls") or []
+
+        reported_keys = {
+            str(seq): key for seq, key in (result.get("idempotencyKeys") or {}).items()
+        }
+        tool_events: list[RawToolEvent] = []
+        for call in tool_calls:
+            succeeded = call.get("status") == "SUCCEEDED"
+            output = call.get("result")
+            if output is not None and not isinstance(output, dict):
+                output = {"value": output}
+            tool_events.append(
+                RawToolEvent(
+                    event_id=f"nxc-call-{call['id']}",
+                    call_index=int(call["sequenceNumber"]),
+                    tool_name=call["toolName"],
+                    arguments=sanitize_payload(call.get("arguments") or {}),
+                    output=sanitize_payload(output) if output is not None else None,
+                    error=None
+                    if succeeded
+                    else (call.get("errorMessage") or call.get("errorCode")),
+                    success=succeeded,
+                    latency_ms=float(call.get("durationMs") or 0),
+                    side_effect_occurred=succeeded
+                    and self._tool_side_effects.get(call["toolName"], False),
+                    # Key NexaCart actually passed to the tool (reported by the harness);
+                    # None when not reported, so idempotency facts stay UNKNOWN.
+                    idempotency_key=reported_keys.get(str(call["sequenceNumber"])),
+                    timestamp_utc=call.get("completedAt") or call.get("createdAt"),
+                )
+            )
+
+        before = result.get("beforeSnapshot") or {}
+        after = result.get("afterSnapshot")
+        qa_run_id = result.get("qaRunId", namespace)
+        initial_state = StateSnapshot(
+            snapshot_id=f"nxc-before-{qa_run_id}",
+            time_scope="initial",
+            state=before,
+            fingerprint=compute_snapshot_fingerprint(before),
+        )
+        final_state = StateSnapshot(
+            snapshot_id=f"nxc-after-{qa_run_id}",
+            time_scope="post_recovery",
+            state=after or {},
+            fingerprint=compute_snapshot_fingerprint(after or {}),
         )
 
+        receipts = result.get("faultReceipts") or []
+        fault_details = None
+        if receipts:
+            first = receipts[0]
+            fault_details = {
+                "target_tool": first["targetTool"],
+                "injected_at_call_index": first["sequenceNumber"],
+                "occurrence": first["occurrence"],
+                "fault_family": first["faultFamily"],
+                "effect_phase": first["effectPhase"],
+                "tool_executed": first["toolExecuted"],
+                "receipts": receipts,
+            }
+        elif fault_injection_hook:
+            fault_details = {
+                "target_tool": fault_injection_hook.get("target_tool"),
+                "status": "NOT_TRIGGERED",
+                "reason": "The agent never reached the targeted tool occurrence.",
+            }
+
+        injection_delivered, injection_details = self._injection_evidence(
+            fixture.get("untrusted_content"), prompt_injection_payload, tool_events
+        )
+
+        status = agent_run.get("status")
+        agent_error = result.get("agentError")
+        caller_outcome = (
+            "SUCCESS"
+            if status == "COMPLETED"
+            else (agent_error or {}).get("errorCode")
+            or agent_run.get("errorCode")
+            or str(status)
+        )
+        is_complete = (
+            bool(agent_run)
+            and status != "RUNNING"
+            and after is not None
+            and not result.get("observationErrors")
+        )
+
+        return ExecutionTrace(
+            trace_id=f"trace-nxc-{agent_run.get('id') or qa_run_id}",
+            trial_role=trial_role,
+            target_mode=TargetMode.LIVE_AUT,
+            is_simulation=False,
+            caller_outcome=caller_outcome,
+            tool_events=tool_events,
+            initial_state=initial_state,
+            final_state=final_state,
+            is_complete=is_complete,
+            fault_injected=bool(receipts),
+            fault_details=fault_details,
+            injection_delivered=injection_delivered,
+            injection_details=injection_details,
+            aut_metadata={
+                "application": "NexaCart",
+                "agent_run_id": agent_run.get("id"),
+                "agent_status": status,
+                "agent_provider": agent_run.get("provider"),
+                "agent_model": agent_run.get("model"),
+                # LLM usage under neutral key names: evidence sanitising redacts any key containing
+                # "token", which would hide promptTokens/totalTokens.
+                "agent_llm_usage": {
+                    "prompt": (agent_run.get("usage") or {}).get("promptTokens"),
+                    "completion": (agent_run.get("usage") or {}).get(
+                        "completionTokens"
+                    ),
+                    "total": (agent_run.get("usage") or {}).get("totalTokens"),
+                }
+                if agent_run.get("usage")
+                else None,
+                "final_answer": agent_run.get("finalAnswer"),
+                "agent_error": agent_error,
+                "qa_run_id": qa_run_id,
+                "fixture_id": fixture["fixture_id"],
+                "fixture_context": fixture["context"],
+                "fixture_records": {"fixture": fixture["context"]},
+                "intermediate_snapshots": result.get("intermediateSnapshots") or [],
+                "observation_errors": result.get("observationErrors") or [],
+                "duration_ms": result.get("durationMs"),
+            },
+        )
+
+    @staticmethod
+    def _injection_evidence(
+        untrusted_content: dict[str, Any] | None,
+        prompt_injection_payload: str | None,
+        tool_events: list[RawToolEvent],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """An injection counts as delivered only when its text is observed in a real tool output."""
+        payload = (untrusted_content or {}).get("payload") or prompt_injection_payload
+        if not payload:
+            return False, None
+        carrying = [
+            ev.event_id
+            for ev in tool_events
+            if ev.output is not None and payload in json.dumps(ev.output, default=str)
+        ]
+        details: dict[str, Any] = {
+            "channel": (untrusted_content or {}).get("channel", "unseeded"),
+            "payload": payload,
+            "delivered_via_event_ids": carrying,
+        }
+        if not untrusted_content:
+            details["reason"] = (
+                "Payload was not seeded into a NexaCart untrusted channel; it cannot reach the agent."
+            )
+        return bool(carrying), details
+
     def cleanup_fixture(self, namespace: str) -> tuple[bool, bool]:
-        return False, False
+        fixture = self._fixtures.pop(namespace, None)
+        if fixture is None:
+            return True, False
+        try:
+            self.client.release_fixture(fixture["fixture_id"])
+        except Exception:  # noqa: BLE001
+            return False, False
+        # Records stay in NexaCart as evidence and the state was mutated: never reusable.
+        return True, False
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +492,23 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
     Executes domain operations with strict fixture partitioning, supports C3 fault hooks
     and C4 prompt-injection delivery, and records raw traces.
     """
+
+    # The order record this double serves from get_order_details; reported as the double's own
+    # fixture evidence so C1 source checks use what the double actually returned.
+    DOUBLE_FIXTURE_RECORDS: ClassVar[dict[str, Any]] = {
+        "fixture_order_9821": {
+            "order_id": "ORD-9821",
+            "customer_id": "CUST-8831",
+            "status": "DELIVERED",
+            "items": {
+                "ITEM-44": {
+                    "name": "Wireless Mouse",
+                    "price": 35.00,
+                    "refundable": True,
+                }
+            },
+        }
+    }
 
     def __init__(self, failure_on_cleanup: bool = False):
         self.failure_on_cleanup = failure_on_cleanup
@@ -668,6 +934,10 @@ class ControlledTestTargetAdapter(BaseTargetAdapter):
             injection_details=injection_details,
             cleanup_successful=True,
             cleanup_reusable=True,
+            aut_metadata={
+                "application": "controlled_test_double",
+                "fixture_records": copy.deepcopy(self.DOUBLE_FIXTURE_RECORDS),
+            },
         )
 
     def cleanup_fixture(self, namespace: str) -> tuple[bool, bool]:

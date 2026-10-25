@@ -109,6 +109,13 @@ class ExpectedToolCallSpec(BaseModel):
         default_factory=list,
         description="Requirement identifiers justifying this expectation",
     )
+    evaluate_all_invocations: bool = Field(
+        default=False,
+        description=(
+            "Check the argument constraints on every invocation of the tool instead of the best "
+            "matching one (e.g. no call may use an invented identifier)."
+        ),
+    )
 
 
 class GeneratedCandidateCase(BaseModel):

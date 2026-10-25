@@ -439,7 +439,7 @@ export function PolicyRegressionSection({ regression, contracts }) {
                   >
                     <span className="font-bold block mb-0.5">Fresh Agent Execution</span>
                     <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                      Invokes simulated adapter for new or regenerated cases.
+                      Runs new or regenerated cases on the target: the live NexaCart agent for its binding, the simulator otherwise.
                     </span>
                   </button>
 

@@ -232,7 +232,9 @@ async def probe_endpoint(url: str | None) -> EndpointCheckOutcome:
     }
 
     if scheme == "http" and verified_ip:
-        probe_url = f"http://{verified_ip}:{port}{path_and_query}"
+        # IPv6 literals (e.g. ::1 for localhost on Windows) must be bracketed in URLs.
+        ip_host = f"[{verified_ip}]" if ":" in verified_ip else verified_ip
+        probe_url = f"http://{ip_host}:{port}{path_and_query}"
         host_header = f"{hostname}:{port}" if port != 80 else hostname
         headers["Host"] = host_header
     else:

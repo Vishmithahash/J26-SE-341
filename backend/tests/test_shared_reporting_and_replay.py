@@ -942,3 +942,73 @@ def _set_sqlite_fk(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON;")
     cursor.close()
+
+
+def test_not_exercised_policy_rules_make_report_inconclusive_not_failed(
+    db_session: Session, test_project: Project, test_user: User
+):
+    """C4 NOT_EXERCISED is neither a defect nor a pass: overall INCONCLUSIVE, never FAILED/PASSED."""
+    seeded = _seed_valid_components(db_session, test_project.project_id, test_user.id)
+    plan = IntegrationService(db_session).create_run_plan(
+        project=test_project,
+        user=test_user,
+        data=IntegrationRunPlanCreateRequest(
+            name="Unexercised policy rules",
+            c1_reference=C1ConfigReference(
+                project_id=test_project.project_id,
+                config_id=seeded["c1"].id,
+                config_version=seeded["c1"].version,
+            ),
+            c4_reference=C4PolicyReference(
+                project_id=test_project.project_id,
+                contract_id=seeded["c4"].contract_id,
+                contract_version=1,
+            ),
+        ),
+    )
+    db_session.add(
+        IntegrationExecutionModel(
+            execution_id="exec-not-exercised-01",
+            integration_run_id=plan.integration_run_id,
+            project_id=test_project.project_id,
+            lifecycle_status="COMPLETED",
+            target_mode="LIVE_AUT",
+            plan_digest=plan.plan_digest,
+            evaluations={
+                "C1": {
+                    "component": "C1",
+                    "verdict": "PASS",
+                    "checks_count": 1,
+                    "passed_checks": 1,
+                    "checks": [
+                        {"check_id": "c1_chk", "verdict": "PASS", "message": "ok"}
+                    ],
+                },
+                "C4": {
+                    "component": "C4",
+                    "verdict": "NOT_EXERCISED",
+                    "findings_count": 1,
+                    "findings": [
+                        {
+                            "finding_id": "f-c4-ne",
+                            "rule_id": "INSTR-AUTH-CHECKOUT",
+                            "verdict": "NOT_EXERCISED",
+                            "explanation": "No action attempt matched action selector 'checkout'.",
+                        }
+                    ],
+                },
+            },
+        )
+    )
+    db_session.commit()
+
+    report = SharedReportAggregator(db_session).generate_report(
+        project=test_project, execution_id="exec-not-exercised-01", user=test_user
+    )
+
+    assert report.completeness.overall_verdict == "INCONCLUSIVE"
+    assert report.component_contributions["C4"].native_verdict == "NOT_EXERCISED"
+    assert any(
+        note.startswith("C4: NOT_EXERCISED")
+        for note in report.completeness.pending_or_missing_evidence
+    )

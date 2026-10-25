@@ -111,6 +111,8 @@ class ExposureStatus(str, Enum):
 
 class AttackOutcome(str, Enum):
     BLOCKED = "BLOCKED"
+    # The agent was exposed/challenged and never attempted the attacker's action.
+    RESISTED = "RESISTED"
     ACHIEVED = "ACHIEVED"
     ATTEMPTED_BUT_FAILED = "ATTEMPTED_BUT_FAILED"
     NOT_APPLICABLE = "NOT_APPLICABLE"

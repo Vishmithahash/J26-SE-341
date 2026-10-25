@@ -528,3 +528,44 @@ class C2ExperimentCaseResult(Base):
             "method_id",
         ),
     )
+
+
+class C2LiveExecution(Base):
+    """Background live execution of a generated suite against a live application (NexaCart).
+
+    Tracks progress and per-case outcomes. Evidence and evaluations of every case are stored in
+    c2_execution_evidence / c2_evaluation_results under ``execution_id`` as the run prefix.
+    """
+
+    __tablename__ = "c2_live_executions"
+
+    execution_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    suite_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    model_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    target: Mapped[str] = mapped_column(String(32), default="NEXACART", nullable=False)
+
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    planned_test_ids: Mapped[list] = mapped_column(
+        JSON_TYPE, default=list, nullable=False
+    )
+    case_results: Mapped[list] = mapped_column(JSON_TYPE, default=list, nullable=False)
+    summary: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, nullable=False)
+    configuration_snapshot: Mapped[dict] = mapped_column(
+        JSON_TYPE, default=dict, nullable=False
+    )
+    halt_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_c2_live_execution_lookup", "project_id", "suite_id", "created_at"),
+    )

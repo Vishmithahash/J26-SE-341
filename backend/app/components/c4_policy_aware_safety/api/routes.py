@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -89,6 +90,10 @@ from app.components.c4_policy_aware_safety.derivation.importer import (
     StructuredRuleImporter,
 )
 from app.components.c4_policy_aware_safety.derivation.intake import normalize_artifact
+from app.components.c4_policy_aware_safety.domains.nexacart_live import (
+    NEXACART_DOMAIN_ID,
+    build_nexacart_binding,
+)
 from app.components.c4_policy_aware_safety.domains.registry import domain_registry
 from app.components.c4_policy_aware_safety.evaluation.experiments import (
     ExperimentService,
@@ -108,8 +113,15 @@ from app.components.c4_policy_aware_safety.extraction.provider import (
     get_extraction_provider,
 )
 from app.components.c4_policy_aware_safety.freezing.service import CaseFreezingService
+from app.components.c4_policy_aware_safety.execution.nexacart_live_adapter import (
+    NexaCartLiveC4Adapter,
+)
 from app.components.c4_policy_aware_safety.generation.generator import (
     PolicyTestGenerator,
+)
+from app.components.c4_policy_aware_safety.generation.nexacart_live_generator import (
+    NexaCartPolicyCaseGenerator,
+    is_nexacart_binding,
 )
 from app.components.c4_policy_aware_safety.onboarding.service import (
     C4OnboardingService,
@@ -125,6 +137,15 @@ from app.components.c4_policy_aware_safety.validation.validator import (
 from app.database import get_db
 from app.shared.auth.dependencies import require_active_user
 from app.shared.auth.models import User
+
+def _select_adapter(exec_req: C4ExecutionRequest, binding: DomainBinding):
+    """LIVE_AUT runs the real NexaCart agent for the NexaCart binding; other live domains stay blocked."""
+    if exec_req.execution_mode == TargetExecutionMode.LIVE_AUT:
+        if is_nexacart_binding(binding):
+            return NexaCartLiveC4Adapter()
+        return LiveAUTAdapterStub()
+    return SimulatedC4ApplicationAdapter(behavior=exec_req.simulated_behavior)
+
 
 router = APIRouter(
     prefix="/projects/{project_id}/c4",
@@ -572,7 +593,10 @@ def generate_test_cases(
             detail=f"Domain binding '{request.binding_id}' v{request.binding_version} not found in project '{project_id}'.",
         )
 
-    generator = PolicyTestGenerator(config=request.config)
+    if is_nexacart_binding(binding):
+        generator = NexaCartPolicyCaseGenerator(config=request.config)
+    else:
+        generator = PolicyTestGenerator(config=request.config)
     cases, report = generator.generate_cases(contract, binding)
 
     if request.auto_validate:
@@ -843,10 +867,7 @@ def check_execution_readiness(
             detail=f"Domain binding '{exec_req.binding_id}' v{exec_req.binding_version} not found in project '{project_id}'.",
         )
 
-    if exec_req.execution_mode == TargetExecutionMode.LIVE_AUT:
-        adapter = LiveAUTAdapterStub()
-    else:
-        adapter = SimulatedC4ApplicationAdapter(behavior=exec_req.simulated_behavior)
+    adapter = _select_adapter(exec_req, binding)
 
     runner = C4ExecutionRunner(repo)
     return runner.check_readiness(case, binding, adapter)
@@ -883,10 +904,7 @@ def execute_test_case(
             detail=f"Domain binding '{exec_req.binding_id}' v{exec_req.binding_version} not found in project '{project_id}'.",
         )
 
-    if exec_req.execution_mode == TargetExecutionMode.LIVE_AUT:
-        adapter = LiveAUTAdapterStub()
-    else:
-        adapter = SimulatedC4ApplicationAdapter(behavior=exec_req.simulated_behavior)
+    adapter = _select_adapter(exec_req, binding)
 
     runner = C4ExecutionRunner(repo)
     try:
@@ -988,7 +1006,7 @@ def export_run_report(
 )
 def check_extraction_readiness(
     project_id: str,
-    provider_id: str = Query(default="offline_mock"),
+    provider_id: str = Query(default="shared_llm"),
     current_user: Annotated[User | None, Depends(get_optional_active_user)] = None,
 ):
     user_id = str(current_user.id) if current_user else None
@@ -1016,8 +1034,18 @@ def start_extraction_job(
             detail=f"Source artifact '{req.artifact_id}' v{req.artifact_version} not found in project '{project_id}'.",
         )
 
-    # Use default ecommerce binding for generic extraction validation
-    profile = domain_registry.get_profile("domain-ecommerce-c4")
+    # Validate candidates against the target application's binding: the requested domain, else the
+    # project's imported NexaCart binding, else the e-commerce demo profile (previously always the demo,
+    # which rejected every real NexaCart rule as "tool/role not found").
+    domain_id = req.domain_id
+    if domain_id is None:
+        nexacart = build_nexacart_binding(project_id)
+        has_nexacart = repo.get_domain_binding(project_id, nexacart.binding_id, nexacart.version)
+        domain_id = NEXACART_DOMAIN_ID if has_nexacart else "domain-ecommerce-c4"
+    try:
+        profile = domain_registry.get_profile(domain_id)
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     service = C4OnboardingService(repository=repo)
     onboard_req = OnboardingJobCreate(
         domain_id=profile.domain_id,
@@ -1061,6 +1089,22 @@ def get_extraction_job(
             detail=f"Extraction job '{job_id}' not found in project '{project_id}'.",
         )
     return job
+
+
+@router.get(
+    "/candidates",
+    response_model=list[CandidateRule],
+    summary="List candidate rules of the project, optionally only the given rule IDs",
+)
+def list_candidate_rules(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    rule_ids: str | None = Query(
+        default=None, description="Comma-separated rule IDs (e.g. an extraction job's candidates)"
+    ),
+):
+    ids = [r for r in (rule_ids or "").split(",") if r] or None
+    return C4Repository(db).list_candidate_rules(project_id, ids)
 
 
 @router.post(
@@ -1235,8 +1279,9 @@ def execute_onboarding_cases(
 # 11. Policy Regression and Diffing Routes
 class RegressionPlanCreateRequest(BaseModel):
     comparison_id: str
-    binding_id: str
-    binding_version: int
+    # Omit to use the binding the baseline contract's test cases were generated for.
+    binding_id: str | None = None
+    binding_version: int | None = None
 
 
 class RegressionPlanExecuteRequest(BaseModel):
@@ -1322,21 +1367,37 @@ def create_regression_plan(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Comparison '{request.comparison_id}' not found in project '{project_id}'.",
         )
-    binding = repo.get_domain_binding(
-        project_id, request.binding_id, request.binding_version
-    )
+    binding_id, binding_version = request.binding_id, request.binding_version
+    if binding_id is None:
+        # The binding the baseline contract's cases were generated for (most common one).
+        used = Counter(
+            (c.domain_id, c.binding_version)
+            for c in repo.list_test_cases(project_id)
+            if c.contract_id == comparison.baseline_contract_id
+            and c.contract_version == comparison.baseline_contract_version
+        )
+        if not used:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"No test cases exist for baseline contract '{comparison.baseline_contract_id}' "
+                    f"v{comparison.baseline_contract_version}; pass binding_id and binding_version."
+                ),
+            )
+        binding_id, binding_version = used.most_common(1)[0][0]
+    binding = repo.get_domain_binding(project_id, binding_id, binding_version or 1)
     if not binding:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Domain binding '{request.binding_id}' v{request.binding_version} not found in project '{project_id}'.",
+            detail=f"Domain binding '{binding_id}' v{binding_version} not found in project '{project_id}'.",
         )
     service = C4RegressionService(repository=repo)
     try:
         return service.create_regression_plan(
             project_id=project_id,
             comparison_id=request.comparison_id,
-            binding_id=request.binding_id,
-            binding_version=request.binding_version,
+            binding_id=binding_id,
+            binding_version=binding_version or 1,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -1418,12 +1479,22 @@ def execute_regression_plan(
     except ValueError:
         mode = ExecutionModeType.FRESH_EXECUTION
 
+    # Fresh regression runs of a live application's cases go to that application (the simulated
+    # adapter cannot run NexaCart cases); other domains keep the simulated adapter.
+    adapter = None
+    plan = repo.get_regression_plan(project_id, plan_id)
+    if plan is not None:
+        plan_binding = repo.get_domain_binding(project_id, plan.binding_id, plan.binding_version)
+        if plan_binding is not None and is_nexacart_binding(plan_binding):
+            adapter = NexaCartLiveC4Adapter()
+
     try:
         batch, _ = service.execute_plan(
             project_id=project_id,
             plan_id=plan_id,
             execution_mode=mode,
             idempotency_key=req.idempotency_key,
+            adapter=adapter,
         )
         return batch
     except IdempotencyConflictError as e:

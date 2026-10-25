@@ -8,6 +8,9 @@ from typing import Any
 from app.components.c4_policy_aware_safety.contracts.cases import (
     PolicyTestCase,
 )
+from app.components.c4_policy_aware_safety.contracts.evidence import (
+    EvaluationEvidencePackage,
+)
 from app.components.c4_policy_aware_safety.contracts.execution import (
     IdempotencyConflictError,
 )
@@ -139,10 +142,13 @@ class C4RegressionService:
                 f"Domain binding '{binding_id}' v{binding_version} not found."
             )
 
-        baseline_cases = self.repository.list_test_cases(project_id)
-        if not baseline_cases:
-            # If no cases in db, empty baseline
-            baseline_cases = []
+        # Only the baseline contract's cases (a project can hold cases of several contracts).
+        baseline_cases = [
+            c
+            for c in self.repository.list_test_cases(project_id)
+            if c.contract_id == comparison.baseline_contract_id
+            and c.contract_version == comparison.baseline_contract_version
+        ]
 
         decisions = self.impact_analyzer.analyze_impact(
             comparison, candidate, baseline_cases, binding
@@ -230,6 +236,10 @@ class C4RegressionService:
         )
 
         for case in replacement_cases:
+            existing = self.repository.get_test_case(project_id, case.case_id, case.case_version)
+            # A later plan for the same contract change yields the same frozen replacement; reuse it.
+            if existing is not None and existing.content_hash == case.content_hash:
+                continue
             self.repository.save_test_case(case)
 
         self.repository.save_regression_plan(updated_plan)
@@ -395,7 +405,7 @@ class C4RegressionService:
                             project_id, rep_case.predecessor_case_id
                         )
                         if pred_runs:
-                            pred_verdict = pred_runs[-1].policy_verdict
+                            pred_verdict = pred_runs[0].policy_verdict  # newest first
 
                     trans_type = self._classify_verdict_transition(
                         pred_verdict, run_record.policy_verdict
@@ -418,7 +428,7 @@ class C4RegressionService:
                             candidate_verdict=run_record.policy_verdict,
                             transition_type=trans_type,
                             explanation=(
-                                f"Transition {trans_type.value}: verdict changed from {pred_verdict} to {run_record.policy_verdict} under candidate policy."
+                                f"Transition {trans_type.value}: baseline verdict {pred_verdict}, candidate verdict {run_record.policy_verdict}."
                                 if not is_req_change
                                 else f"Verdict transition caused by stricter candidate policy requirement ({rep_rule_id}), not necessarily agent behavioral regression."
                             ),
@@ -439,10 +449,35 @@ class C4RegressionService:
                     project_id, pred_id
                 )
                 if pred_runs:
-                    last_run = pred_runs[-1]
+                    last_run = pred_runs[0]  # newest first
                     rep_rule_id = getattr(
                         rep_case, "target_rule_id", getattr(rep_case, "rule_id", "")
                     )
+                    # Re-score the retained evidence under the candidate contract. Runs recorded
+                    # before evidence packages were retained cannot be re-scored: INCONCLUSIVE.
+                    package = (last_run.evaluation_report_summary or {}).get("evidence_package")
+                    if package:
+                        target_ids = rep_case.target_rule_ids or (
+                            [rep_case.target_rule_id] if rep_case.target_rule_id else None
+                        )
+                        re_report = self.runner.evaluator.evaluate_contract(
+                            candidate,
+                            EvaluationEvidencePackage.model_validate(package),
+                            target_rule_ids=target_ids,
+                        )
+                        derived_verdict = re_report.overall_verdict.value
+                        derived_findings = [f.model_dump(mode="json") for f in re_report.findings]
+                        re_eval_note = (
+                            f"Re-scored retained evidence of run {last_run.run_id} under candidate contract "
+                            f"v{plan.candidate_contract_version} without fresh agent execution."
+                        )
+                    else:
+                        derived_verdict = "INCONCLUSIVE"
+                        derived_findings = []
+                        re_eval_note = (
+                            f"Run {last_run.run_id} has no retained evidence package; it cannot be re-scored "
+                            "under the candidate contract (run the case fresh instead)."
+                        )
                     # Create immutable HistoricalReEvaluationRecord
                     re_eval_record = HistoricalReEvaluationRecord(
                         re_eval_id=f"reeval-{uuid.uuid4().hex[:12]}",
@@ -455,10 +490,10 @@ class C4RegressionService:
                         candidate_contract_version=plan.candidate_contract_version,
                         evaluator_version="3-valued-kleene-v1",
                         evaluator_config_digest=getattr(candidate, "content_hash", "default"),
-                        derived_policy_verdict=last_run.policy_verdict,
-                        derived_findings=last_run.findings if hasattr(last_run, "findings") else [],
+                        derived_policy_verdict=derived_verdict,
+                        derived_findings=derived_findings,
                         analysis_mode="HISTORICAL_RE_EVALUATION",
-                        explanation=f"Re-evaluated historical run evidence {last_run.run_id} under candidate policy without fresh agent execution.",
+                        explanation=re_eval_note,
                         created_at=datetime.now(UTC),
                     )
                     self.repository.save_historical_re_evaluation(re_eval_record)
@@ -468,8 +503,10 @@ class C4RegressionService:
                             case_id=rep_case.case_id,
                             rule_id=rep_rule_id,
                             baseline_verdict=last_run.policy_verdict,
-                            candidate_verdict=last_run.policy_verdict,
-                            transition_type=VerdictTransitionType.PASS_TO_PASS,
+                            candidate_verdict=derived_verdict,
+                            transition_type=self._classify_verdict_transition(
+                                last_run.policy_verdict, derived_verdict
+                            ),
                             explanation=re_eval_record.explanation,
                             is_requirement_change=False,
                         )
@@ -479,7 +516,7 @@ class C4RegressionService:
         for ret_id in plan.retained_cases:
             runs = self.repository.get_execution_runs_by_case(project_id, ret_id)
             if runs:
-                reused_run_ids.append(runs[-1].run_id)
+                reused_run_ids.append(runs[0].run_id)  # newest first
 
         # Build Regression Report
         comparison = self.repository.get_policy_comparison(
@@ -598,8 +635,11 @@ class C4RegressionService:
     ) -> VerdictTransitionType:
         if baseline_verdict is None:
             return VerdictTransitionType.NEW_COVERAGE
-        b = baseline_verdict.upper()
-        c = candidate_verdict.upper()
+        # NOT_EXERCISED / ERROR / unknown are not passes: they count as INCONCLUSIVE here
+        # (previously every unmatched pair, e.g. NOT_EXERCISED -> FAIL, was labelled PASS_TO_PASS).
+        definite = ("PASS", "FAIL")
+        b = baseline_verdict.upper() if baseline_verdict.upper() in definite else "INCONCLUSIVE"
+        c = candidate_verdict.upper() if candidate_verdict.upper() in definite else "INCONCLUSIVE"
         if b == "PASS" and c == "PASS":
             return VerdictTransitionType.PASS_TO_PASS
         if b == "PASS" and c == "FAIL":
@@ -616,4 +656,4 @@ class C4RegressionService:
             return VerdictTransitionType.INCONCLUSIVE_TO_PASS
         if b == "INCONCLUSIVE" and c == "FAIL":
             return VerdictTransitionType.INCONCLUSIVE_TO_FAIL
-        return VerdictTransitionType.PASS_TO_PASS
+        return VerdictTransitionType.INCONCLUSIVE_TO_INCONCLUSIVE

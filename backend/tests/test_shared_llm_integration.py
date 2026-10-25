@@ -87,7 +87,12 @@ from app.shared.llm.contracts import (
     LLMProviderType,
     ModelSelectionConfig,
 )
-from app.shared.llm.service import LLMProviderService
+from app.shared.llm.router import set_llm_service
+from app.shared.llm.service import (
+    GEMINI_DISABLED_MESSAGE,
+    LLMProviderService,
+    apply_generation_limits,
+)
 from app.shared.projects.models import (
     Project,
     ProjectConnectionState,
@@ -186,7 +191,15 @@ def test_get_providers_endpoint(client):
     assert "gemini" in prov_names
 
 
-def test_get_and_put_selection_endpoint(client, test_user):
+@pytest.fixture
+def gemini_enabled_service():
+    """Explicit opt-in: only tests using this fixture may select hosted Gemini."""
+    set_llm_service(LLMProviderService(gemini_enabled=True))
+    yield
+    set_llm_service(None)
+
+
+def test_get_and_put_selection_endpoint(client, test_user, gemini_enabled_service):
     """GET and PUT /api/v1/llm/selection correctly persist user selection."""
     res = client.get("/api/v1/llm/selection")
     assert res.status_code == 200
@@ -216,7 +229,7 @@ def test_get_and_put_selection_endpoint(client, test_user):
 
 def test_user_selection_isolation(client, db_session, test_user, second_user):
     """Verify that User A's selection does NOT overwrite User B's selection."""
-    service = LLMProviderService.get_instance()
+    service = LLMProviderService(gemini_enabled=True)
 
     service.save_user_selection(
         str(test_user.id),
@@ -247,6 +260,66 @@ def test_user_selection_isolation(client, db_session, test_user, second_user):
     assert sel_902.model_id == "gemini-3.5-flash-lite"
 
 
+def test_gemini_is_disabled_unless_explicitly_enabled(client, test_user):
+    """Without GEMINI_ENABLED the hosted provider is never probed, selected, or invoked."""
+    gemini_adapter = MagicMock(spec=GeminiAdapter)
+    gemini_adapter.default_model = "gemini-3.5-flash-lite"
+    gemini_adapter.check_availability = AsyncMock()
+    gemini_adapter.generate = AsyncMock()
+    service = LLMProviderService(gemini_adapter=gemini_adapter, gemini_enabled=False)
+    set_llm_service(service)
+    try:
+        providers = client.get("/api/v1/llm/providers").json()
+        gemini_status = next(p for p in providers if p["provider"] == "gemini")
+        assert gemini_status["is_available"] is False
+        assert gemini_status["status_message"] == GEMINI_DISABLED_MESSAGE
+
+        put_res = client.put(
+            "/api/v1/llm/selection",
+            json={
+                "connection_type": "hosted",
+                "provider": "gemini",
+                "model_id": "gemini-3.5-flash-lite",
+            },
+        )
+        assert put_res.status_code == 400
+        assert "GEMINI_ENABLED" in put_res.json()["detail"]
+
+        test_res = client.post(
+            "/api/v1/llm/test-connection", json={"provider": "gemini"}
+        )
+        assert test_res.status_code == 400
+    finally:
+        set_llm_service(None)
+
+    gemini_adapter.check_availability.assert_not_awaited()
+    gemini_adapter.generate.assert_not_awaited()
+
+
+def test_generation_limits_respect_caller_then_saved_then_defaults():
+    """Explicit request values win, then saved selection settings, then backend defaults."""
+    saved = {"max_tokens": 900, "timeout_seconds": 240.0, "temperature": 0.4}
+
+    defaulted = apply_generation_limits(LLMGenerationRequest(user_prompt="x"), {})
+    assert defaulted.max_tokens == 2048
+    assert defaulted.timeout_seconds == 180.0
+
+    from_saved = apply_generation_limits(LLMGenerationRequest(user_prompt="x"), saved)
+    assert from_saved.max_tokens == 900
+    assert from_saved.timeout_seconds == 240.0
+    assert from_saved.temperature == 0.4
+
+    explicit = apply_generation_limits(
+        LLMGenerationRequest(
+            user_prompt="x", max_tokens=100, timeout_seconds=30.0, temperature=0.0
+        ),
+        saved,
+    )
+    assert explicit.max_tokens == 100
+    assert explicit.timeout_seconds == 30.0
+    assert explicit.temperature == 0.0
+
+
 # ---------------------------------------------------------------------------
 # 2. Ollama Adapter: Native API, Error Mapping, and <think> Tag Stripping
 # ---------------------------------------------------------------------------
@@ -275,6 +348,22 @@ def test_ollama_adapter_think_tag_stripping():
         assert "<think>" not in res.content
         assert res.usage.prompt_tokens == 12
         assert res.usage.completion_tokens == 8
+
+
+def test_ollama_adapter_sends_think_only_when_requested():
+    """Reasoning can be switched off per request; other callers keep Ollama's default."""
+    adapter = OllamaAdapter(base_url="http://127.0.0.1:11434", default_model="qwen3.5:4b")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"message": {"content": "answer"}, "done": True}
+
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=mock_resp) as post:
+        asyncio.run(adapter.generate(LLMGenerationRequest(prompt="p")))
+        assert "think" not in post.call_args.kwargs["json"]
+        asyncio.run(
+            adapter.generate(LLMGenerationRequest(prompt="p", metadata={"ollama_think": False}))
+        )
+        assert post.call_args.kwargs["json"]["think"] is False
 
 
 def test_ollama_adapter_model_not_installed_error():

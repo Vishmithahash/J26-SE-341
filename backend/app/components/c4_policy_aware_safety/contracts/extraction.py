@@ -45,10 +45,21 @@ class ExtractionJobCreate(BaseModel):
     artifact_id: str = Field(..., description="Policy artifact ID to extract rules from")
     artifact_version: int = Field(..., ge=1, description="Immutable version of the artifact")
     provider_id: str = Field(
-        default="offline_mock", description="Extraction provider identifier ('offline_mock' or configured LLM)"
+        default="shared_llm",
+        description=(
+            "Extraction provider: 'shared_llm' (the user's selected QA model; local Ollama by default) "
+            "or 'offline_mock' (deterministic test fixture)"
+        ),
     )
     options: dict[str, Any] = Field(
         default_factory=dict, description="Extraction settings (e.g. temperature, provider mode, max_tokens)"
+    )
+    domain_id: str | None = Field(
+        default=None,
+        description=(
+            "Domain whose binding (roles, tools, resources) the candidates are validated against; "
+            "default: the project's NexaCart binding when imported, else the e-commerce demo profile"
+        ),
     )
 
 

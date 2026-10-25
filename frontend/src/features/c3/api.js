@@ -547,6 +547,115 @@ export const c3Api = {
     }
   },
 
+  // -------------------------------------------------------------------------
+  // Live NexaCart (real harness, real agent)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Check the live NexaCart QA harness and return the capability manifest summary.
+   */
+  async getLiveReadiness(projectId, signal) {
+    if (!projectId) {
+      throw new Error('Project ID is required to check live NexaCart readiness.');
+    }
+    return request(
+      `/api/v1/c3/live/nexacart/readiness?project_id=${encodeURIComponent(projectId)}`,
+      { method: 'GET', signal }
+    );
+  },
+
+  /**
+   * Generate, freeze and store a fault suite from NexaCart's live capabilities.
+   */
+  async generateLiveSuite(payload, signal) {
+    if (!payload?.project_id) {
+      throw new Error('Project ID is required to generate a live suite.');
+    }
+    return request('/api/v1/c3/live/nexacart/suites/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    });
+  },
+
+  /**
+   * Start a background live execution of a stored NexaCart suite (poll getExecution).
+   */
+  async startLiveExecution(payload, signal) {
+    if (!payload?.project_id) {
+      throw new Error('Project ID is required to start a live execution.');
+    }
+    if (!payload?.suite_id_or_digest) {
+      throw new Error('Suite identifier or digest is required to start a live execution.');
+    }
+    return request('/api/v1/c3/live/nexacart/executions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    });
+  },
+
+  /**
+   * List live executions (newest first). Runs that can no longer finish are marked INTERRUPTED.
+   */
+  async listLiveExecutions(projectId, { limit = 20 } = {}, signal) {
+    if (!projectId) {
+      throw new Error('Project ID is required to list live executions.');
+    }
+    return request(
+      `/api/v1/c3/live/nexacart/executions?project_id=${encodeURIComponent(projectId)}&limit=${limit}`,
+      { method: 'GET', signal }
+    );
+  },
+
+  /**
+   * Recovery cost of live pairs: extra time, tool calls, retries and tokens vs the clean control.
+   */
+  async getLiveRecoveryCost(projectId, executionId, signal) {
+    if (!projectId) {
+      throw new Error('Project ID is required to load recovery cost.');
+    }
+    const params = new URLSearchParams({ project_id: projectId });
+    if (executionId) params.set('execution_id', executionId);
+    return request(`/api/v1/c3/live/nexacart/recovery-cost?${params.toString()}`, {
+      method: 'GET',
+      signal,
+    });
+  },
+
+  /**
+   * Reviewer verdicts for an evaluation (append-only; the evaluation itself never changes).
+   */
+  async listReviews(projectId, evaluationId, signal) {
+    const params = new URLSearchParams({ project_id: projectId });
+    if (evaluationId) params.set('evaluation_id', evaluationId);
+    return request(`/api/v1/c3/reviews?${params.toString()}`, { method: 'GET', signal });
+  },
+
+  async createReview(evaluationId, payload, signal) {
+    if (!payload?.project_id) {
+      throw new Error('Project ID is required to record a review.');
+    }
+    return request(`/api/v1/c3/evaluations/${encodeURIComponent(evaluationId)}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    });
+  },
+
+  /**
+   * Cancel a live execution after the case in progress.
+   */
+  async cancelLiveExecution(projectId, executionId, signal) {
+    if (!projectId || !executionId) {
+      throw new Error('Project ID and execution ID are required to cancel a live execution.');
+    }
+    return request(
+      `/api/v1/c3/live/nexacart/executions/${encodeURIComponent(executionId)}/cancel?project_id=${encodeURIComponent(projectId)}`,
+      { method: 'POST', signal }
+    );
+  },
+
   /**
    * Run controlled clean/fault trials for an eligible stored suite.
    * Dispatches SuiteRunner with registered demonstration adapter and preserves full evidence.

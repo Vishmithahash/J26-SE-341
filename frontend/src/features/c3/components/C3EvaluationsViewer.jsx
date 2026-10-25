@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   Workflow,
   Search,
@@ -16,6 +16,8 @@ import { useC3Evaluations } from '../hooks/useC3Evaluations';
 import { useC3MatchedPairs } from '../hooks/useC3MatchedPairs';
 import { C3Badge } from './C3Badge';
 import { C3ExplanationEvidenceView } from './C3ExplanationEvidenceView';
+import { C3ReviewPanel } from './C3ReviewPanel';
+import { c3Api } from '../api.js';
 import {
   DEMO_EVALUATION_PASS_COMPLETED,
   DEMO_EVALUATION_PASS_GRACEFUL,
@@ -33,6 +35,26 @@ export const C3EvaluationsViewer = ({ projectId }) => {
   const [selectedPairIdForCompute, setSelectedPairIdForCompute] = useState('');
   const [useCustomC2Facts, setUseCustomC2Facts] = useState(true);
   const [useDemoFallback] = useState(false);
+  // Latest reviewer verdict per evaluation (reviews are stored next to evaluations, never inside them)
+  const [latestReviews, setLatestReviews] = useState({});
+
+  const loadReviews = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const reviews = await c3Api.listReviews(projectId);
+      const latest = {};
+      reviews.forEach((r) => {
+        if (!latest[r.evaluation_id]) latest[r.evaluation_id] = r; // newest first
+      });
+      setLatestReviews(latest);
+    } catch {
+      setLatestReviews({});
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    loadReviews();
+  }, [loadReviews]);
 
   const queryFilters = useMemo(() => {
     const f = {};
@@ -365,6 +387,18 @@ export const C3EvaluationsViewer = ({ projectId }) => {
                         ) : (
                           <C3Badge status="NOT_EVALUATED" />
                         )}
+                        {latestReviews[ev.evaluation_id] && (
+                          <div
+                            className="mt-1 flex items-center gap-1 text-[10px] text-slate-500"
+                            title={`Reviewed by ${
+                              latestReviews[ev.evaluation_id].reviewer_name ||
+                              latestReviews[ev.evaluation_id].reviewer_email
+                            }`}
+                          >
+                            <span>Reviewer:</span>
+                            <C3Badge status={latestReviews[ev.evaluation_id].reviewer_verdict} />
+                          </div>
+                        )}
                       </td>
 
                       <td className="py-3 px-4 font-mono text-[11px]">
@@ -383,6 +417,8 @@ export const C3EvaluationsViewer = ({ projectId }) => {
                           </span>
                         ) : verdict === 'FAIL' ? (
                           <span className="text-slate-500 italic">Terminal outcome failure</span>
+                        ) : verdict === 'INCONCLUSIVE' || !verdict ? (
+                          <span className="text-amber-700 dark:text-amber-300 font-medium">None violated (undecided rules)</span>
                         ) : (
                           <span className="text-emerald-600 dark:text-emerald-400 font-medium">None (Passed)</span>
                         )}
@@ -425,6 +461,11 @@ export const C3EvaluationsViewer = ({ projectId }) => {
       {selectedEvaluation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
           <div className="max-w-4xl w-full my-8 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-6 max-h-[90vh] overflow-y-auto">
+            <C3ReviewPanel
+              projectId={projectId}
+              evaluationRecord={selectedEvaluation}
+              onReviewSaved={loadReviews}
+            />
             <C3ExplanationEvidenceView
               evaluationRecord={selectedEvaluation}
               onClose={() => setSelectedEvaluation(null)}

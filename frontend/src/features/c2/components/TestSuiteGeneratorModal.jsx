@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   Play,
@@ -45,6 +45,14 @@ export const TestSuiteGeneratorModal = ({
 
   const [localError, setLocalError] = useState(null);
 
+  // The approved models may arrive after the modal mounted: preselect the first one then
+  useEffect(() => {
+    if (!selectedModelId && defaultModel) {
+      setSelectedModelId(defaultModel.model_id);
+      setSelectedVersion(defaultModel.version);
+    }
+  }, [selectedModelId, defaultModel]);
+
   if (!isOpen) return null;
 
   const handleToggleMutation = (id) => {
@@ -70,12 +78,13 @@ export const TestSuiteGeneratorModal = ({
       return;
     }
 
-    if (caseBudget < 1 || caseBudget > 200) {
+    // Inputs hold strings once edited: compare numbers ("4" > "10" is true for strings)
+    if (Number(caseBudget) < 1 || Number(caseBudget) > 200) {
       setLocalError('Case budget must be between 1 and 200.');
       return;
     }
 
-    if (includeMutations && mutationBudget > caseBudget) {
+    if (includeMutations && Number(mutationBudget) > Number(caseBudget)) {
       setLocalError('Mutation budget cannot exceed total case budget.');
       return;
     }

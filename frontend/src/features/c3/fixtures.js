@@ -243,7 +243,7 @@ export const DEMONSTRATION_FROZEN_SUITE = {
   },
   limitations: [
     'Pure deterministic static validation and candidate generation only.',
-    'Runtime verified = false, Execution ready = false. Live target execution is not installed in Phase 1.',
+    'Runtime verified = false, Execution ready = false. This demonstration fixture was never run against a live target; live NexaCart suites are generated and run from the Live NexaCart Runs tab.',
   ],
   case_fingerprints: {
     'case-c3-001': 'a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890',

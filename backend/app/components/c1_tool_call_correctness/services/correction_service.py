@@ -5,6 +5,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, joinedload
@@ -42,6 +43,9 @@ from app.components.c1_tool_call_correctness.models.persistence import (
     C1CaseExecutionModel,
     C1CorrectionModel,
     C1ExecutionRunModel,
+)
+from app.components.c1_tool_call_correctness.services import (
+    nexacart_correction_service,
 )
 from app.components.c1_tool_call_correctness.services.correction_engine import (
     CorrectionEngine,
@@ -154,8 +158,13 @@ class CorrectionService:
         db: Session,
         project_id: str,
         request: CorrectionAttemptRequest,
+        schedule: Any | None = None,
     ) -> CorrectionRecord:
-        """Execute a single bounded candidate correction attempt with independent sandbox verification."""
+        """Execute a single bounded candidate correction attempt with independent sandbox verification.
+
+        For live NexaCart runs the candidate is generated now and verified in the background
+        (``schedule(correction_id)``) because verification builds and re-runs NexaCart live.
+        """
         start_time = time.perf_counter()
 
         # 1. Idempotency check: if matching idempotency_key exists, return stored record
@@ -242,6 +251,23 @@ class CorrectionService:
             .all()
         )
         attempt_number = len(prev_attempts) + 1
+
+        nexacart_run = nexacart_correction_service.is_nexacart_run(
+            db, diag_model.run_id
+        )
+        if nexacart_run is not None:
+            record = nexacart_correction_service.start_attempt(
+                self,
+                db,
+                project_id,
+                request,
+                diag_record,
+                case_exec_model,
+                nexacart_run,
+                attempt_number,
+                schedule,
+            )
+            return self._model_to_record(record)
 
         source_root = (
             Path(request.source_root_path) if request.source_root_path else None

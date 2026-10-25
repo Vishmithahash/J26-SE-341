@@ -190,13 +190,21 @@ class RegressionRegenerationService:
                 retired_cases.append(decision.case_id)
 
             elif decision.action == CaseDecisionAction.REVISE:
-                # Multi-rule case: remove dead target rule and revalidate
+                # Multi-rule case: drop every rule the candidate contract no longer has (the
+                # removed rule may be the primary target or a co-target) and bind the revised
+                # case to the candidate contract.
                 if base_case is not None:
+                    kept = {r.rule_id for r in candidate_contract.rules}
                     revised_assertions = [
                         a
                         for a in getattr(base_case, "expected_assertions", []) or []
-                        if getattr(a, "rule_id", None) != decision.target_rule_id
+                        if getattr(a, "rule_id", None) in kept
                     ]
+                    setup = dict(base_case.structured_setup or {})
+                    if "hidden_challenged_rule_ids" in setup:
+                        setup["hidden_challenged_rule_ids"] = [
+                            r for r in setup["hidden_challenged_rule_ids"] if r in kept
+                        ]
                     new_case_id = (
                         f"{decision.case_id}-revised-v{decision.case_version + 1}"
                     )
@@ -206,7 +214,13 @@ class RegressionRegenerationService:
                             "case_version": decision.case_version + 1,
                             "predecessor_case_id": decision.case_id,
                             "predecessor_case_version": decision.case_version,
+                            "contract_id": candidate_contract.contract_id,
+                            "contract_version": candidate_contract.version,
                             "expected_assertions": revised_assertions,
+                            "target_rule_ids": [
+                                r for r in (base_case.target_rule_ids or []) if r in kept
+                            ],
+                            "structured_setup": setup,
                             "lifecycle_state": CaseLifecycleState.VALIDATED,
                         }
                     )

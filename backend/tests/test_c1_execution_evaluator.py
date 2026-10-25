@@ -445,7 +445,8 @@ def test_fixture_service_isolation_and_reset():
     assert ok_1 is True
     assert "ord_9901" in data_1
     assert len(ev_1) == 1
-    assert ev_1[0].channel == EvidenceChannel.AUT_DATABASE_DIFF
+    # C1-03: synthetic in-memory fixtures are not application database evidence
+    assert ev_1[0].channel == EvidenceChannel.SYNTHETIC_FIXTURE
 
     # Verify session 2 is initially empty
     assert fixture_service.get_session_data(session_2) is None

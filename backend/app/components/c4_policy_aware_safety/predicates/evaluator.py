@@ -18,6 +18,9 @@ _MISSING = object()
 
 
 def _is_numeric(val: Any) -> bool:
+    # bool is an int subclass but must compare as a boolean, not as 1/0.
+    if isinstance(val, bool):
+        return False
     if isinstance(val, (int, float, Decimal)):
         return True
     if isinstance(val, str):
@@ -69,6 +72,13 @@ def resolve_field_path(data: dict[str, Any], path: str) -> Any:
     return current
 
 
+def field_reference_path(value: Any) -> str | None:
+    """Return the referenced path when a predicate value is a field reference, else None."""
+    if isinstance(value, dict) and set(value) == {"field_ref"} and isinstance(value["field_ref"], str):
+        return value["field_ref"]
+    return None
+
+
 def evaluate_condition(
     condition: PredicateCondition, data: dict[str, Any]
 ) -> TriStateBool:
@@ -82,6 +92,15 @@ def evaluate_condition(
     actual = resolve_field_path(data, field)
     op = condition.operator
     target = condition.value
+    # A value of {"field_ref": "<allowlisted path>"} compares against another evidence field
+    # (e.g. an argument against the harness-declared context); a missing referenced field is UNKNOWN.
+    ref_path = field_reference_path(target)
+    if ref_path is not None:
+        if not any(ref_path.startswith(prefix) for prefix in ALLOWLISTED_FIELD_PREFIXES):
+            return TriStateBool.UNKNOWN
+        target = resolve_field_path(data, ref_path)
+        if target is _MISSING:
+            return TriStateBool.UNKNOWN
 
     # 1. Existence / Presence operators
     if op == PredicateOperator.EXISTS:

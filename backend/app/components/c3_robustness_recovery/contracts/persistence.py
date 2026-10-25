@@ -253,7 +253,10 @@ class ControlledExecutionRequest(BaseModel):
     )
     execution_mode: str = Field(
         "DEMONSTRATION",
-        description="Target execution mode: DEMONSTRATION (supported) or LIVE_AUT (blocked).",
+        description=(
+            "Target execution mode for the controlled runner: DEMONSTRATION only. Live NexaCart "
+            "runs use POST /api/v1/c3/live/nexacart/executions."
+        ),
     )
     max_suite_duration_sec: float = Field(
         60.0, ge=1.0, le=300.0, description="Overall suite execution time limit in seconds."

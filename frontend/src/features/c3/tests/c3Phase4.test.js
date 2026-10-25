@@ -284,3 +284,37 @@ describe('Component 3 Phase 4: Frontend Audit, Authorization, and Contract Verif
     });
   });
 });
+
+describe('Component 3: repeated live runs', () => {
+  it('summarizes verdict consistency per case across repetitions', async () => {
+    const { summarizeConsistency } = await import('../consistency.js');
+    const summary = summarizeConsistency([
+      { case_id: 'a', repetition: 1, recovery_verdict: 'FAIL' },
+      { case_id: 'a', repetition: 2, recovery_verdict: 'FAIL' },
+      { case_id: 'b', repetition: 1, recovery_verdict: 'PASS_GRACEFUL' },
+      { case_id: 'b', repetition: 2, status: 'ERROR' },
+    ]);
+    assert.deepStrictEqual(summary, [
+      { caseId: 'a', runs: 2, counts: [['FAIL', 2]], consistent: true },
+      { caseId: 'b', runs: 2, counts: [['PASS_GRACEFUL', 1], ['ERROR', 1]], consistent: false },
+    ]);
+  });
+
+  it('sends repetitions with the live execution request', async () => {
+    const originalFetch = global.fetch;
+    let body = null;
+    global.fetch = async (_url, opts) => {
+      body = JSON.parse(opts.body);
+      return new Response(JSON.stringify({ execution: {}, planned_case_ids: [] }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    try {
+      await c3Api.startLiveExecution({ project_id: 'p', suite_id_or_digest: 's', case_ids: ['a'], repetitions: 3 });
+      assert.strictEqual(body.repetitions, 3);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+});

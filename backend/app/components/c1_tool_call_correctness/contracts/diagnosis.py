@@ -128,6 +128,18 @@ class CheckExplanationDetail(BaseModel):
         default_factory=list,
         description="Questions or factors that remain uncertain or unverified",
     )
+    requirements: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Requirements behind the check (req_id, version, title, description)",
+    )
+    expected_value_source: str | None = Field(
+        default=None,
+        description="Where the expected value comes from (record, path and relationship)",
+    )
+    argument_provenance: str | None = Field(
+        default=None,
+        description="Where the observed argument value plausibly came from in the recorded run",
+    )
 
 
 class CaseDiagnosisRecord(BaseModel):

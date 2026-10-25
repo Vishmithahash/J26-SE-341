@@ -222,7 +222,7 @@ def test_fault_catalog_contains_exactly_five_families():
     catalog = get_fault_catalog()
     assert catalog.count == 5
     assert len(catalog.families) == 5
-    assert catalog.injection_active is False
+    assert catalog.injection_active is True
 
     expected_families = {
         FaultFamily.TIMEOUT_DISCONNECTION,
@@ -235,8 +235,9 @@ def test_fault_catalog_contains_exactly_five_families():
     assert actual_families == expected_families
 
     for item in catalog.families:
-        assert item.injection_implemented is False
-        assert "not implemented" in item.note.lower()
+        assert item.injection_implemented is True
+        assert any("NexaCart" in support for support in item.runtime_support)
+        assert any("demonstration" in support for support in item.runtime_support)
 
 
 def test_fault_catalog_endpoint(client):
@@ -244,7 +245,7 @@ def test_fault_catalog_endpoint(client):
     assert response.status_code == 200
     data = response.json()
     assert data["count"] == 5
-    assert data["injection_active"] is False
+    assert data["injection_active"] is True
     assert len(data["families"]) == 5
 
 

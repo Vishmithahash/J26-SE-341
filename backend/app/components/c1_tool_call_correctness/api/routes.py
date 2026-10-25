@@ -1,6 +1,14 @@
+from collections.abc import Callable
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Response,
+    status,
+)
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -76,6 +84,10 @@ from app.components.c1_tool_call_correctness.contracts.results import (
 from app.components.c1_tool_call_correctness.contracts.validation import (
     ValidationSummary,
 )
+from app.components.c1_tool_call_correctness.examples.nexacart_live import (
+    build_nexacart_live_config,
+    is_nexacart_connection,
+)
 from app.components.c1_tool_call_correctness.examples.nexacart_refund import (
     NEXACART_FIXTURE_DATA,
     NEXACART_USER_REQUEST,
@@ -91,6 +103,7 @@ from app.components.c1_tool_call_correctness.models.persistence import (
     C1SuiteVersionModel,
 )
 from app.components.c1_tool_call_correctness.services.agent_adapter import (
+    AgentExecutionAdapter,
     LiveAgentAdapter,
 )
 from app.components.c1_tool_call_correctness.services.config_service import (
@@ -103,6 +116,10 @@ from app.components.c1_tool_call_correctness.services.config_service import (
     get_project_config,
     list_project_configs,
     update_project_config,
+)
+from app.components.c1_tool_call_correctness.services import (
+    nexacart_correction_service,
+    nexacart_defect_lab,
 )
 from app.components.c1_tool_call_correctness.services.correction_service import (
     CorrectionService,
@@ -117,6 +134,7 @@ from app.components.c1_tool_call_correctness.services.evaluator_baselines import
 )
 from app.components.c1_tool_call_correctness.services.execution_service import (
     ExecutionService,
+    nexacart_adapter_for_connection,
 )
 from app.components.c1_tool_call_correctness.services.generation_service import (
     execute_generation_job,
@@ -138,7 +156,48 @@ from app.components.c1_tool_call_correctness.services.suite_selector import (
 from app.components.c1_tool_call_correctness.services.validator import (
     validate_project_config,
 )
-from app.database import get_db
+from app.database import SessionLocal, get_db
+
+
+def get_c1_live_adapter_factory() -> Callable[..., AgentExecutionAdapter]:
+    """Factory ``(base_url | None) -> adapter`` for live NexaCart (overridden in hermetic tests).
+
+    ``None`` is the configured NexaCart instance; a base URL is a local defect-lab instance.
+    """
+    from app.components.c1_tool_call_correctness.services.nexacart_live_adapter import (
+        NexaCartLiveAgentAdapter,
+    )
+
+    def factory(base_url: str | None = None) -> AgentExecutionAdapter:
+        if base_url is None:
+            return NexaCartLiveAgentAdapter()
+        return NexaCartLiveAgentAdapter.for_base_url(base_url)
+
+    return factory
+
+
+def get_c1_features() -> dict[str, bool]:
+    """Build features of the C1 workspace (overridden in hermetic tests)."""
+    from app.config import get_settings
+
+    return {"code_correction_enabled": get_settings().c1_code_correction_enabled}
+
+
+def _require_code_correction(features: dict[str, bool]) -> None:
+    if not features.get("code_correction_enabled"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Code correction and sandbox verification (defect lab) are disabled in this "
+                "build (C1_CODE_CORRECTION_ENABLED=false)."
+            ),
+        )
+
+
+def get_c1_session_factory() -> Callable[[], Session]:
+    """Session factory for background live runs (overridden in hermetic tests)."""
+    return SessionLocal
+
 
 router = APIRouter(
     prefix="/api/v1/projects/{project_id}/c1",
@@ -651,18 +710,35 @@ def start_execution_run_endpoint(
     project_id: str,
     payload: ExecutionRequest,
     db: Annotated[Session, Depends(get_db)],
+    background_tasks: BackgroundTasks,
+    live_adapter_factory: Annotated[
+        Callable[..., AgentExecutionAdapter], Depends(get_c1_live_adapter_factory)
+    ],
+    session_factory: Annotated[Callable[[], Session], Depends(get_c1_session_factory)],
 ):
+    """Live NexaCart runs return RUNNING at once and continue in the background (poll the run)."""
     try:
-        run_model = execution_service.create_and_start_run(
+        run_model, adapter, is_ready = execution_service.prepare_run(
             db=db,
             project_id=project_id,
             request=payload,
+            live_adapter_factory=live_adapter_factory,
         )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+    if is_ready and run_model.status == "RUNNING":
+        if execution_service.is_live_adapter(adapter):
+            background_tasks.add_task(
+                execution_service.run_prepared_in_background,
+                session_factory,
+                run_model.id,
+                adapter,
+            )
+        else:
+            execution_service.execute_prepared_run(db, run_model.id, adapter)
 
     detail = execution_service.get_run_detail(db, project_id, run_model.id)
     if not detail:
@@ -748,14 +824,33 @@ def rerun_execution_endpoint(
     project_id: str,
     run_id: str,
     db: Annotated[Session, Depends(get_db)],
+    background_tasks: BackgroundTasks,
+    live_adapter_factory: Annotated[
+        Callable[..., AgentExecutionAdapter], Depends(get_c1_live_adapter_factory)
+    ],
+    session_factory: Annotated[Callable[[], Session], Depends(get_c1_session_factory)],
 ):
     try:
-        execution_service.rerun_execution(db, project_id, run_id)
+        run_model, adapter, is_ready = execution_service.prepare_rerun(
+            db, project_id, run_id, live_adapter_factory=live_adapter_factory
+        )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
+    if is_ready:
+        attempt = execution_service.next_attempt_number(db, run_model.id)
+        if execution_service.is_live_adapter(adapter):
+            background_tasks.add_task(
+                execution_service.run_prepared_in_background,
+                session_factory,
+                run_model.id,
+                adapter,
+                attempt,
+            )
+        else:
+            execution_service.execute_prepared_run(db, run_model.id, adapter, attempt)
     detail = execution_service.get_run_detail(db, project_id, run_id)
     if not detail:
         raise HTTPException(
@@ -794,6 +889,9 @@ def get_case_execution_endpoint(
 def check_adapter_readiness_endpoint(
     project_id: str,
     db: Annotated[Session, Depends(get_db)],
+    live_adapter_factory: Annotated[
+        Callable[..., AgentExecutionAdapter], Depends(get_c1_live_adapter_factory)
+    ],
 ):
     configs = list_project_configs(db, project_id)
     if not configs:
@@ -803,16 +901,191 @@ def check_adapter_readiness_endpoint(
         )
     latest_config = configs[0]
     conn_ref = latest_config.agent_connection_ref
-    live_adapter = LiveAgentAdapter(connection_ref=conn_ref)
+    if is_nexacart_connection(conn_ref):
+        live_adapter: AgentExecutionAdapter = nexacart_adapter_for_connection(
+            conn_ref, live_adapter_factory
+        )
+    else:
+        live_adapter = LiveAgentAdapter(connection_ref=conn_ref)
     is_ready, reason = live_adapter.check_readiness()
 
-    return {
+    response = {
         "project_id": project_id,
         "config_version": latest_config.version,
         "agent_connection_ref": conn_ref,
+        "adapter_type": getattr(live_adapter, "ADAPTER_TYPE", "UNKNOWN"),
         "is_ready": is_ready,
         "diagnostics": reason or "Adapter connection verified and ready.",
     }
+    if is_ready and hasattr(live_adapter, "describe"):
+        response["execution_target"] = live_adapter.describe()
+    return response
+
+
+# C1 live NexaCart: configuration import and readiness
+# ============================================================================
+
+
+@router.get(
+    "/live/nexacart/readiness",
+    summary="Check that NexaCart, its QA harness and the agent are reachable for live C1 runs",
+)
+def nexacart_live_readiness(
+    project_id: str,
+    live_adapter_factory: Annotated[
+        Callable[..., AgentExecutionAdapter], Depends(get_c1_live_adapter_factory)
+    ],
+):
+    adapter = live_adapter_factory()
+    is_ready, reason = adapter.check_readiness()
+    caps = getattr(adapter, "capabilities", None) or {}
+    return {
+        "project_id": project_id,
+        "status": "READY" if is_ready else "BLOCKED",
+        "reasons": [] if is_ready else [reason or "Live NexaCart target is not ready."],
+        "base_url": getattr(getattr(adapter, "target", None), "base_url", None),
+        "harness_version": caps.get("harnessVersion"),
+        "agent": caps.get("agent") or {},
+        "tools": [
+            {"name": t.get("name"), "is_state_changing": bool(t.get("isStateChanging"))}
+            for t in caps.get("tools", [])
+        ],
+    }
+
+
+@router.get("/features", summary="C1 build features shown in the workspace")
+def c1_features(
+    project_id: str,
+    features: Annotated[dict[str, bool], Depends(get_c1_features)],
+):
+    return {"project_id": project_id, **features}
+
+
+class DefectLabRequest(BaseModel):
+    defect_id: str = Field(..., min_length=1)
+
+
+@router.get(
+    "/live/nexacart/defect-lab",
+    summary="Controlled-defect lab status and the available controlled defects",
+)
+def defect_lab_status(
+    project_id: str,
+    features: Annotated[dict[str, bool], Depends(get_c1_features)],
+):
+    if not features.get("code_correction_enabled"):
+        return {"enabled": False, "lab": None, "defects": []}
+    lab = nexacart_defect_lab.get_lab(project_id)
+    return {
+        "enabled": True,
+        "lab": lab.public() if lab else None,
+        "defects": nexacart_defect_lab.available_defects(),
+    }
+
+
+@router.post(
+    "/live/nexacart/defect-lab",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Build a disposable NexaCart copy with one controlled defect and run it locally",
+)
+def start_defect_lab(
+    project_id: str,
+    payload: DefectLabRequest,
+    background_tasks: BackgroundTasks,
+    features: Annotated[dict[str, bool], Depends(get_c1_features)],
+):
+    _require_code_correction(features)
+    from pathlib import Path
+
+    from app.config import get_settings
+
+    root = get_settings().nexacart_source_root
+    if not root or not Path(root).is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="NEXACART_SOURCE_ROOT is not configured; the lab copies that tree.",
+        )
+    try:
+        lab = nexacart_defect_lab.begin_lab(project_id, payload.defect_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    background_tasks.add_task(nexacart_defect_lab.build_lab, lab, Path(root))
+    return {
+        "lab": lab.public(),
+        "note": "Building the seeded copy takes about 1-2 minutes.",
+    }
+
+
+@router.delete(
+    "/live/nexacart/defect-lab",
+    summary="Stop the defect lab instance and delete its disposable copy",
+)
+def stop_defect_lab(
+    project_id: str,
+    features: Annotated[dict[str, bool], Depends(get_c1_features)],
+):
+    _require_code_correction(features)
+    lab = nexacart_defect_lab.stop_lab(project_id)
+    return {"lab": lab.public() if lab else None}
+
+
+@router.post(
+    "/live/nexacart/config",
+    response_model=ProjectConfigResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a C1 configuration version from NexaCart's real tool registry and C1 requirements",
+)
+def import_nexacart_live_config(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    live_adapter_factory: Annotated[
+        Callable[..., AgentExecutionAdapter], Depends(get_c1_live_adapter_factory)
+    ],
+    features: Annotated[dict[str, bool], Depends(get_c1_features)],
+    target: str = "main",
+):
+    """target=main: the configured NexaCart; target=lab: this project's running defect lab."""
+    extra_details: dict[str, Any] = {"target": target}
+    if target == "lab":
+        _require_code_correction(features)
+        lab = nexacart_defect_lab.get_lab(project_id)
+        if lab is None or lab.status != "RUNNING":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No running defect lab for this project. Start one first.",
+            )
+        adapter = live_adapter_factory(lab.base_url)
+        extra_details.update(
+            {
+                "source_root": lab.workspace,
+                "controlled_defect": lab.public()["defect"],
+                "evidence_kind": "CONTROLLED_DEFECT",
+            }
+        )
+    elif target == "main":
+        adapter = live_adapter_factory()
+        extra_details["evidence_kind"] = "NATURAL_AGENT_BEHAVIOUR"
+    else:
+        raise HTTPException(status_code=422, detail="target must be 'main' or 'lab'.")
+    is_ready, reason = adapter.check_readiness()
+    if not is_ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Live NexaCart target is BLOCKED: {reason}",
+        )
+    configs = list_project_configs(db, project_id)
+    next_version = (configs[0].version + 1) if configs else 1
+    payload = build_nexacart_live_config(
+        adapter.capabilities or {},
+        getattr(adapter.target, "base_url", None) or "",
+        version=next_version,
+        extra_details=extra_details,
+    )
+    try:
+        model = create_project_config(db, project_id, payload)
+    except (ConfigConflictError, ConfigValidationError) as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    return _serialize_config_model(model)
 
 
 @router.post(
@@ -929,12 +1202,28 @@ async def request_correction_endpoint(
     project_id: str,
     request: CorrectionAttemptRequest,
     db: Annotated[Session, Depends(get_db)],
+    background_tasks: BackgroundTasks,
+    live_adapter_factory: Annotated[
+        Callable[..., AgentExecutionAdapter], Depends(get_c1_live_adapter_factory)
+    ],
+    session_factory: Annotated[Callable[[], Session], Depends(get_c1_session_factory)],
 ):
+    """NexaCart attempts return VERIFYING; poll GET /corrections/{id} for each verification step."""
+
+    def schedule(correction_id: str) -> None:
+        background_tasks.add_task(
+            nexacart_correction_service.verify_attempt,
+            session_factory,
+            correction_id,
+            live_adapter_factory,
+        )
+
     try:
         return await correction_service.execute_correction_attempt(
             db=db,
             project_id=project_id,
             request=request,
+            schedule=schedule,
         )
     except ValueError as e:
         raise HTTPException(

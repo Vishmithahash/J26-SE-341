@@ -15,7 +15,7 @@ import {
   ExternalLink,
   Cpu,
 } from 'lucide-react';
-import { c1Api, RUN_STATUSES } from './c1Api';
+import { c1Api, RUN_STATUSES, isRunInFlight } from './c1Api';
 import { ExecutionProvenanceBadge } from './ExecutionProvenanceBadge';
 
 export const RunDashboard = ({
@@ -26,6 +26,7 @@ export const RunDashboard = ({
 }) => {
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
   const [deadlineSeconds, setDeadlineSeconds] = useState(60);
+  const [repetitions, setRepetitions] = useState(1);
   const [codeVersion, setCodeVersion] = useState('');
   const [adapterOverride, setAdapterOverride] = useState('');
   const [activeRun, setActiveRun] = useState(null);
@@ -137,6 +138,17 @@ export const RunDashboard = ({
     [projectId, onRunSelected, loadPastRuns]
   );
 
+  // After a page reload, resume following a run that is still executing on the backend
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (resumedRef.current || activeRun) return;
+    const inFlight = pastRuns.find((r) => isRunInFlight(r.status));
+    if (inFlight) {
+      resumedRef.current = true;
+      pollRunStatus(inFlight.run_id);
+    }
+  }, [pastRuns, activeRun, pollRunStatus]);
+
   // Submit test run
   const handleStartRun = async (e) => {
     if (e) e.preventDefault();
@@ -161,6 +173,7 @@ export const RunDashboard = ({
       suite_id: selectedSuiteId.trim(),
       idempotency_key: idempotencyKey,
       deadline_seconds: Number(deadlineSeconds) || 60,
+      repetitions: Number(repetitions) || 1,
       evaluator_version: 'c1-evaluator-v1.0',
       code_version: codeVersion.trim() || null,
       adapter_override: adapterOverride.trim() || null,
@@ -350,6 +363,26 @@ export const RunDashboard = ({
                 </div>
 
                 <div>
+                  <label
+                    htmlFor="c1-repetitions"
+                    className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1"
+                  >
+                    Runs per case (repetitions)
+                  </label>
+                  <select
+                    id="c1-repetitions"
+                    value={repetitions}
+                    onChange={(e) => setRepetitions(Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                  >
+                    <option value={1}>1 (single run)</option>
+                    <option value={2}>2</option>
+                    <option value={3}>3 (proposal: agent variability)</option>
+                    <option value={5}>5</option>
+                  </select>
+                </div>
+
+                <div>
                   <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
                     Code Commit / Version (Optional)
                   </label>
@@ -412,6 +445,20 @@ export const RunDashboard = ({
             </div>
           ) : (
             <div className="space-y-3">
+              {activeRun.effective_config?.adapter_type === 'NEXACART_LIVE_AGENT_ADAPTER' && (
+                <div className="p-2 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 text-[11px] text-emerald-900 dark:text-emerald-200">
+                  Live NexaCart run
+                  {activeRun.effective_config?.execution_target?.agent?.model
+                    ? ` (agent ${activeRun.effective_config.execution_target.agent.provider || ''} ${activeRun.effective_config.execution_target.agent.model})`
+                    : ''}
+                  : each case is one real agent run on a fresh fixture (about 1-2 minutes). Completed{' '}
+                  {(activeRun.summary.passed_cases || 0) +
+                    (activeRun.summary.failed_cases || 0) +
+                    (activeRun.summary.inconclusive_cases || 0) +
+                    (activeRun.summary.error_cases || 0)}{' '}
+                  of {activeRun.summary.total_cases} cases.
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <span className="text-xs font-mono font-bold text-slate-900 dark:text-white">
                   {activeRun.summary.run_id.slice(0, 12)}...

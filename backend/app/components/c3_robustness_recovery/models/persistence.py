@@ -283,3 +283,37 @@ class C3EvaluationModel(Base):
         ),
         Index("ix_c3_eval_project_verdict", "project_id", "recovery_verdict"),
     )
+
+
+class C3EvaluationReviewModel(Base):
+    """Append-only human review of a stored recovery evaluation.
+
+    The evaluation itself is never changed; reviewers record their own verdict next to it
+    (the proposal's independent reviewer labels). Several reviews per evaluation are allowed.
+    """
+
+    __tablename__ = "c3_evaluation_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
+    )
+    evaluation_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("c3_evaluations.evaluation_id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    pair_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    project_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    evaluator_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reviewer_verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence_sufficient: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    reviewer_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )

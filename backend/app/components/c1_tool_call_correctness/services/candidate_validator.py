@@ -147,7 +147,15 @@ def validate_candidate_case(
                         "object": ["object", "dict"],
                         "array": ["array", "list"],
                     }
-                    allowed = type_compat.get(declared_type, [declared_type])
+                    # JSON Schema allows a list of types, e.g. ["string", "null"].
+                    declared_types = (
+                        declared_type
+                        if isinstance(declared_type, list)
+                        else [declared_type]
+                    )
+                    allowed = [
+                        a for t in declared_types for a in type_compat.get(t, [t])
+                    ]
                     if arg_con.expected_type.lower() not in allowed:
                         issues.append(
                             ValidationIssue(

@@ -20,6 +20,7 @@ import { useTestCaseInspection } from '../hooks/useTestCaseInspection';
 import { useControlledExecution } from '../hooks/useControlledExecution';
 import { usePolicyRegression } from '../hooks/usePolicyRegression';
 import { useResearchEvaluation } from '../hooks/useResearchEvaluation';
+import { useNexaCartLive } from '../hooks/useNexaCartLive';
 
 import { ProjectHeader } from '../components/ProjectHeader';
 import { C4Navigation } from '../components/C4Navigation';
@@ -37,7 +38,10 @@ import { PolicyRegressionSection } from '../components/regression/PolicyRegressi
 import { ResearchEvaluationSection } from '../components/evaluation/ResearchEvaluationSection';
 import { FindingDetailsModal } from '../components/evidence/FindingDetailsModal';
 import { ReportExportModal } from '../components/reports/ReportExportModal';
+import { NexaCartLiveImportPanel, NexaCartLiveRunPanel } from '../components/live/NexaCartLivePanels';
 import { C4_WORKSPACE_TABS } from '../api/types';
+
+const NEXACART_LIVE_DOMAIN_ID = 'domain-nexacart-live';
 
 export const PolicySafetyWorkspace = ({
   title = 'Policy-Aware Safety and Prompt-Injection Testing',
@@ -101,6 +105,7 @@ export const PolicySafetyWorkspace = ({
   const execution = useControlledExecution(activeProjectId, isCurrentGeneration, getGeneration);
   const regression = usePolicyRegression(activeProjectId, isCurrentGeneration, getGeneration);
   const evaluation = useResearchEvaluation(activeProjectId, isCurrentGeneration, getGeneration);
+  const live = useNexaCartLive(activeProjectId, isCurrentGeneration, getGeneration);
 
   // Load test cases when project is ready or tab switches to TEST_CASES
   const { loadTestCases } = cases;
@@ -113,6 +118,8 @@ export const PolicySafetyWorkspace = ({
     }
     if (activeProjectId && activeTab === C4_WORKSPACE_TABS.RUNS_AND_FINDINGS) {
       loadRuns();
+      // Frozen NexaCart cases feed the live execution panel.
+      loadTestCases();
     }
     if (activeProjectId && activeTab === C4_WORKSPACE_TABS.EVALUATION_AND_REPORTS) {
       loadDatasets();
@@ -196,6 +203,41 @@ export const PolicySafetyWorkspace = ({
     setModalTargetRunForExport(null);
   }, []);
 
+  // Live NexaCart import feeds the standard workflow: artifact, candidate rules and binding.
+  const { setSelectedArtifact } = intake;
+  const { setCandidates } = extraction;
+  const { fetchBindingVersion, loadDomainData } = bindings;
+  const handleLiveImported = useCallback(
+    (result) => {
+      setSelectedArtifact(result.artifact);
+      setCandidates(result.candidate_rules);
+      setSelectedRuleIds(result.candidate_rule_ids);
+      loadDomainData();
+      fetchBindingVersion(result.binding_id, result.binding_version);
+    },
+    [setSelectedArtifact, setCandidates, loadDomainData, fetchBindingVersion]
+  );
+
+  const acceptedContract = contracts.currentContract;
+  const frozenLiveCaseCount = cases.testCases.filter(
+    (tc) =>
+      tc.domain_id === NEXACART_LIVE_DOMAIN_ID &&
+      tc.lifecycle_state === 'FROZEN' &&
+      !tc.is_obsolete &&
+      tc.contract_id === acceptedContract?.contract_id &&
+      tc.contract_version === acceptedContract?.version
+  ).length;
+
+  const { setActiveRun } = execution;
+  const handleOpenLiveRun = useCallback(
+    async (runId) => {
+      const runs = await loadRuns();
+      const run = runs.find((r) => r.run_id === runId);
+      if (run) setActiveRun(run);
+    },
+    [loadRuns, setActiveRun]
+  );
+
   const handleGenerateCasesWrapper = useCallback(
     async (params) => {
       const report = await generation.generateCases(params);
@@ -264,6 +306,11 @@ export const PolicySafetyWorkspace = ({
           {/* TAB 1: Policy Preparation (Artifacts -> Extraction -> Candidates -> Contracts) */}
           {activeTab === C4_WORKSPACE_TABS.POLICY_PREPARATION && (
             <div className="space-y-8">
+              {/* Live target: NexaCart policy, binding and reference rules */}
+              <section aria-label="Live NexaCart target">
+                <NexaCartLiveImportPanel live={live} onImported={handleLiveImported} />
+              </section>
+
               {/* Stage 1: Artifact Intake */}
               <section aria-labelledby="stage-intake-heading">
                 <ArtifactIntakeSection
@@ -355,7 +402,7 @@ export const PolicySafetyWorkspace = ({
                 isLoadingDomains={bindings.isLoadingDomains}
                 isLoadingReadiness={bindings.isLoadingReadiness}
                 isSubmittingJob={bindings.isSubmittingJob}
-                onCheckReadiness={bindings.checkDomainReadiness}
+                onCheckReadiness={bindings.checkReadiness}
                 onFetchBindingVersion={bindings.fetchBindingVersion}
                 onStartOnboarding={bindings.startOnboarding}
                 selectedArtifact={intake.selectedArtifact}
@@ -402,6 +449,13 @@ export const PolicySafetyWorkspace = ({
           {/* TAB 4: Runs & Findings (Phase 2 Implemented: Controlled Execution & 6 Outcome Dimensions) */}
           {activeTab === C4_WORKSPACE_TABS.RUNS_AND_FINDINGS && (
             <div className="space-y-6">
+              <NexaCartLiveRunPanel
+                live={live}
+                acceptedContract={acceptedContract}
+                frozenCaseCount={frozenLiveCaseCount}
+                onFinished={() => loadRuns()}
+                onOpenRun={handleOpenLiveRun}
+              />
               <ExecutionRunsSection
                 runsList={execution.runsList}
                 activeRun={execution.activeRun}

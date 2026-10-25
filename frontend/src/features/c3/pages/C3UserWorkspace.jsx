@@ -9,6 +9,7 @@ import {
   GitCompare,
   Info,
   Workflow,
+  Server,
 } from 'lucide-react';
 import { useProject } from '../../../context/ProjectContext';
 import { C3ProjectBanner } from '../components/C3ProjectBanner';
@@ -20,6 +21,7 @@ import { C3GenerationPanel } from '../components/C3GenerationPanel';
 import { C3StoredSuitesViewer } from '../components/C3StoredSuitesViewer';
 import { C3TrialsWorkspace } from '../components/C3TrialsWorkspace';
 import { C3ResultsWorkspace } from '../components/C3ResultsWorkspace';
+import { C3LiveNexaCartPanel } from '../components/C3LiveNexaCartPanel';
 import { useC3ValidationGeneration } from '../hooks/useC3ValidationGeneration';
 import {
   DEMO_CANDIDATE_CASE_VALID,
@@ -47,7 +49,7 @@ export const C3UserWorkspace = () => {
   useEffect(() => {
     const handleHash = () => {
       const h = window.location.hash.replace('#', '');
-      if (['prepare', 'validate', 'generate', 'suites', 'trials', 'results', 'catalog'].includes(h)) {
+      if (['prepare', 'validate', 'generate', 'live', 'suites', 'trials', 'results', 'catalog'].includes(h)) {
         setActiveSection(h);
       }
     };
@@ -136,6 +138,19 @@ export const C3UserWorkspace = () => {
         >
           <Sparkles className="w-3.5 h-3.5" />
           <span>3. Feasible Generation</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('live')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap ${
+            activeSection === 'live'
+              ? 'bg-teal-600 text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Server className="w-3.5 h-3.5" />
+          <span>Live NexaCart Runs</span>
         </button>
 
         <button
@@ -245,6 +260,15 @@ export const C3UserWorkspace = () => {
         </div>
       )}
 
+      {activeSection === 'live' && (
+        <div className="space-y-6">
+          <C3LiveNexaCartPanel
+            projectId={activeProjectId}
+            onOpenTrials={() => setActiveSection('trials')}
+          />
+        </div>
+      )}
+
       {activeSection === 'suites' && (
         <div className="space-y-6">
           <C3StoredSuitesViewer projectId={activeProjectId} />
@@ -303,7 +327,7 @@ export const C3UserWorkspace = () => {
               Runtime Connectivity:
             </span>
             <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-              Live execution is not connected in this standalone workspace. Test trials are evaluated using imported evidence records or executed through shared integration plans and persistence APIs.
+              Live NexaCart runs (Live NexaCart Runs tab) generate fault cases from NexaCart's QA harness capabilities and execute matched clean/fault trials with NexaCart's own LLM agent. The other tabs also accept imported evidence and controlled demonstration runs, which are labelled as such.
             </p>
           </div>
         </div>

@@ -373,6 +373,9 @@ def test_c2_model_assisted_parses_valid_structured_predicate():
             else inv.predicate.left.get("path")
         )
         assert left_path == "cart_total"
+        # qwen3.5 reasoning made the proposal time out; the request switches it off
+        sent = mock_service.invoke_for_user.await_args.args[1]
+        assert sent.metadata == {"ollama_think": False}
 
 
 def test_c2_model_assisted_rejects_invalid_proposal_and_falls_back():

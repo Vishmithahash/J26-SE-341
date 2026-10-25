@@ -29,9 +29,16 @@ from app.components.c2_state_aware_workflow.predicates.evaluator import (
 from app.components.c2_state_aware_workflow.predicates.expressions import (
     ComparisonPredicate,
     FieldRef,
+    LiteralPredicate,
+    LogicalOperator,
+    LogicalPredicate,
+    PresencePredicate,
     ScopeEnum,
 )
-from app.components.c2_state_aware_workflow.predicates.tristate import TriState
+from app.components.c2_state_aware_workflow.predicates.tristate import (
+    TriState,
+    is_missing,
+)
 
 
 class CoverageGuidedGenerator:
@@ -83,6 +90,7 @@ class CoverageGuidedGenerator:
 
         cases: list[GeneratedTestDefinition] = []
         seen_case_signatures: set[tuple[Any, ...]] = set()
+        canonical_route_len: int | None = None
 
         paths_explored = 0
         depth_limit_reached = False
@@ -156,9 +164,19 @@ class CoverageGuidedGenerator:
                     category = TestCategory.NEGATIVE
                     expected_outcome = ExpectedOutcomeType.EXPECTED_REJECTION_PASS
                 else:
-                    # Alternative vs Valid
-                    # If visited an inspection / alternative intermediate state
-                    is_alt = any("INSPECT" in s or "ALT" in s for s in path_states)
+                    # Alternative vs Valid: an accepting path is an alternative when it reaches the
+                    # outcome through more distinct states than the shortest accepting route (e.g.
+                    # locating the order before cancelling, or a failed refund that is retried).
+                    # Self-loops (neutral reads) do not change the route. BFS meets the shortest
+                    # accepting path first, so that one fixes the canonical route length.
+                    route_len = len(
+                        [s for i, s in enumerate(path_states) if i == 0 or s != path_states[i - 1]]
+                    )
+                    if canonical_route_len is None:
+                        canonical_route_len = route_len
+                    is_alt = route_len > canonical_route_len or any(
+                        "INSPECT" in s or "ALT" in s for s in path_states
+                    )
                     category = (
                         TestCategory.ALTERNATIVE if is_alt else TestCategory.VALID
                     )
@@ -449,7 +467,9 @@ class CoverageGuidedGenerator:
         )
 
         try:
-            tristate_result = evaluate_predicate(trans.guard, test_ctx)
+            tristate_result = evaluate_predicate(
+                self._planning_guard(trans.guard, fixture), test_ctx
+            )
             # NEVER use direct boolean coercion bool(tristate_result)
             if tristate_result == TriState.TRUE:
                 return candidate_args, TriState.TRUE
@@ -459,3 +479,51 @@ class CoverageGuidedGenerator:
                 return candidate_args, TriState.UNKNOWN
         except Exception:  # noqa: BLE001
             return candidate_args, TriState.UNKNOWN
+
+    @classmethod
+    def _planning_guard(cls, guard: Any, fixture: dict[str, Any]) -> Any:
+        """Planning view of a guard: clauses decided only at run time are assumed satisfiable.
+
+        Clauses over observed outcomes (``event.result.*``, ``before``, ``after``) and over fixture
+        values that are created per run (absent from the planning fixture) cannot be decided when
+        the suite is generated; the runtime evaluator still checks them against real evidence.
+        Guards without such clauses are evaluated unchanged.
+        """
+        if isinstance(guard, LogicalPredicate):
+            if guard.op == LogicalOperator.NOT:
+                if any(cls._is_runtime_decided(c, fixture) for c in guard.clauses):
+                    return LiteralPredicate(value="TRUE")
+                return guard
+            return guard.model_copy(
+                update={
+                    "clauses": [cls._planning_guard(c, fixture) for c in guard.clauses]
+                }
+            )
+        if cls._is_runtime_decided(guard, fixture):
+            return LiteralPredicate(value="TRUE")
+        return guard
+
+    @classmethod
+    def _is_runtime_decided(cls, predicate: Any, fixture: dict[str, Any]) -> bool:
+        if isinstance(predicate, LogicalPredicate):
+            return any(cls._is_runtime_decided(c, fixture) for c in predicate.clauses)
+        refs: list[FieldRef] = []
+        if isinstance(predicate, ComparisonPredicate):
+            # Operands are typed ``FieldRef | Any``; models reloaded from JSON keep them as dicts.
+            for operand in (predicate.left, predicate.right):
+                if isinstance(operand, FieldRef):
+                    refs.append(operand)
+                elif isinstance(operand, dict) and {"scope", "path"} <= operand.keys():
+                    refs.append(FieldRef(**operand))
+        elif isinstance(predicate, PresencePredicate):
+            refs = [predicate.target]
+        for ref in refs:
+            if ref.scope in (ScopeEnum.BEFORE, ScopeEnum.AFTER):
+                return True
+            if ref.scope == ScopeEnum.EVENT and ref.path.split(".")[0] == "result":
+                return True
+            if ref.scope == ScopeEnum.FIXTURE and is_missing(
+                EvaluationContext(fixture=fixture).resolve(ref)
+            ):
+                return True
+        return False

@@ -361,6 +361,7 @@ def test_domain_1_ecommerce_onboarding_pipeline(db_session, sample_ecommerce_art
         artifact_version=sample_ecommerce_artifact.version,
         binding_id=ecommerce_binding.binding_id,
         binding_version=ecommerce_binding.version,
+        provider_id="offline_mock",
     )
     job = service.start_onboarding("proj-demo-ecom", job_req)
     assert job.status == OnboardingJobStatus.EXTRACTION_COMPLETE
@@ -427,6 +428,7 @@ def test_domain_2_booking_onboarding_pipeline(db_session, sample_booking_artifac
         artifact_version=sample_booking_artifact.version,
         binding_id=booking_binding.binding_id,
         binding_version=booking_binding.version,
+        provider_id="offline_mock",
     )
     job = service.start_onboarding("proj-demo-booking", job_req)
     assert job.status == OnboardingJobStatus.EXTRACTION_COMPLETE
@@ -755,6 +757,7 @@ def test_repair_idempotency_mismatched_request_digest_raises_409(client, db_sess
         artifact_version=art.version,
         binding_id=ecommerce_binding.binding_id,
         binding_version=ecommerce_binding.version,
+        provider_id="offline_mock",
     )
     job = service.start_onboarding("proj-idem", onboard_req)
     for c in repo.list_candidate_rules("proj-idem"):
@@ -871,7 +874,10 @@ def test_repair_cleanup_exception_safely_persisted_without_losing_findings():
 def test_api_extraction_and_onboarding_lifecycle(client, db_session):
     """Full REST API verification of extraction readiness, onboarding, review, and domain discovery."""
     # 1. Extraction readiness
-    readiness_res = client.get("/projects/proj-api-test/c4/extraction/readiness")
+    # Hermetic: the deterministic mock (the API default is now the selected QA model).
+    readiness_res = client.get(
+        "/projects/proj-api-test/c4/extraction/readiness?provider_id=offline_mock"
+    )
     assert readiness_res.status_code == 200
     assert readiness_res.json()["ready"] is True
 

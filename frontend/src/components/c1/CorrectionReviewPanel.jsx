@@ -74,6 +74,25 @@ export const CorrectionReviewPanel = ({
     loadCorrectionData();
   }, [loadCorrectionData]);
 
+  // NexaCart verification builds and re-runs NexaCart live: follow it step by step.
+  useEffect(() => {
+    if (correction?.status !== CORRECTION_STATUS.VERIFYING || !correction?.correction_id) {
+      return undefined;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const latest = await c1Api.getCorrection(projectId, correction.correction_id);
+        setCorrection(latest);
+        if (latest.status !== CORRECTION_STATUS.VERIFYING) {
+          setSuccessMsg(`Sandbox verification finished: ${latest.status}.`);
+        }
+      } catch {
+        // retry on the next tick
+      }
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [correction, projectId]);
+
   // Request new candidate fix
   const handleRequestCorrection = async () => {
     setIsLoading(true);
@@ -85,7 +104,11 @@ export const CorrectionReviewPanel = ({
         idempotency_key: `corr_${diagnosisId}_${Date.now()}`,
       });
       setCorrection(rec);
-      setSuccessMsg(`Candidate correction generated and verified in sandbox (${rec.status}).`);
+      setSuccessMsg(
+        rec.status === CORRECTION_STATUS.VERIFYING
+          ? 'Candidate patch generated. Verifying on a disposable NexaCart copy (build, live rerun, Jest, acceptance): several minutes.'
+          : `Candidate correction attempt finished (${rec.status}).`
+      );
       if (rec?.candidate_patch) {
         const diff = await c1Api.getCorrectionDiff(projectId, rec.correction_id);
         setDiffData(diff);

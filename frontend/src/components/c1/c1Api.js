@@ -22,6 +22,7 @@ export const EVIDENCE_CHANNELS = [
   { id: 'AUT_DATABASE_DIFF', label: 'AUT Database Diff' },
   { id: 'HTTP_TRAFFIC', label: 'HTTP Traffic' },
   { id: 'CONSOLE_OUTPUT', label: 'Console Output' },
+  { id: 'SYNTHETIC_FIXTURE', label: 'Synthetic Fixture (not application data)' },
 ];
 
 export const COMPARISON_OPERATORS = [
@@ -69,6 +70,12 @@ export const RUN_STATUSES = {
   FAILED: 'FAILED',
   ABORTED: 'ABORTED',
 };
+
+// A run the backend is still executing (not yet COMPLETED, FAILED or ABORTED)
+export const isRunInFlight = (status) =>
+  status === RUN_STATUSES.PENDING ||
+  status === RUN_STATUSES.INITIALIZING ||
+  status === RUN_STATUSES.RUNNING;
 
 export const CASE_EXECUTION_STATUSES = {
   NOT_EXECUTED: 'NOT_EXECUTED',
@@ -256,6 +263,58 @@ export const c1Api = {
     const base = buildBaseUrl(projectId);
     return request(`${base}/examples/nexacart`, {
       method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  // Live NexaCart: harness readiness and configuration import from the real tool registry
+  async getNexaCartLiveReadiness(projectId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/live/nexacart/readiness`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async importNexaCartLiveConfig(projectId, target = 'main') {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/live/nexacart/config?target=${encodeURIComponent(target)}`, {
+      method: 'POST',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  // Build features (code correction + sandbox verification are off in the PP1 build)
+  async getFeatures(projectId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/features`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  // Controlled-defect lab: a disposable NexaCart copy with one seeded defect on a local port
+  async getDefectLab(projectId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/live/nexacart/defect-lab`, {
+      method: 'GET',
+      headers: getC1Headers(projectId),
+    });
+  },
+
+  async startDefectLab(projectId, defectId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/live/nexacart/defect-lab`, {
+      method: 'POST',
+      headers: getC1Headers(projectId),
+      body: JSON.stringify({ defect_id: defectId }),
+    });
+  },
+
+  async stopDefectLab(projectId) {
+    const base = buildBaseUrl(projectId);
+    return request(`${base}/live/nexacart/defect-lab`, {
+      method: 'DELETE',
       headers: getC1Headers(projectId),
     });
   },

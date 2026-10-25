@@ -106,6 +106,14 @@ class C2ReportExportService:
         # Provenance
         if evidence_rec and evidence_rec.execution_provenance:
             prov_dict = dict(evidence_rec.execution_provenance)
+            # Records from a real agent run (or derived from one) had a live LLM runner; older
+            # records did not store these flags
+            ran_live = bool(
+                prov_dict.get("is_live_execution") or prov_dict.get("derived_from_live_execution")
+            )
+            default_unavailable = ["shared_intake_service", "unified_report_aggregator"]
+            if not ran_live:
+                default_unavailable = ["live_llm_runner", *default_unavailable]
             prov = ExecutionProvenance(
                 intended_execution_mode=prov_dict.get(
                     "intended_execution_mode", intended_mode
@@ -123,15 +131,10 @@ class C2ReportExportService:
                     ["state_snapshots", "before_after_diffs", "event_logs"],
                 ),
                 live_capabilities_available=prov_dict.get(
-                    "live_capabilities_available", False
+                    "live_capabilities_available", ran_live
                 ),
                 unavailable_live_capabilities=prov_dict.get(
-                    "unavailable_live_capabilities",
-                    [
-                        "live_llm_runner",
-                        "shared_intake_service",
-                        "unified_report_aggregator",
-                    ],
+                    "unavailable_live_capabilities", default_unavailable
                 ),
             )
         else:

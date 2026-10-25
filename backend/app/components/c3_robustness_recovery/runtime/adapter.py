@@ -7,7 +7,6 @@ Phase: Phase 2 - One-tool integration, matched trials, verified timeout exposure
 import copy
 import hashlib
 import json
-import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -539,9 +538,10 @@ class DemonstrationToolAdapter(DomainToolAdapter):
 
 
 # ---------------------------------------------------------------------------
-# Real Target Integration Blocker Check & Connector Contract
+# Live Target Capabilities (provided by runtime/nexacart_live.py, not by this runner)
 # ---------------------------------------------------------------------------
 
+# Name kept for compatibility: these are now provided by the live NexaCart runner.
 FUTURE_NEXACART_REQUIRED_CAPABILITIES: list[str] = [
     "Agent invocation and failed-run trace retrieval",
     "Domain tool-call interception",
@@ -555,48 +555,18 @@ FUTURE_NEXACART_REQUIRED_CAPABILITIES: list[str] = [
 def check_real_target_prerequisites(
     adapter_id: str | None = None,
 ) -> tuple[bool, list[str]]:
-    """Check whether real target (e.g. NexaCart AUT) prerequisites are available.
+    """Live readiness of the in-process demonstration runner (``HarnessRunner``).
 
-    Safeguard: A configured URL, health check, or env var alone must NOT mark live
-    execution ready. The live NexaCart connector must implement and register all 6
-    required domain adapter and fixture capabilities.
+    The demonstration runner drives in-process test doubles with a scripted caller and never
+    executes a live target. Live NexaCart execution is a separate runner
+    (``runtime/nexacart_live.py``) whose readiness comes from the NexaCart QA harness itself
+    (``GET /api/v1/c3/live/nexacart/readiness``). This check therefore always returns False and
+    points to the live runner.
     """
-    missing: list[str] = []
-
-    # Check for target endpoint
-    target_url = os.environ.get("NEXACART_AUT_URL") or os.environ.get("AUT_TARGET_URL")
-    if not target_url:
-        missing.append(
-            "Target Application-Under-Test endpoint is not configured (set NEXACART_AUT_URL or AUT_TARGET_URL)."
-        )
-
-    # Check for verified OpenAPI specification
-    openapi_path = os.environ.get("NEXACART_OPENAPI_SPEC") or os.environ.get(
-        "AUT_OPENAPI_SPEC"
-    )
-    if not openapi_path or not os.path.exists(openapi_path):
-        missing.append(
-            "Verified target OpenAPI / tool specification not found (set NEXACART_OPENAPI_SPEC or AUT_OPENAPI_SPEC)."
-        )
-
-    # Check for target authorization / API key
-    auth_key = (
-        os.environ.get("NEXACART_API_KEY")
-        or os.environ.get("AUT_API_KEY")
-        or os.environ.get("NEXACART_FIXTURE_RESET_KEY")
-    )
-    if not auth_key:
-        missing.append(
-            "Target API credentials/authorization key not found (set NEXACART_API_KEY or AUT_API_KEY)."
-        )
-
-    # Architectural safeguard: Live NexaCart adapter connector is not yet implemented or registered in this increment.
-    # A configured URL or health check alone does not mark live execution ready.
-    missing.append(
-        "Live NexaCart adapter connector is not implemented in this pre-live increment. "
-        "The connector must implement all 6 required capabilities: "
+    return False, [
+        "The controlled demonstration runner does not execute live targets. Live NexaCart "
+        "execution uses NexaCartLiveSuiteRunner (POST /api/v1/c3/live/nexacart/executions, "
+        "Live NexaCart Runs tab), which provides: "
         + "; ".join(FUTURE_NEXACART_REQUIRED_CAPABILITIES)
-    )
-
-    # Live AUT execution is never marked ready in this increment
-    return False, missing
+        + "."
+    ]

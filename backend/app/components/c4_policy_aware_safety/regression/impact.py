@@ -104,6 +104,38 @@ class PolicyImpactAnalyzer:
             )
             target_diff = diff_by_rule.get(target_rule_id)
 
+            # 0. A co-target rule of a multi-rule case was removed or semantically changed (the
+            # primary target may be unchanged); the case's expectations for that rule are stale.
+            primary_changed = target_diff is not None and target_diff.change_type in (
+                RuleChangeType.REMOVED,
+                RuleChangeType.SEMANTICALLY_MODIFIED,
+            )
+            changed_co_targets = [
+                rule_id
+                for rule_id in (getattr(case, "target_rule_ids", None) or [])
+                if rule_id != target_rule_id
+                and diff_by_rule.get(rule_id) is not None
+                and diff_by_rule[rule_id].change_type
+                in (RuleChangeType.REMOVED, RuleChangeType.SEMANTICALLY_MODIFIED)
+            ]
+            if changed_co_targets and not primary_changed:
+                changes = ", ".join(
+                    f"'{r}' {diff_by_rule[r].change_type.value.lower()}" for r in changed_co_targets
+                )
+                decisions.append(
+                    CaseImpactDecision(
+                        case_id=case.case_id,
+                        case_version=case.case_version,
+                        target_rule_id=target_rule_id,
+                        test_kind=test_kind_val,
+                        impact_level=CaseImpactLevel.DEFINITELY_AFFECTED,
+                        action=CaseDecisionAction.REVISE,
+                        reason=f"Co-target rule {changes} in candidate contract; multi-rule case needs revision.",
+                        dependent_rule_ids=[target_rule_id, *changed_co_targets],
+                    )
+                )
+                continue
+
             # 1. Target rule removed
             if target_diff and target_diff.change_type == RuleChangeType.REMOVED:
                 # Check if case has multiple target rules

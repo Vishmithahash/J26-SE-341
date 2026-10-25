@@ -35,6 +35,7 @@ export const ConfigurationEditor = ({
   const [rawJsonMode, setRawJsonMode] = useState(false);
   const [rawJsonText, setRawJsonText] = useState('');
   const [rawJsonError, setRawJsonError] = useState(null);
+  const [isImportingLive, setIsImportingLive] = useState(false);
 
   // Initialize form state
   useEffect(() => {
@@ -105,6 +106,24 @@ export const ConfigurationEditor = ({
       }
     } catch (err) {
       setErrorMsg(err.message || 'Failed to load example configuration.');
+    }
+  };
+
+  // Import Live NexaCart configuration (real tool registry + C1 requirements) as a new version
+  const handleImportLiveNexaCart = async () => {
+    setIsImportingLive(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const created = await c1Api.importNexaCartLiveConfig(projectId);
+      if (onSaveSuccess) onSaveSuccess(created);
+      setSuccessMsg(
+        `Imported live NexaCart configuration v${created.version}: ${created.tools.length} real agent tools, ${created.requirements.length} requirements.`
+      );
+    } catch (err) {
+      setErrorMsg(err.message || 'Live NexaCart is not reachable.');
+    } finally {
+      setIsImportingLive(false);
     }
   };
 
@@ -280,7 +299,18 @@ export const ConfigurationEditor = ({
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
           >
             <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-            Load NexaCart Example
+            Load Synthetic NexaCart Example
+          </button>
+
+          <button
+            type="button"
+            onClick={handleImportLiveNexaCart}
+            disabled={isImportingLive}
+            title="Create a new configuration version from NexaCart's real agent tools (QA harness) and the NexaCart C1 requirements"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-950/70 disabled:opacity-50"
+          >
+            <Code className="w-3.5 h-3.5" />
+            {isImportingLive ? 'Importing...' : 'Import Live NexaCart'}
           </button>
 
           <button

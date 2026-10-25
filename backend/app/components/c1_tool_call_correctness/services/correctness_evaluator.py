@@ -133,6 +133,23 @@ class DeterministicCorrectnessEvaluator:
 
             invocations = events_by_tool.get(spec.tool_name, [])
 
+            # An optional tool (min_count 0) that was not used satisfies its expectation.
+            if not invocations and spec.min_count == 0:
+                check_results.append(
+                    CheckLevelResult(
+                        check_id=f"chk_opt_{spec.tool_name}_{spec_idx}_{case_id[:8]}",
+                        rule_name="OPTIONAL_TOOL_USAGE",
+                        target_tool=spec.tool_name,
+                        verdict=CorrectnessVerdict.PASS,
+                        reason_code=ExecutionReasonCode.MATCH.value,
+                        expected_value=f"min=0, max={spec.max_count}",
+                        actual_value=0,
+                        explanation=f"Optional tool '{spec.tool_name}' was not invoked; nothing to check.",
+                        requirement_refs=requirement_refs,
+                    )
+                )
+                continue
+
             # Check: Tool Presence
             if not invocations:
                 # If trace is incomplete, a missing required tool cannot be confirmed as FAIL!
@@ -173,18 +190,46 @@ class DeterministicCorrectnessEvaluator:
             if len(invocations) < spec.min_count or (
                 spec.max_count is not None and len(invocations) > spec.max_count
             ):
+                rejected = [e for e in invocations if e.status.value == "FAILED"]
+                accepted = [e for e in invocations if e.status.value != "FAILED"]
+                # The agent's own rejected call(s) followed by a correct call is still a
+                # tool-call error (strict count), but it is reported as a self-correction.
+                self_corrected = (
+                    bool(rejected)
+                    and bool(accepted)
+                    and spec.max_count is not None
+                    and len(accepted) <= spec.max_count
+                    and max(e.call_index for e in accepted)
+                    > min(e.call_index for e in rejected)
+                )
+                if self_corrected:
+                    rejected_desc = "; ".join(
+                        f"#{e.call_index} {e.arguments} -> {e.tool_error or 'rejected'}"
+                        for e in rejected
+                    )
+                    reason = ExecutionReasonCode.SELF_CORRECTED_AFTER_REJECTED_CALL
+                    explanation = (
+                        f"Tool '{spec.tool_name}' was invoked {len(invocations)} times "
+                        f"(allowed max={spec.max_count}). The application rejected "
+                        f"{len(rejected)} call(s) [{rejected_desc}] and the agent then made "
+                        f"a successful call #{max(e.call_index for e in accepted)}. The "
+                        "rejected call is a real tool-call error (self-corrected)."
+                    )
+                else:
+                    reason = ExecutionReasonCode.TOOL_COUNT_OUT_OF_BOUNDS
+                    explanation = (
+                        f"Tool '{spec.tool_name}' was invoked {len(invocations)} times, "
+                        f"violating bounds [min={spec.min_count}, max={spec.max_count}]."
+                    )
                 check = CheckLevelResult(
                     check_id=f"chk_count_{spec.tool_name}_{spec_idx}_{case_id[:8]}",
                     rule_name="TOOL_INVOCATION_COUNT",
                     target_tool=spec.tool_name,
                     verdict=CorrectnessVerdict.FAIL,
-                    reason_code=ExecutionReasonCode.TOOL_COUNT_OUT_OF_BOUNDS.value,
+                    reason_code=reason.value,
                     expected_value=f"min={spec.min_count}, max={spec.max_count}",
                     actual_value=len(invocations),
-                    explanation=(
-                        f"Tool '{spec.tool_name}' was invoked {len(invocations)} times, "
-                        f"violating bounds [min={spec.min_count}, max={spec.max_count}]."
-                    ),
+                    explanation=explanation,
                     evidence_refs=[
                         r.evidence_id for ev in invocations for r in ev.evidence_refs
                     ],
@@ -208,6 +253,42 @@ class DeterministicCorrectnessEvaluator:
                     requirement_refs=requirement_refs,
                 )
                 check_results.append(check)
+
+            if spec.evaluate_all_invocations:
+                # Every call must satisfy the constraints (e.g. no invented identifiers).
+                for event in invocations:
+                    for c_idx, constraint in enumerate(spec.argument_constraints):
+                        c_verdict, c_reason, c_exp, exp_v, act_v = (
+                            self._evaluate_argument_constraint(
+                                constraint, event, context_data
+                            )
+                        )
+                        check_results.append(
+                            CheckLevelResult(
+                                check_id=(
+                                    f"chk_all_{spec.tool_name}_{constraint.argument_path}_"
+                                    f"{event.call_index}_{c_idx}_{case_id[:8]}"
+                                ),
+                                rule_name=f"ARG_CONSTRAINT_ALL_CALLS_{constraint.argument_path}",
+                                target_tool=spec.tool_name,
+                                target_argument=constraint.argument_path,
+                                verdict=c_verdict,
+                                reason_code=c_reason,
+                                expected_value=exp_v,
+                                actual_value=act_v,
+                                explanation=f"Call #{event.call_index} [{event.event_id}]: {c_exp}",
+                                evidence_refs=[
+                                    r.evidence_id for r in event.evidence_refs
+                                ],
+                                requirement_refs=spec.requirement_refs
+                                or requirement_refs,
+                            )
+                        )
+                        if c_verdict == CorrectnessVerdict.FAIL:
+                            has_mandatory_fail = True
+                        elif c_verdict == CorrectnessVerdict.INCONCLUSIVE:
+                            has_mandatory_inconclusive = True
+                continue
 
             # Match individual call for argument evaluation
             # If multiple invocations exist, select the best matching invocation

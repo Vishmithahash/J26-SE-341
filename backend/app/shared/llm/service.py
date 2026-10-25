@@ -11,6 +11,7 @@ from app.shared.llm.adapters.gemini import GeminiAdapter
 from app.shared.llm.adapters.ollama import OllamaAdapter
 from app.shared.llm.contracts import (
     ConnectionTestResponse,
+    LLMErrorType,
     LLMGenerationRequest,
     LLMGenerationResult,
     LLMProviderType,
@@ -21,6 +22,11 @@ from app.shared.llm.contracts import (
 from app.shared.llm.models import UserModelSelection
 
 logger = logging.getLogger(__name__)
+
+GEMINI_DISABLED_MESSAGE = (
+    "Hosted Gemini is disabled. Local Ollama is the default provider; "
+    "set GEMINI_ENABLED=true in backend/.env to allow credit-consuming Gemini calls."
+)
 
 
 class LLMProviderService:
@@ -38,13 +44,22 @@ class LLMProviderService:
         self,
         ollama_adapter: OllamaAdapter | None = None,
         gemini_adapter: GeminiAdapter | None = None,
+        gemini_enabled: bool | None = None,
     ):
         self.ollama_adapter = ollama_adapter or OllamaAdapter()
         self.gemini_adapter = gemini_adapter or GeminiAdapter()
+        self.gemini_enabled = (
+            get_settings().gemini_enabled if gemini_enabled is None else gemini_enabled
+        )
+
+    def _require_provider_enabled(self, provider_name: str) -> None:
+        if provider_name == LLMProviderType.GEMINI.value and not self.gemini_enabled:
+            raise ValueError(GEMINI_DISABLED_MESSAGE)
 
     def get_adapter(self, provider_name: str):
         norm = (provider_name or "").strip().lower()
         if norm == LLMProviderType.GEMINI.value:
+            self._require_provider_enabled(norm)
             return self.gemini_adapter
         if norm == LLMProviderType.OLLAMA.value:
             return self.ollama_adapter
@@ -91,6 +106,7 @@ class LLMProviderService:
         db: Session | None = None,
     ) -> UserModelSelection:
         """Update or create user's authoritative model selection."""
+        self._require_provider_enabled((config.provider or "").strip().lower())
         uid = int(user_id)
         close_db = False
         if db is None:
@@ -173,9 +189,21 @@ class LLMProviderService:
         ollama_status = await self.ollama_adapter.check_availability(
             model_id=ollama_model
         )
-        gemini_status = await self.gemini_adapter.check_availability(
-            model_id=gemini_model
-        )
+        if self.gemini_enabled:
+            gemini_status = await self.gemini_adapter.check_availability(
+                model_id=gemini_model
+            )
+        else:
+            gemini_status = ProviderStatusInfo(
+                provider=LLMProviderType.GEMINI.value,
+                connection_type="hosted",
+                is_configured=False,
+                is_available=False,
+                configured_default_model=self.gemini_adapter.default_model,
+                available_models=[],
+                status_message=GEMINI_DISABLED_MESSAGE,
+                last_checked_at=datetime.now(UTC),
+            )
 
         if user_sel is not None and last_test_status is not None:
             # Attach last test status ONLY if matching provider and model
@@ -350,20 +378,22 @@ class LLMProviderService:
             db=db,
         )
 
-        user_settings = dict(snapshot.generation_settings)
-
-        # Merge user settings if not overridden in request
-        if "temperature" in user_settings and (request.temperature == 0.0 or request.temperature is None):
-            request.temperature = float(user_settings["temperature"])
-        if "max_tokens" in user_settings and request.max_tokens in (4096, None):
-            request.max_tokens = int(user_settings["max_tokens"])
-        if "top_p" in user_settings and request.top_p is None:
-            request.top_p = float(user_settings["top_p"])
-        if "timeout_seconds" in user_settings and request.timeout_seconds in (180.0, None):
-            request.timeout_seconds = float(user_settings["timeout_seconds"])
+        apply_generation_limits(request, dict(snapshot.generation_settings))
 
         # 2. Resolve adapter
-        adapter = self.get_adapter(snapshot.provider)
+        try:
+            adapter = self.get_adapter(snapshot.provider)
+        except ValueError as err:
+            return LLMGenerationResult(
+                provider=snapshot.provider,
+                requested_model=snapshot.requested_model,
+                actual_model=snapshot.requested_model,
+                operation_reference=request.operation_reference,
+                prompt_template_version=request.prompt_template_version,
+                is_success=False,
+                error_message=str(err),
+                error_type=LLMErrorType.INVALID_REQUEST.value,
+            )
 
         # 3. Execute generation completely outside DB transaction
         result = await adapter.generate(
@@ -371,3 +401,28 @@ class LLMProviderService:
         )
 
         return result
+
+
+def apply_generation_limits(
+    request: LLMGenerationRequest, user_settings: dict
+) -> LLMGenerationRequest:
+    """Resolve temperature, token, top-p and timeout limits for one request.
+
+    Values the caller set explicitly win, then the user's saved generation settings,
+    then the configured backend defaults (LLM_DEFAULT_TIMEOUT_SECONDS, LLM_DEFAULT_MAX_TOKENS).
+    """
+    explicit = request.model_fields_set
+    settings = get_settings()
+    if "temperature" not in explicit and "temperature" in user_settings:
+        request.temperature = float(user_settings["temperature"])
+    if "top_p" not in explicit and "top_p" in user_settings:
+        request.top_p = float(user_settings["top_p"])
+    if "max_tokens" not in explicit:
+        request.max_tokens = int(
+            user_settings.get("max_tokens", settings.llm_default_max_tokens)
+        )
+    if "timeout_seconds" not in explicit:
+        request.timeout_seconds = float(
+            user_settings.get("timeout_seconds", settings.llm_default_timeout_seconds)
+        )
+    return request

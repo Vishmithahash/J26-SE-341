@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -6,6 +7,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.components.c1_tool_call_correctness.contracts.execution import (
+    AdapterExecutionResult,
     CapturedToolEvent,
     CaseExecutionDetail,
     ExecutionReasonCode,
@@ -29,6 +31,9 @@ from app.components.c1_tool_call_correctness.contracts.results import (
     CheckLevelResult,
     CorrectnessVerdict,
 )
+from app.components.c1_tool_call_correctness.examples.nexacart_live import (
+    is_nexacart_connection,
+)
 from app.components.c1_tool_call_correctness.models.persistence import (
     C1CaseExecutionModel,
     C1ExecutionRunModel,
@@ -47,6 +52,64 @@ from app.components.c1_tool_call_correctness.services.fixture_service import (
     SyntheticFixtureService,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def run_execution_provenance(raw_traces: list[dict[str, Any] | None]) -> str | None:
+    """Run provenance corroborated by recorded case traces (never by the requested mode alone).
+
+    LIVE_EXECUTION needs a NexaCart agent run id on a non-simulated live trace; a simulated or
+    fake-adapter trace makes the run SYNTHETIC_DEMO. ``None`` when no trace corroborates either.
+    """
+    provenance = None
+    for trace in raw_traces:
+        trace = trace or {}
+        adapter = str(trace.get("adapter") or "").upper()
+        if trace.get("simulated") is True or "FAKE" in adapter or "SIMULATED" in adapter:
+            return "SYNTHETIC_DEMO"
+        if (
+            adapter == "NEXACART_LIVE_AGENT_ADAPTER"
+            and trace.get("is_live_execution") is True
+            and trace.get("agent_run_id")
+        ):
+            provenance = "LIVE_EXECUTION"
+    return provenance
+
+
+def nexacart_adapter_for_connection(
+    conn_ref: str, live_adapter_factory: Any | None = None
+) -> AgentExecutionAdapter:
+    """Live adapter for the NexaCart instance a configuration names (local instances only).
+
+    ``live_adapter_factory(base_url | None)`` builds the adapter (overridden in hermetic tests);
+    ``None`` means the configured default NexaCart instance.
+    """
+    from app.components.c1_tool_call_correctness.examples.nexacart_live import (
+        base_url_from_connection_ref,
+    )
+    from app.components.c1_tool_call_correctness.services.nexacart_correction import (
+        host_is_local,
+    )
+    from app.components.c1_tool_call_correctness.services.nexacart_live_adapter import (
+        NexaCartLiveAgentAdapter,
+    )
+    from app.config import get_settings
+
+    base_url = base_url_from_connection_ref(conn_ref)
+    default = get_settings().nexacart_base_url.rstrip("/")
+    if base_url.rstrip("/") == default:
+        return (
+            live_adapter_factory(None)
+            if live_adapter_factory
+            else NexaCartLiveAgentAdapter()
+        )
+    if not host_is_local(base_url):
+        # Other hosts are never contacted with the QA admin credentials (stays not ready).
+        return LiveAgentAdapter(connection_ref=conn_ref)
+    if live_adapter_factory:
+        return live_adapter_factory(base_url)
+    return NexaCartLiveAgentAdapter.for_base_url(base_url)
+
 
 class ExecutionService:
     """Orchestrates test run preparation, fixture isolation, agent execution,
@@ -61,6 +124,7 @@ class ExecutionService:
         self,
         config: C1ProjectConfigModel,
         request: ExecutionRequest,
+        live_adapter_factory: Any | None = None,
     ) -> AgentExecutionAdapter:
         """Resolves the appropriate adapter based on request override and configuration."""
         if request.adapter_override:
@@ -73,7 +137,15 @@ class ExecutionService:
             # Default mock or simulated connection uses clean AUTO simulated fake adapter
             return FakeAgentAdapter(mode="AUTO")
 
+        if is_nexacart_connection(conn_ref):
+            return nexacart_adapter_for_connection(conn_ref, live_adapter_factory)
+
         return LiveAgentAdapter(connection_ref=conn_ref)
+
+    @staticmethod
+    def is_live_adapter(adapter: AgentExecutionAdapter) -> bool:
+        """Live adapters run real agent sessions (minutes per case) and are run in the background."""
+        return hasattr(adapter, "fixture_service")
 
     def create_and_start_run(
         self,
@@ -83,6 +155,27 @@ class ExecutionService:
         adapter: AgentExecutionAdapter | None = None,
     ) -> C1ExecutionRunModel:
         """Prepares and executes a test suite run, recording attempts and case evaluations."""
+        run_model, adapter, is_ready = self.prepare_run(
+            db, project_id, request, adapter
+        )
+        if is_ready and run_model.status == RunStatus.RUNNING.value:
+            self.execute_prepared_run(db, run_model.id, adapter)
+            db.refresh(run_model)
+        return run_model
+
+    def prepare_run(
+        self,
+        db: Session,
+        project_id: str,
+        request: ExecutionRequest,
+        adapter: AgentExecutionAdapter | None = None,
+        live_adapter_factory: Any | None = None,
+    ) -> tuple[C1ExecutionRunModel, AgentExecutionAdapter, bool]:
+        """Freezes the suite and configuration and records the run (RUNNING when ready).
+
+        Returns (run, adapter, is_ready). A run that already existed for the idempotency key is
+        returned with is_ready False so it is never executed twice.
+        """
         # 1. Idempotency Check: prevent duplicate submissions from triggering duplicate executions
         if request.idempotency_key:
             stmt = select(C1ExecutionRunModel).where(
@@ -91,7 +184,7 @@ class ExecutionService:
             )
             existing_run = db.execute(stmt).scalars().first()
             if existing_run:
-                return existing_run
+                return existing_run, adapter or FakeAgentAdapter(mode="AUTO"), False
 
         # 2. Retrieve Suite Version
         suite_stmt = select(C1SuiteVersionModel).where(
@@ -128,7 +221,7 @@ class ExecutionService:
 
         # 4. Resolve Adapter & Validate Readiness
         if adapter is None:
-            adapter = self.get_adapter(config, request)
+            adapter = self.get_adapter(config, request, live_adapter_factory)
 
         is_ready, not_ready_reason = adapter.check_readiness()
 
@@ -141,11 +234,16 @@ class ExecutionService:
             "code_version": request.code_version,
             "deadline_seconds": request.deadline_seconds,
             "adapter_type": getattr(adapter, "ADAPTER_TYPE", "UNKNOWN"),
+            "adapter_override": request.adapter_override,
+            "agent_connection_ref": config.agent_connection_ref,
             "suite_content_hash": suite_version_model.content_hash,
+            "repetitions": request.repetitions,
         }
+        if is_ready and hasattr(adapter, "describe"):
+            effective_config["execution_target"] = adapter.describe()
 
         # 6. Initialize Execution Run Record
-        run_id = f"run_{uuid.uuid4()}"
+        run_id = f"run_{uuid.uuid4().hex}"  # 36 chars: fits the varchar(36) key
         initial_status = RunStatus.RUNNING.value if is_ready else RunStatus.FAILED.value
         run_model = C1ExecutionRunModel(
             id=run_id,
@@ -158,7 +256,7 @@ class ExecutionService:
             idempotency_key=request.idempotency_key,
             effective_config=effective_config,
             summary={
-                "total_cases": len(suite_version_model.cases),
+                "total_cases": len(suite_version_model.cases) * request.repetitions,
                 "passed_cases": 0,
                 "failed_cases": 0,
                 "inconclusive_cases": 0,
@@ -170,24 +268,64 @@ class ExecutionService:
         db.add(run_model)
         db.commit()
         db.refresh(run_model)
+        return run_model, adapter, is_ready
 
-        if not is_ready:
-            return run_model
+    def execute_prepared_run(
+        self,
+        db: Session,
+        run_id: str,
+        adapter: AgentExecutionAdapter,
+        attempt_number: int = 1,
+    ) -> None:
+        """Executes the accepted cases of a prepared run (synchronously or as a background job)."""
+        run_model = db.get(C1ExecutionRunModel, run_id)
+        if run_model is None:
+            return
+        suite_version_model = db.get(C1SuiteVersionModel, run_model.suite_version_id)
+        config = db.get(C1ProjectConfigModel, run_model.config_id)
+        if suite_version_model is None or config is None:
+            run_model.status = RunStatus.FAILED.value
+            run_model.error_message = "Referenced suite or configuration not found."
+            run_model.completed_at = datetime.now(UTC)
+            db.commit()
+            return
+        try:
+            self._execute_cases(
+                db=db,
+                run_model=run_model,
+                cases=suite_version_model.cases,
+                adapter=adapter,
+                deadline_seconds=run_model.effective_config.get("deadline_seconds", 60),
+                attempt_number=attempt_number,
+                tools=config.tools,
+                tool_constraints=config.tool_constraints,
+                repetitions=int(run_model.effective_config.get("repetitions", 1) or 1),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # A crashed run must never look completed or successful.
+            db.rollback()
+            run_model = db.get(C1ExecutionRunModel, run_id)
+            if run_model is not None:
+                run_model.status = RunStatus.FAILED.value
+                run_model.error_message = (
+                    f"Execution stopped by an internal error: {exc}"
+                )
+                run_model.completed_at = datetime.now(UTC)
+                db.commit()
 
-        # 7. Execute Accepted Cases
-        self._execute_cases(
-            db=db,
-            run_model=run_model,
-            cases=suite_version_model.cases,
-            adapter=adapter,
-            deadline_seconds=request.deadline_seconds,
-            attempt_number=1,
-            tools=config.tools,
-            tool_constraints=config.tool_constraints,
-        )
-
-        db.refresh(run_model)
-        return run_model
+    def run_prepared_in_background(
+        self,
+        session_factory: Any,
+        run_id: str,
+        adapter: AgentExecutionAdapter,
+        attempt_number: int = 1,
+    ) -> None:
+        """Background job entry point with its own database session."""
+        db = session_factory()
+        try:
+            self.execute_prepared_run(db, run_id, adapter, attempt_number)
+        finally:
+            db.close()
 
     def rerun_execution(
         self,
@@ -197,6 +335,41 @@ class ExecutionService:
         adapter: AgentExecutionAdapter | None = None,
     ) -> C1ExecutionRunModel:
         """Creates a new execution attempt for a run without overwriting previous attempt history."""
+        run_model, adapter, is_ready = self.prepare_rerun(
+            db, project_id, run_id, adapter
+        )
+        if is_ready:
+            self.execute_prepared_run(
+                db, run_model.id, adapter, self.next_attempt_number(db, run_model.id)
+            )
+            db.refresh(run_model)
+        return run_model
+
+    @staticmethod
+    def next_attempt_number(db: Session, run_id: str) -> int:
+        attempts = (
+            db.execute(
+                select(C1CaseExecutionModel.attempt_number).where(
+                    C1CaseExecutionModel.run_id == run_id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return (max(attempts) + 1) if attempts else 1
+
+    def prepare_rerun(
+        self,
+        db: Session,
+        project_id: str,
+        run_id: str,
+        adapter: AgentExecutionAdapter | None = None,
+        live_adapter_factory: Any | None = None,
+    ) -> tuple[C1ExecutionRunModel, AgentExecutionAdapter, bool]:
+        """Marks a run RUNNING for a new attempt with the SAME kind of adapter it was started with.
+
+        A live run is never silently re-executed with the simulated adapter.
+        """
         run_model = (
             db.execute(
                 select(C1ExecutionRunModel).where(
@@ -211,54 +384,37 @@ class ExecutionService:
             raise ValueError(
                 f"Execution run '{run_id}' not found for project '{project_id}'."
             )
-
-        # Get current highest attempt number
-        attempt_stmt = select(C1CaseExecutionModel.attempt_number).where(
-            C1CaseExecutionModel.run_id == run_id
-        )
-        existing_attempts = db.execute(attempt_stmt).scalars().all()
-        next_attempt = (max(existing_attempts) + 1) if existing_attempts else 1
-
-        suite_version_model = (
-            db.execute(
-                select(C1SuiteVersionModel).where(
-                    C1SuiteVersionModel.id == run_model.suite_version_id
-                )
-            )
-            .scalars()
-            .first()
-        )
-        config = (
-            db.execute(
-                select(C1ProjectConfigModel).where(
-                    C1ProjectConfigModel.id == run_model.config_id
-                )
-            )
-            .scalars()
-            .first()
-        )
-        if not suite_version_model or not config:
+        config = db.get(C1ProjectConfigModel, run_model.config_id)
+        if (
+            config is None
+            or db.get(C1SuiteVersionModel, run_model.suite_version_id) is None
+        ):
             raise ValueError("Referenced suite or config not found for rerun.")
 
         if adapter is None:
-            adapter = FakeAgentAdapter(mode="AUTO")
+            adapter = self.get_adapter(
+                config,
+                ExecutionRequest(
+                    suite_id=run_model.suite_id,
+                    adapter_override=(run_model.effective_config or {}).get(
+                        "adapter_override"
+                    ),
+                ),
+                live_adapter_factory,
+            )
+        is_ready, not_ready_reason = adapter.check_readiness()
+        if not is_ready:
+            run_model.error_message = f"Rerun not started: {not_ready_reason}"
+            db.commit()
+            db.refresh(run_model)
+            return run_model, adapter, False
 
         run_model.status = RunStatus.RUNNING.value
+        run_model.error_message = None
+        run_model.completed_at = None
         db.commit()
-
-        self._execute_cases(
-            db=db,
-            run_model=run_model,
-            cases=suite_version_model.cases,
-            adapter=adapter,
-            deadline_seconds=run_model.effective_config.get("deadline_seconds", 60),
-            attempt_number=next_attempt,
-            tools=config.tools,
-            tool_constraints=config.tool_constraints,
-        )
-
         db.refresh(run_model)
-        return run_model
+        return run_model, adapter, True
 
     def cancel_run(
         self, db: Session, project_id: str, run_id: str
@@ -296,22 +452,44 @@ class ExecutionService:
         attempt_number: int,
         tools: list[dict[str, Any]],
         tool_constraints: dict[str, Any],
+        repetitions: int = 1,
     ) -> None:
-        """Executes test cases with fixture reset and fresh agent sessions per case."""
+        """Executes test cases with fixture reset and fresh agent sessions per case.
+
+        With repetitions > 1 every case runs that many times, round-robin (all cases once, then
+        again), each on a fresh fixture; executions are stored as ``<case_id>::r<n>``.
+        """
         passed_cases = 0
         failed_cases = 0
         inconclusive_cases = 0
         error_cases = 0
 
         all_tool_names = [t.get("name") for t in tools if t.get("name")]
+        # Live adapters prepare real application fixtures; others use the synthetic store.
+        fixture_service = (
+            getattr(adapter, "fixture_service", None) or self.fixture_service
+        )
 
-        for case_dict in cases:
+        def record_progress() -> None:
+            run_model.summary = {
+                "total_cases": len(cases) * repetitions,
+                "passed_cases": passed_cases,
+                "failed_cases": failed_cases,
+                "inconclusive_cases": inconclusive_cases,
+                "error_cases": error_cases,
+            }
+            db.commit()
+
+        schedule = [(rep, c) for rep in range(1, repetitions + 1) for c in cases]
+        for repetition, case_dict in schedule:
             # Check for cancellation between cases
             db.refresh(run_model)
             if run_model.status == RunStatus.ABORTED.value:
                 break
 
             case_id = case_dict.get("case_id", f"case_{str(uuid.uuid4())[:8]}")
+            if repetitions > 1:
+                case_id = f"{case_id}::r{repetition}"
             category = case_dict.get("category", "CORRECT_BEHAVIOUR")
             is_valid = case_dict.get("is_valid", True)
             rejection_reason = case_dict.get("rejection_reason")
@@ -320,7 +498,7 @@ class ExecutionService:
             if not is_valid or rejection_reason:
                 # Do not score rejected, ambiguous, or unresolved candidate cases!
                 case_exec = C1CaseExecutionModel(
-                    id=f"cexec_{uuid.uuid4()}",
+                    id=f"cexec_{uuid.uuid4().hex[:30]}",
                     run_id=run_model.id,
                     case_id=case_id,
                     attempt_number=attempt_number,
@@ -348,8 +526,8 @@ class ExecutionService:
             fixture_plan_dict = case_dict.get("fixture_plan", {})
             try:
                 fixture_plan = FixturePreparationPlan.model_validate(fixture_plan_dict)
-                fix_ok, session_data, fix_evidence = (
-                    self.fixture_service.prepare_fixture(session_id, fixture_plan)
+                fix_ok, session_data, fix_evidence = fixture_service.prepare_fixture(
+                    session_id, fixture_plan
                 )
             except (ValueError, KeyError, TypeError, AttributeError):
                 fix_ok, session_data, fix_evidence = (
@@ -360,7 +538,7 @@ class ExecutionService:
 
             if not fix_ok:
                 case_exec = C1CaseExecutionModel(
-                    id=f"cexec_{uuid.uuid4()}",
+                    id=f"cexec_{uuid.uuid4().hex[:30]}",
                     run_id=run_model.id,
                     case_id=case_id,
                     attempt_number=attempt_number,
@@ -375,24 +553,21 @@ class ExecutionService:
                     evidence_records=[],
                     raw_trace={},
                     check_results=[],
-                    error_message="Fixture preparation failed.",
+                    error_message=getattr(fixture_service, "last_error", None)
+                    or "Fixture preparation failed.",
                     completed_at=datetime.now(UTC),
                 )
                 db.add(case_exec)
                 db.commit()
                 error_cases += 1
+                record_progress()
                 continue
 
-            # 3. Resolve Fixture-Dependent Expected Values
+            # 3. Prepare Agent-Facing Task (Strictly isolated from QA expectations)
             raw_specs = case_dict.get("expected_tool_calls", [])
             expectations = [ExpectedToolCallSpec.model_validate(s) for s in raw_specs]
-            resolved_expectations = self.fixture_service.resolve_expectation_values(
-                expectations, session_data
-            )
-
-            # 4. Prepare Agent-Facing Task (Strictly isolated from QA expectations)
             permitted_tools = [
-                s.tool_name for s in resolved_expectations if not s.is_forbidden
+                s.tool_name for s in expectations if not s.is_forbidden
             ] or all_tool_names
 
             agent_task = AgentFacingTask(
@@ -401,13 +576,81 @@ class ExecutionService:
                 context_inputs=case_dict.get("task_context_inputs", {}),
                 permitted_tools=permitted_tools,
             )
+            task_error = None
+            if hasattr(adapter, "prepare_task"):
+                # Live targets fill customer-visible fixture values into the task text.
+                agent_task, task_error = adapter.prepare_task(agent_task, session_data)
+
+            # 4. Resolve Fixture-Dependent Expected Values (frozen before the agent runs)
+            resolved_expectations = fixture_service.resolve_expectation_values(
+                expectations, session_data
+            )
 
             # 5. Invoke Agent through Adapter
-            adapter_res = adapter.execute_task(
-                session_id=session_id,
-                task=agent_task,
-                deadline_seconds=deadline_seconds,
-            )
+            if task_error:
+                adapter_res = AdapterExecutionResult(
+                    session_id=session_id,
+                    execution_status=CaseExecutionStatus.EXECUTION_ERROR,
+                    trace_completeness=TraceCompleteness.MISSING,
+                    raw_trace={
+                        "adapter": getattr(adapter, "ADAPTER_TYPE", "UNKNOWN"),
+                        "error": task_error,
+                    },
+                    error_message=task_error,
+                )
+            else:
+                adapter_res = adapter.execute_task(
+                    session_id=session_id,
+                    task=agent_task,
+                    deadline_seconds=deadline_seconds,
+                )
+
+            # 5b. One automatic retry when the agent's LLM provider failed (infrastructure, e.g. an
+            # Ollama timeout): fresh fixture, same frozen case. The first attempt stays in evidence.
+            if (
+                not task_error
+                and adapter_res.execution_status == CaseExecutionStatus.EXECUTION_ERROR
+                and adapter_res.raw_trace.get("caller_outcome")
+                in getattr(adapter, "RETRYABLE_OUTCOMES", ())
+            ):
+                first_attempt = {
+                    k: adapter_res.raw_trace.get(k)
+                    for k in (
+                        "agent_run_id",
+                        "caller_outcome",
+                        "agent_error",
+                        "nexacart_fixture_id",
+                    )
+                } | {"error": adapter_res.error_message}
+                fixture_service.reset_session(session_id)
+                session_id = f"{session_id}_retry"
+                retry_ok, retry_data, retry_evidence = fixture_service.prepare_fixture(
+                    session_id, fixture_plan
+                )
+                if retry_ok:
+                    retry_task, retry_error = adapter.prepare_task(
+                        AgentFacingTask(
+                            case_id=case_id,
+                            task_prompt=case_dict.get("agent_task_prompt", ""),
+                            context_inputs=case_dict.get("task_context_inputs", {}),
+                            permitted_tools=permitted_tools,
+                        ),
+                        retry_data,
+                    )
+                    if not retry_error:
+                        session_data, agent_task = retry_data, retry_task
+                        fix_evidence = fix_evidence + retry_evidence
+                        resolved_expectations = (
+                            fixture_service.resolve_expectation_values(
+                                expectations, session_data
+                            )
+                        )
+                        adapter_res = adapter.execute_task(
+                            session_id=session_id,
+                            task=agent_task,
+                            deadline_seconds=deadline_seconds,
+                        )
+                adapter_res.raw_trace["infrastructure_retries"] = [first_attempt]
 
             # 6. Evaluate Correctness
             evidence_records = fix_evidence + [
@@ -449,7 +692,7 @@ class ExecutionService:
 
             # 7. Persist Case Execution Record
             case_exec = C1CaseExecutionModel(
-                id=f"cexec_{uuid.uuid4()}",
+                id=f"cexec_{uuid.uuid4().hex[:30]}",
                 run_id=run_model.id,
                 case_id=case_id,
                 attempt_number=attempt_number,
@@ -472,21 +715,68 @@ class ExecutionService:
             db.add(case_exec)
             db.commit()
 
-            # 8. Reset Synthetic Fixture Session
-            self.fixture_service.reset_session(session_id)
+            # 8. Reset Fixture Session
+            try:
+                fixture_service.reset_session(session_id)
+            except Exception as exc:  # noqa: BLE001
+                # A failed release does not change the recorded evidence.
+                logger.warning("Fixture release failed for %s: %s", session_id, exc)
+            record_progress()
 
         # 9. Update Run Model Summary
+        db.refresh(run_model)
         run_model.summary = {
-            "total_cases": len(cases),
+            "total_cases": len(cases) * repetitions,
             "passed_cases": passed_cases,
             "failed_cases": failed_cases,
             "inconclusive_cases": inconclusive_cases,
             "error_cases": error_cases,
         }
+        if repetitions > 1:
+            run_model.summary = {
+                **run_model.summary,
+                "repetitions": repetitions,
+                "repetition_summary": self.repetition_summary(
+                    db, run_model.id, attempt_number
+                ),
+            }
         if run_model.status != RunStatus.ABORTED.value:
             run_model.status = RunStatus.COMPLETED.value
         run_model.completed_at = datetime.now(UTC)
         db.commit()
+
+    @staticmethod
+    def repetition_summary(
+        db: Session, run_id: str, attempt_number: int
+    ) -> dict[str, dict[str, Any]]:
+        """Per-case outcome counts and pass rate over the repetitions of one attempt."""
+        rows = (
+            db.execute(
+                select(C1CaseExecutionModel).where(
+                    C1CaseExecutionModel.run_id == run_id,
+                    C1CaseExecutionModel.attempt_number == attempt_number,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        summary: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            base = row.case_id.split("::r")[0]
+            entry = summary.setdefault(
+                base,
+                {"runs": 0, "PASS": 0, "FAIL": 0, "INCONCLUSIVE": 0, "ERROR": 0},
+            )
+            entry["runs"] += 1
+            if row.execution_status == CaseExecutionStatus.EXECUTION_ERROR.value:
+                entry["ERROR"] += 1
+            elif row.verdict in ("PASS", "FAIL", "INCONCLUSIVE"):
+                entry[row.verdict] += 1
+        for entry in summary.values():
+            judged = entry["PASS"] + entry["FAIL"]
+            # Pass rate over runs with a definite verdict; errors/inconclusive are reported apart.
+            entry["pass_rate"] = round(entry["PASS"] / judged, 3) if judged else None
+        return dict(sorted(summary.items()))
 
     def get_run_detail(
         self,
@@ -584,6 +874,9 @@ class ExecutionService:
             failed_cases=run_model.summary.get("failed_cases", 0),
             inconclusive_cases=run_model.summary.get("inconclusive_cases", 0),
             error_cases=run_model.summary.get("error_cases", 0),
+            repetitions=run_model.summary.get("repetitions", 1),
+            repetition_summary=run_model.summary.get("repetition_summary", {}),
+            execution_provenance=run_execution_provenance([c.raw_trace for c in case_details]),
             created_at=run_model.created_at,
             started_at=run_model.started_at,
             completed_at=run_model.completed_at,
@@ -613,6 +906,16 @@ class ExecutionService:
         )
         runs = db.execute(stmt).scalars().all()
 
+        traces_by_run: dict[str, list[dict[str, Any] | None]] = {}
+        if runs:
+            trace_rows = db.execute(
+                select(C1CaseExecutionModel.run_id, C1CaseExecutionModel.raw_trace).where(
+                    C1CaseExecutionModel.run_id.in_([r.id for r in runs])
+                )
+            ).all()
+            for run_id, raw_trace in trace_rows:
+                traces_by_run.setdefault(run_id, []).append(raw_trace)
+
         results = []
         for r in runs:
             # If verdict filter provided, check if run has cases matching verdict
@@ -633,6 +936,9 @@ class ExecutionService:
                     failed_cases=r.summary.get("failed_cases", 0),
                     inconclusive_cases=r.summary.get("inconclusive_cases", 0),
                     error_cases=r.summary.get("error_cases", 0),
+                    repetitions=r.summary.get("repetitions", 1),
+                    repetition_summary=r.summary.get("repetition_summary", {}),
+                    execution_provenance=run_execution_provenance(traces_by_run.get(r.id, [])),
                     created_at=r.created_at,
                     started_at=r.started_at,
                     completed_at=r.completed_at,

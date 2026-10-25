@@ -33,6 +33,7 @@ from app.components.c1_tool_call_correctness.services.explanation_engine import 
     ExplanationEngine,
 )
 from app.components.c1_tool_call_correctness.services.source_inspector import (
+    SourceInspectionError,
     SourceInspector,
 )
 
@@ -125,16 +126,47 @@ class DiagnosisService:
             t["name"]: ToolDefinition(**t) for t in tools_list
         }
 
+        # Requirement texts for explanations (FR-07: show the relevant requirement)
+        requirement_texts = {
+            r["req_id"]: {
+                "version": r.get("version"),
+                "title": r.get("title"),
+                "description": r.get("description"),
+            }
+            for r in ((run_model.config.requirements or []) if run_model.config else [])
+            if isinstance(r, dict) and r.get("req_id")
+        }
+
         # Initialize SourceInspector if source_root_path provided
         source_inspector: SourceInspector | None = None
-        if request.source_root_path:
-            source_inspector = SourceInspector(request.source_root_path)
+        source_root = request.source_root_path
+        if not source_root and run_model.config is not None:
+            from app.components.c1_tool_call_correctness.examples.nexacart_live import (
+                is_nexacart_connection,
+            )
+            # NexaCart runs use the server-side source tree of their configuration (the defect lab
+            # copy, else NEXACART_SOURCE_ROOT), never a path sent by the browser.
+            if is_nexacart_connection(run_model.config.agent_connection_ref):
+                from app.components.c1_tool_call_correctness.services.nexacart_correction_service import (
+                    nexacart_source_root,
+                )
+
+                lab_or_root = nexacart_source_root(run_model.config)
+                source_root = str(lab_or_root) if lab_or_root else None
+        if source_root and source_root != request.source_root_path:
+            try:
+                source_inspector = SourceInspector(source_root)
+            except SourceInspectionError:
+                source_inspector = None  # configured tree missing: no code-level claims
+        elif source_root:
+            source_inspector = SourceInspector(source_root)
 
         # Provider selection
         provider = self.default_provider
         if request.use_model_assisted:
             from app.shared.llm.contracts import LLMGenerationRequest
             from app.shared.llm.router import get_llm_service
+            from app.shared.llm.service import apply_generation_limits
             llm_service = get_llm_service()
             user_sel = llm_service.get_user_selection(user_id, db) if user_id else None
             model_tag = f"{user_sel.provider}:{user_sel.model_id}" if user_sel else "selected-model"
@@ -185,12 +217,14 @@ class DiagnosisService:
                     response_schema=schema,
                     temperature=0.0,
                     max_tokens=1024,
-                    timeout_seconds=5.0,
+                    # a short rewording needs no reasoning trace; with it qwen3.5 hit the token limit
+                    metadata={"ollama_think": False},
                 )
                 if user_id:
                     gen_res = await llm_service.invoke_for_user(user_id, gen_req, db)
                 else:
                     adapter = llm_service.get_adapter(user_sel.provider if user_sel else "ollama")
+                    apply_generation_limits(gen_req, {})
                     gen_res = await adapter.generate(gen_req, model_override=user_sel.model_id if user_sel else None)
 
                 if not gen_res.is_success:
@@ -202,10 +236,14 @@ class DiagnosisService:
                 out["completion_tokens"] = gen_res.usage.completion_tokens or 0
                 return out
 
+            from app.config import get_settings
+
+            # The LLM call itself applies the configured limits; the provider must not cut it
+            # short (a fixed 5 s window always fell back for local Ollama models).
             provider = ModelAssistedDiagnosisProvider(
                 model_callable=_c1_model_callable,
                 model_name=model_tag,
-                timeout_seconds=5.0,
+                timeout_seconds=get_settings().llm_default_timeout_seconds + 5.0,
             )
 
         results: list[CaseDiagnosisRecord] = []
@@ -248,6 +286,11 @@ class DiagnosisService:
                 check_results=case_detail.check_results,
                 captured_events=case_detail.captured_events,
                 trace_completeness=case_detail.trace_completeness,
+                expectations=case_detail.resolved_expectations,
+                requirements=requirement_texts,
+                task_prompt=case_detail.agent_task_sent.task_prompt
+                if case_detail.agent_task_sent
+                else None,
             )
 
             # Diagnose supported root cause

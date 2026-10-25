@@ -153,6 +153,10 @@ class OllamaAdapter(BaseLLMAdapter):
             "options": options,
         }
 
+        # Opt-in per request: reasoning models (qwen3.5) otherwise spend the token budget thinking
+        if isinstance(request.metadata.get("ollama_think"), bool):
+            body["think"] = request.metadata["ollama_think"]
+
         # Bounded structured format
         if request.response_schema is not None:
             body["format"] = request.response_schema

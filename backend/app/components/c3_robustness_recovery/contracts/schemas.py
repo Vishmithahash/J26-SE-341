@@ -430,8 +430,10 @@ class FaultFamilyCatalogItem(BaseModel):
     supported_modes: list[SafeStr]
     effect_phases: list[EffectPhase]
     constraints_summary: SafeStr
-    injection_implemented: Literal[False] = False
-    note: SafeStr = "Injection is not implemented in Phase 1."
+    injection_implemented: StrictBool = False
+    # Where the family is injected at run time and with which effect phases
+    runtime_support: list[SafeStr] = Field(default_factory=list)
+    note: SafeStr = ""
 
 
 class FaultCatalogResponse(BaseModel):
@@ -440,8 +442,5 @@ class FaultCatalogResponse(BaseModel):
     schema_version: SafeStr = "1.0.0"
     families: list[FaultFamilyCatalogItem]
     count: StrictInt = 5
-    injection_active: Literal[False] = False
-    note: SafeStr = (
-        "All operational fault families are defined for static validation. "
-        "Runtime injection is not implemented in Phase 1."
-    )
+    injection_active: StrictBool = False
+    note: SafeStr = ""

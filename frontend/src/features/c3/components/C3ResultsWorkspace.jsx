@@ -5,10 +5,12 @@ import {
   Sparkles,
   Shield,
   FolderGit2,
+  Gauge,
 } from 'lucide-react';
 import { C3EvaluationsViewer } from './C3EvaluationsViewer';
 import { C3ExecutionReportViewer } from './C3ExecutionReportViewer';
 import { C3ResearchView } from './C3ResearchView';
+import { C3RecoveryCostPanel } from './C3RecoveryCostPanel';
 import { useC3Executions } from '../hooks/useC3Executions';
 
 export const C3ResultsWorkspace = ({ projectId, role = 'USER' }) => {
@@ -102,6 +104,19 @@ export const C3ResultsWorkspace = ({ projectId, role = 'USER' }) => {
           <Sparkles className="w-4 h-4" />
           <span>3. Research Protocols & Ablations (CLI)</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('cost')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+            activeTab === 'cost'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Gauge className="w-4 h-4" />
+          <span>4. Recovery Cost (Live)</span>
+        </button>
       </div>
 
       {/* Tab 1: Evaluations Viewer */}
@@ -136,6 +151,11 @@ export const C3ResultsWorkspace = ({ projectId, role = 'USER' }) => {
             executionId={currentExecId}
           />
         </div>
+      )}
+
+      {/* Tab 4: Recovery cost of live pairs */}
+      {activeTab === 'cost' && (
+        <C3RecoveryCostPanel projectId={projectId} executions={executions} />
       )}
 
       {/* Tab 3: Advanced Research Protocols & Ablations */}

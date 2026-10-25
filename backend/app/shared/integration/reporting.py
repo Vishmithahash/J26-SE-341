@@ -48,6 +48,9 @@ from app.shared.projects.models import Project
 
 logger = logging.getLogger(__name__)
 
+# Native verdicts meaning "evaluated, no defect, but nothing applicable was exercised".
+NON_DEFECT_UNEXERCISED_VERDICTS = {"NOT_EXERCISED", "NOT EXERCISED"}
+
 
 def compute_finding_id(
     component: str, run_id: str, rule_or_check_id: str, event_or_target_ref: str
@@ -657,6 +660,15 @@ class SharedReportAggregator:
             for c in contributions.values()
             if c.status == "EVALUATED"
         )
+        # Evaluated without a defect, but the component's rules were never exercised
+        # (e.g. C4 NOT_EXERCISED: no policy-relevant action). Not a pass, not a failure.
+        unexercised_comps = [
+            c
+            for c in contributions.values()
+            if c.status == "EVALUATED"
+            and c.native_verdict in NON_DEFECT_UNEXERCISED_VERDICTS
+            and c.violations_or_findings_count == 0
+        ]
 
         overall_verdict: str
         if not_ready_comps:
@@ -667,7 +679,7 @@ class SharedReportAggregator:
             overall_verdict = "PASSED"
         elif has_any_violation:
             overall_verdict = "FAILED"
-        elif has_inconclusive:
+        elif has_inconclusive or unexercised_comps:
             overall_verdict = "INCONCLUSIVE"
         elif len(evaluated_comps) > 0:
             overall_verdict = "FAILED"
@@ -681,7 +693,11 @@ class SharedReportAggregator:
             blocked_components=blocked_comps,
             failed_execution_components=[],
             not_evaluated_components=not_evaluated_comps,
-            pending_or_missing_evidence=[],
+            pending_or_missing_evidence=[
+                f"{c.component.value}: {c.native_verdict} (evaluated without a defect, "
+                "but no applicable rule was exercised; not counted as a pass)"
+                for c in unexercised_comps
+            ],
             per_component_verdicts=per_comp_verdicts,
             per_component_counts=per_comp_counts,
             overall_verdict=overall_verdict,

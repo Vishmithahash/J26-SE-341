@@ -119,6 +119,8 @@ class EvaluationResultContract(BaseModel):
     detailed_coverage: Any = None
     evaluator_timing_ms: float = 0.0
     evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    # Read-side summary of the retained evidence's execution provenance (origin, live agent run)
+    collector_provenance: dict[str, Any] | None = None
 
 
 class ReproductionVerificationResult(BaseModel):

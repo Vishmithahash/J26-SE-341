@@ -57,6 +57,31 @@ export const PROVENANCE_METADATA = {
 };
 
 /**
+ * Live NexaCart agent-run details recorded for a case execution, or null for other adapters.
+ *
+ * @param {Object} caseDetail - CaseExecutionDetail
+ * @returns {Object|null}
+ */
+export function liveAgentRunInfo(caseDetail) {
+  const rawTrace = caseDetail?.raw_trace || {};
+  if (rawTrace.adapter !== 'NEXACART_LIVE_AGENT_ADAPTER') {
+    return null;
+  }
+  return {
+    agentRunId: rawTrace.agent_run_id || null,
+    provider: rawTrace.agent_provider || null,
+    model: rawTrace.agent_model || null,
+    agentStatus: rawTrace.agent_status || null,
+    outcome: rawTrace.caller_outcome || null,
+    fixtureId: rawTrace.nexacart_fixture_id || null,
+    durationMs: typeof rawTrace.duration_ms === 'number' ? rawTrace.duration_ms : null,
+    finalAnswer: rawTrace.final_answer || null,
+    harnessVersion: rawTrace.harness_version || null,
+    error: rawTrace.error || rawTrace.agent_error?.message || null,
+  };
+}
+
+/**
  * Determine the execution provenance of a run or case execution record.
  *
  * @param {Object} item - RunDetailResponse, RunSummary, or CaseExecutionDetail
@@ -81,6 +106,12 @@ export function getExecutionProvenance(item) {
     connRef.startsWith('simulated:')
   ) {
     return PROVENANCE_TYPES.SYNTHETIC_DEMO;
+  }
+
+  // Run summaries carry the provenance the backend corroborated from the recorded case traces
+  const recorded = item.execution_provenance || item.summary?.execution_provenance;
+  if (recorded && PROVENANCE_TYPES[recorded]) {
+    return recorded;
   }
 
   // Check case executions or raw trace
@@ -121,7 +152,21 @@ export function getExecutionProvenance(item) {
     }
 
     // Live adapter verification:
-    // Requires adapter to be LIVE_AGENT_ADAPTER AND actual execution status EXECUTED without simulation
+    // Requires a live adapter AND actual execution status EXECUTED without simulation
+    if (adapter === 'NEXACART_LIVE_AGENT_ADAPTER') {
+      // Real NexaCart agent run: the backend records NexaCart's own agent run identifier.
+      // A run that ended with an infrastructure error (e.g. an Ollama timeout) after NexaCart
+      // started its agent is still live evidence; without an agent run nothing was executed.
+      if (
+        (c.execution_status === 'EXECUTED' || c.execution_status === 'EXECUTION_ERROR') &&
+        rawTrace.is_live_execution === true &&
+        !rawTrace.simulated &&
+        rawTrace.agent_run_id
+      ) {
+        return PROVENANCE_TYPES.LIVE_EXECUTION;
+      }
+      continue; // an errored live case proves nothing; inspect the other cases
+    }
     if (adapter === 'LIVE_AGENT_ADAPTER') {
       if (
         c.execution_status === 'EXECUTED' &&

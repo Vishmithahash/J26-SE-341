@@ -10,6 +10,7 @@ import {
   UserCheck,
   Building,
   Workflow,
+  Server,
 } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { useProject } from '../../../context/ProjectContext';
@@ -23,6 +24,7 @@ import { C3GenerationPanel } from '../components/C3GenerationPanel';
 import { C3StoredSuitesViewer } from '../components/C3StoredSuitesViewer';
 import { C3TrialsWorkspace } from '../components/C3TrialsWorkspace';
 import { C3ResultsWorkspace } from '../components/C3ResultsWorkspace';
+import { C3LiveNexaCartPanel } from '../components/C3LiveNexaCartPanel';
 import { useC3ValidationGeneration } from '../hooks/useC3ValidationGeneration';
 import {
   DEMO_CANDIDATE_CASE_VALID,
@@ -43,7 +45,7 @@ export const C3AdminWorkspace = () => {
   useEffect(() => {
     const handleHash = () => {
       const h = window.location.hash.replace('#', '');
-      if (['prepare', 'validate', 'generate', 'suites', 'trials', 'results', 'catalog'].includes(h)) {
+      if (['prepare', 'validate', 'generate', 'live', 'suites', 'trials', 'results', 'catalog'].includes(h)) {
         setActiveSection(h);
       }
     };
@@ -263,6 +265,19 @@ export const C3AdminWorkspace = () => {
 
         <button
           type="button"
+          onClick={() => setActiveSection('live')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap ${
+            activeSection === 'live'
+              ? 'bg-teal-600 text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Server className="w-3.5 h-3.5" />
+          <span>Live NexaCart Runs</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveSection('suites')}
           className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 whitespace-nowrap ${
             activeSection === 'suites'
@@ -364,6 +379,15 @@ export const C3AdminWorkspace = () => {
             saveStatus={saveStatus}
             savedSuite={savedSuite}
             saveError={saveError}
+          />
+        </div>
+      )}
+
+      {activeSection === 'live' && (
+        <div className="space-y-6">
+          <C3LiveNexaCartPanel
+            projectId={activeProjectId}
+            onOpenTrials={() => setActiveSection('trials')}
           />
         </div>
       )}

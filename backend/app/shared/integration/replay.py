@@ -165,6 +165,8 @@ class EvidenceReplayService:
         c3_fault_trace = (
             ExecutionTrace(**fault_trace_data) if fault_trace_data else None
         )
+        c3_clean_data = retained_bundle.get("c3_clean_trace")
+        c3_clean_trace = ExecutionTrace(**c3_clean_data) if c3_clean_data else None
 
         # 4. Extract frozen references and input snapshots
         ref_payload = plan_record.plan_payload.get("component_references", {})
@@ -180,6 +182,7 @@ class EvidenceReplayService:
             frozen_inputs=frozen_inputs,
             primary_trace=primary_trace,
             c3_fault_trace=c3_fault_trace,
+            c3_clean_trace=c3_clean_trace,
             is_replay=True,
         )
 

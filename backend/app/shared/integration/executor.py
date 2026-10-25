@@ -58,8 +58,15 @@ from app.components.c3_robustness_recovery.contracts.schemas import (
     TimeoutDisconnectionMode,
     TimeoutDisconnectionPayload,
 )
+from app.components.c3_robustness_recovery.examples.nexacart_recovery import (
+    NEXACART_TASKS,
+)
 from app.components.c3_robustness_recovery.services.recovery_evaluation import (
     evaluate_recovery,
+)
+from app.components.c3_robustness_recovery.services.terminal_outcome import (
+    TerminalOutcomeRules,
+    classify_live_trace,
 )
 from app.components.c4_policy_aware_safety.contracts.enums import (
     ContractLifecycleState,
@@ -109,6 +116,20 @@ logger = logging.getLogger(__name__)
 ACTIVE_CANCELLATIONS: set[str] = set()
 
 
+def resolve_c3_outcome_rules(
+    c3_inputs: dict[str, Any], task_id: str | None
+) -> TerminalOutcomeRules | None:
+    """Frozen final-answer rules for C3: pinned in the plan, else the registered NexaCart task's.
+
+    None means no rules are known; completed live runs are then classified as unclassified.
+    """
+    pinned = c3_inputs.get("terminal_outcome_rules")
+    if isinstance(pinned, dict) and pinned.get("completion_claim_patterns"):
+        return TerminalOutcomeRules.model_validate(pinned)
+    task = NEXACART_TASKS.get(task_id or "")
+    return task.outcome_rules if task else None
+
+
 def dispatch_component_evaluations(
     db: Session,
     project_id: str,
@@ -117,6 +138,7 @@ def dispatch_component_evaluations(
     frozen_inputs: dict[str, Any],
     primary_trace: ExecutionTrace,
     c3_fault_trace: ExecutionTrace | None = None,
+    c3_clean_trace: ExecutionTrace | None = None,
     is_replay: bool = False,
 ) -> dict[str, Any]:
     """Shared deterministic evaluation dispatcher reused by execution and replay.
@@ -153,31 +175,21 @@ def dispatch_component_evaluations(
         req_refs = c1_inputs.get("requirement_refs") or ["REQ-TOOL-CORRECTNESS-01"]
         c1_case_id = c1_inputs.get("case_id") or f"c1_case_{execution_id[:8]}"
 
+        # Records the target actually served (live NexaCart fixture or the labelled test double).
+        observed_fixture_records = (primary_trace.aut_metadata or {}).get(
+            "fixture_records"
+        ) or {}
         c1_verdict, c1_checks = c1_evaluator.evaluate_case(
             case_id=c1_case_id,
             category=case_cat,
             resolved_expectations=c1_expectations,
             captured_events=c1_events,
             trace_completeness=c1_completeness,
+            # Only pinned or really observed fixture data; missing context leaves
+            # source-relationship checks without evidence instead of inventing records.
             context_data={
                 "project_id": project_id,
-                **(
-                    c1_inputs.get("context_data")
-                    or {
-                        "fixture_order_9821": {
-                            "order_id": "ORD-9821",
-                            "customer_id": "CUST-8831",
-                            "status": "DELIVERED",
-                            "items": {
-                                "ITEM-44": {
-                                    "name": "Wireless Ergonomic Mouse",
-                                    "price": 35.00,
-                                    "refundable": True,
-                                }
-                            },
-                        }
-                    }
-                ),
+                **(c1_inputs.get("context_data") or observed_fixture_records),
             },
             requirement_refs=req_refs,
         )
@@ -259,6 +271,10 @@ def dispatch_component_evaluations(
                     model=c2_model,
                     test_def=test_def,
                     evidence=c2_evidence,
+                    # Live runs bind the model's fixture scope to the real NexaCart fixture.
+                    fixture_data=(primary_trace.aut_metadata or {}).get(
+                        "fixture_context"
+                    ),
                     model_is_approved=(model_status == "APPROVED"),
                     pinned_content_hash=pinned_hash,
                 )
@@ -490,8 +506,24 @@ def dispatch_component_evaluations(
                 detail="Execution evaluation prevented: missing required C3 candidate fault case in frozen execution inputs.",
             )
 
+        # A COMPLETED live agent run only means the agent loop ended: classify each trial's final
+        # answer with the task's frozen outcome rules (C3 only; other components keep raw traces).
+        outcome_rules = resolve_c3_outcome_rules(
+            c3_inputs, case.task_id or (refs.c3.task_id if refs.c3 else None)
+        )
+        # C3's clean control: its own trial when C3 ran with its own instruction
+        c3_clean_trace = classify_live_trace(
+            c3_clean_trace or primary_trace, outcome_rules
+        )
+        c3_fault_trace = classify_live_trace(c3_fault_trace, outcome_rules)
+
         pinned_mappings = c3_inputs.get("pinned_mappings") or c3_inputs.get("mappings")
         expected_entity_id = c3_inputs.get("expected_entity_id")
+        if not expected_entity_id and c3_fault_trace is not None:
+            # Live NexaCart: the fault trial acts on the order created for its own fixture.
+            live_ctx = (c3_fault_trace.aut_metadata or {}).get("fixture_context") or {}
+            if live_ctx.get("orderNumber"):
+                expected_entity_id = str(live_ctx["orderNumber"])
         if not expected_entity_id and c3_fault_trace and c3_fault_trace.final_state:
             f_state = getattr(c3_fault_trace.final_state, "state", {}) or {}
             if isinstance(f_state, dict):
@@ -508,11 +540,21 @@ def dispatch_component_evaluations(
             case_id=case.case_id,
             pair_id=pair_id,
             run_id=execution_id,
-            clean_trace=primary_trace,
+            clean_trace=c3_clean_trace,
             fault_trace=c3_fault_trace,
             recovery_contract=contract,
             c2_mappings=pinned_mappings,
             expected_entity_id=expected_entity_id,
+            planned_fault={
+                "target_tool": case.tool_id,
+                "occurrence": case.occurrence,
+                "fault_family": case.fault_family.value,
+                "effect_phase": case.effect_phase.value,
+                "caller_timeout_ms": case.caller_timeout_ms,
+                "retry_after_seconds": getattr(
+                    case.payload, "retry_after_seconds", None
+                ),
+            },
         )
 
         c3_req = RecoveryEvaluationRequest(
@@ -538,6 +580,13 @@ def dispatch_component_evaluations(
             "c2_facts_consumed": len(c2_facts),
             "c2_facts_provenance": list({f.provenance for f in c2_facts}),
             "clean_qualification": matched_evidence.clean_qualification.value,
+            "terminal_outcomes": {
+                role: (trace.aut_metadata or {}).get("outcome_classification")
+                for role, trace in (
+                    ("clean", c3_clean_trace),
+                    ("fault", c3_fault_trace),
+                )
+            },
             "non_evaluation_reasons": c3_result.non_evaluation_reasons,
             "rule_results": [
                 {
@@ -737,7 +786,10 @@ class SharedExecutionCoordinator:
         c3_inputs = c3_raw if isinstance(c3_raw, dict) else {}
         c4_inputs = c4_raw if isinstance(c4_raw, dict) else {}
 
-        resolved_prompt = request.task_prompt_override
+        live_target_inputs = frozen_inputs.get("live_target") or {}
+        resolved_prompt = request.task_prompt_override or live_target_inputs.get(
+            "task_prompt"
+        )
         if not resolved_prompt and c1_inputs:
             resolved_prompt = c1_inputs.get("task_prompt") or c1_inputs.get("task")
         if not resolved_prompt and c2_inputs:
@@ -757,6 +809,11 @@ class SharedExecutionCoordinator:
         if not resolved_prompt and c4_inputs:
             resolved_prompt = c4_inputs.get("task_prompt") or c4_inputs.get("task")
 
+        if not resolved_prompt and target_mode_enum == TargetMode.LIVE_AUT:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Live execution prevented: no pinned task prompt; a generic prompt is never sent to the live agent.",
+            )
         if not resolved_prompt:
             has_explicit_component_input = (
                 (has_c1 and c1_raw is not None)
@@ -776,6 +833,15 @@ class SharedExecutionCoordinator:
                 else "Demonstration execution task prompt"
             )
         default_prompt = resolved_prompt
+        # Live fixtures are created from the pinned definition; test doubles keep their own seed.
+        fixture_seed: dict[str, Any] | None = (
+            {
+                "nexacart_fixture": live_target_inputs.get("nexacart_fixture") or {},
+                "untrusted_content": live_target_inputs.get("untrusted_content"),
+            }
+            if target_mode_enum == TargetMode.LIVE_AUT
+            else None
+        )
 
         # 3. Resolve actual permitted tools from pinned component inputs
         active_tools: list[str] = []
@@ -903,28 +969,57 @@ class SharedExecutionCoordinator:
             has_c3 = refs.c3 is not None
             primary_trace: ExecutionTrace
             c3_fault_trace: ExecutionTrace | None = None
+            c3_clean_trace: ExecutionTrace | None = None
+
+            # C3 runs its matched trials with its own pinned task instruction. When that differs
+            # from the shared prompt and other components are planned, they get their own trial
+            # with the shared prompt, so no component is evaluated on another component's task.
+            c3_prompt = (
+                (c3_inputs.get("task_prompt") or default_prompt)
+                if has_c3
+                else default_prompt
+            )
+            others_planned = any(r is not None for r in (refs.c1, refs.c2, refs.c4))
+            separate_primary = has_c3 and c3_prompt != default_prompt and others_planned
+
+            if separate_primary:
+                primary_ns = f"ns_trial_{execution_id}"
+                prepared_namespaces.append(primary_ns)
+                adapter.prepare_fixture(primary_ns, fixture_seed)
+                primary_trace = adapter.execute_session(
+                    namespace=primary_ns,
+                    task_prompt=default_prompt,
+                    permitted_tools=permitted_tools,
+                    max_tool_calls=request.max_tool_calls,
+                    trial_role="DEFAULT",
+                    deadline_monotonic=deadline_monotonic,
+                    check_cancellation=is_cancelled,
+                )
+                if is_cancelled():
+                    raise InterruptedError("Execution cancelled by caller.")
 
             if has_c3:
                 clean_ns = f"ns_clean_{execution_id}"
                 prepared_namespaces.append(clean_ns)
-                adapter.prepare_fixture(clean_ns)
-                clean_trace = adapter.execute_session(
+                adapter.prepare_fixture(clean_ns, fixture_seed)
+                c3_clean_trace = adapter.execute_session(
                     namespace=clean_ns,
-                    task_prompt=default_prompt,
+                    task_prompt=c3_prompt,
                     permitted_tools=permitted_tools,
                     max_tool_calls=request.max_tool_calls,
                     trial_role="CLEAN",
                     deadline_monotonic=deadline_monotonic,
                     check_cancellation=is_cancelled,
                 )
-                primary_trace = clean_trace
+                if not separate_primary:
+                    primary_trace = c3_clean_trace
 
                 if is_cancelled():
                     raise InterruptedError("Execution cancelled by caller.")
 
                 fault_ns = f"ns_fault_{execution_id}"
                 prepared_namespaces.append(fault_ns)
-                adapter.prepare_fixture(fault_ns)
+                adapter.prepare_fixture(fault_ns, fixture_seed)
                 c3_in = frozen_inputs.get("c3", {})
                 c3_case_snap = c3_in.get("case") or c3_in.get("selected_case") or {}
                 target_tool = (
@@ -944,7 +1039,7 @@ class SharedExecutionCoordinator:
 
                 c3_fault_trace = adapter.execute_session(
                     namespace=fault_ns,
-                    task_prompt=default_prompt,
+                    task_prompt=c3_prompt,
                     permitted_tools=permitted_tools,
                     fault_injection_hook={
                         "target_tool": target_tool,
@@ -953,6 +1048,10 @@ class SharedExecutionCoordinator:
                         "interception_hook": interception_hook,
                         "effect_phase": effect_phase,
                         "payload": payload,
+                        "max_faults": (c3_case_snap.get("release_rule") or {}).get(
+                            "max_fault_count"
+                        ),
+                        "retry_after_seconds": payload.get("retry_after_seconds"),
                     },
                     max_tool_calls=request.max_tool_calls,
                     trial_role="FAULT",
@@ -962,7 +1061,7 @@ class SharedExecutionCoordinator:
             else:
                 trial_ns = f"ns_trial_{execution_id}"
                 prepared_namespaces.append(trial_ns)
-                adapter.prepare_fixture(trial_ns)
+                adapter.prepare_fixture(trial_ns, fixture_seed)
                 primary_trace = adapter.execute_session(
                     namespace=trial_ns,
                     task_prompt=default_prompt,
@@ -993,9 +1092,10 @@ class SharedExecutionCoordinator:
 
             primary_trace.cleanup_successful = clean_ok_all
             primary_trace.cleanup_reusable = reusable_all
-            if c3_fault_trace:
-                c3_fault_trace.cleanup_successful = clean_ok_all
-                c3_fault_trace.cleanup_reusable = reusable_all
+            for c3_trace in (c3_clean_trace, c3_fault_trace):
+                if c3_trace is not None:
+                    c3_trace.cleanup_successful = clean_ok_all
+                    c3_trace.cleanup_reusable = reusable_all
 
             if not clean_ok_all:
                 cleanup_err_msg = (
@@ -1016,6 +1116,7 @@ class SharedExecutionCoordinator:
                 frozen_inputs=frozen_inputs,
                 primary_trace=primary_trace,
                 c3_fault_trace=c3_fault_trace,
+                c3_clean_trace=c3_clean_trace,
             )
 
             if is_cancelled():
@@ -1032,12 +1133,26 @@ class SharedExecutionCoordinator:
                 retained_evidence_bundle["fault_trace"] = c3_fault_trace.model_dump(
                     mode="json"
                 )
+            if c3_clean_trace is not None and c3_clean_trace is not primary_trace:
+                retained_evidence_bundle["c3_clean_trace"] = c3_clean_trace.model_dump(
+                    mode="json"
+                )
 
             retained_digest = compute_evidence_digest(retained_evidence_bundle)
             complete_now = datetime.now(UTC)
 
-            if not clean_ok_all or not reusable_all:
+            if not clean_ok_all:
                 cleanup_msg = "Fixture cleanup failed; fixture marked unreusable."
+            elif not reusable_all:
+                # Live fixtures are single-use by design (records are retained as evidence).
+                cleanup_msg = (
+                    None
+                    if target_mode_enum == TargetMode.LIVE_AUT
+                    else ("Fixture cleanup completed but fixture marked unreusable.")
+                )
+            else:
+                cleanup_msg = None
+            if cleanup_msg:
                 execution_record.error_message = (
                     (execution_record.error_message + "; " + cleanup_msg)
                     if execution_record.error_message

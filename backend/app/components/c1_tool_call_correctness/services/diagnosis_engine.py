@@ -92,7 +92,57 @@ class DiagnosisEngine:
                 },
             )
 
+        # 0. A rejected call whose schema argument the implementation never reads is a supported
+        # code defect from the recorded call alone; later, unrecorded events cannot change it.
+        recorded = (
+            self._recorded_rejection_defect(
+                case_execution, tool_definitions, source_inspector
+            )
+            if source_inspector is not None
+            else None
+        )
+
         # 1. Check for Ambiguous, Missing, or Incomplete Evidence -> UNKNOWN
+        incomplete = (
+            case_execution.trace_completeness
+            in (
+                TraceCompleteness.INCOMPLETE,
+                TraceCompleteness.CORRUPTED,
+                TraceCompleteness.MISSING,
+            )
+            or case_execution.execution_status.value == "EXECUTION_ERROR"
+        )
+        if incomplete and recorded is not None:
+            candidate, reason_text, source_hash = recorded
+            analysis_ms = (time.perf_counter() - start_time) * 1000.0
+            return CaseDiagnosisRecord(
+                diagnosis_id=diagnosis_id,
+                project_id=project_id,
+                run_id=run_id,
+                case_execution_id=case_execution.execution_id,
+                case_id=case_execution.case_id,
+                attempt_number=case_execution.attempt_number,
+                requirement_version="v1.0",
+                evaluator_version="c1-evaluator-v1.0",
+                explanation_version=self.DIAGNOSIS_VERSION,
+                status=DiagnosisStatus.COMPLETED,
+                cause_category=CauseCategory.SUPPORTED_APPLICATION_CODE_DEFECT,
+                explanation_summary=(
+                    reason_text + f" The run itself did not complete normally (trace "
+                    f"{case_execution.trace_completeness.value}); this finding rests only on "
+                    "the recorded rejected call(s)."
+                ),
+                check_explanations=check_explanations,
+                candidate_code_locations=[candidate],
+                evidence_refs=all_evidence_refs,
+                source_hash=source_hash,
+                explanation_method=ExplanationMethod.DETERMINISTIC_RULE_DERIVATION,
+                metrics={
+                    "retrieval_ms": round(retrieval_duration_ms, 2),
+                    "analysis_ms": round(analysis_ms, 2),
+                    "total_duration_ms": round(retrieval_duration_ms + analysis_ms, 2),
+                },
+            )
         if case_execution.trace_completeness in (
             TraceCompleteness.INCOMPLETE,
             TraceCompleteness.CORRUPTED,
@@ -184,6 +234,7 @@ class DiagnosisEngine:
                 tool_definitions=tool_definitions,
                 source_inspector=source_inspector,
                 expected_code_version=expected_code_version,
+                case_execution=case_execution,
             )
 
         if code_defect_detected and candidates:
@@ -293,15 +344,17 @@ class DiagnosisEngine:
         tool_definitions: dict[str, ToolDefinition],
         source_inspector: SourceInspector,
         expected_code_version: str | None = None,
+        case_execution: CaseExecutionDetail | None = None,
     ) -> tuple[bool, list[CandidateCodeLocation], str | None, str | None]:
         """Inspects source files for tools linked to failing checks to detect parameter mismatches or runtime errors."""
         candidates: list[CandidateCodeLocation] = []
         overall_source_hash: str | None = None
         defect_reasons: list[str] = []
+        inspected_tools: set[str] = set()
 
         for chk in check_explanations:
             tool_name = chk.tool_name
-            if not tool_name:
+            if not tool_name or tool_name in inspected_tools:
                 continue
 
             tool_def = tool_definitions.get(tool_name)
@@ -338,6 +391,16 @@ class DiagnosisEngine:
                 continue
 
             overall_source_hash = inspected.source_hash
+            if inspected.file_path.endswith((".ts", ".js")):
+                inspected_tools.add(tool_name)
+                found = self._typescript_mapping_defect(
+                    tool_name, tool_def, inspected, case_execution, uncertainties
+                )
+                if found is not None:
+                    candidate, reason_text = found
+                    candidates.append(candidate)
+                    defect_reasons.append(reason_text)
+                continue
 
             # Defect Scenario A: Tool definition / call parameter mismatch against backend code signature
             # e.g., Tool schema declares 'amount', but backend function parameter is 'refund_amount'
@@ -423,13 +486,129 @@ class DiagnosisEngine:
 
         return False, [], overall_source_hash, None
 
+    def _recorded_rejection_defect(
+        self,
+        case_execution: CaseExecutionDetail,
+        tool_definitions: dict[str, ToolDefinition],
+        source_inspector: SourceInspector,
+    ) -> tuple[CandidateCodeLocation, str, str] | None:
+        """TypeScript mapping rule applied to every tool with a rejected recorded call."""
+        rejected_tools = dict.fromkeys(
+            e.tool_name
+            for e in case_execution.captured_events
+            if e.status.value == "FAILED"
+        )
+        for tool_name in rejected_tools:
+            tool_def = tool_definitions.get(tool_name)
+            mapping = tool_def.code_mapping if tool_def else None
+            if not mapping or not mapping.file_path or not mapping.function_name:
+                continue
+            if not mapping.file_path.endswith((".ts", ".js")):
+                continue
+            try:
+                inspected = source_inspector.inspect_function(
+                    mapping.file_path, mapping.function_name
+                )
+            except SourceInspectionError:
+                continue
+            if inspected is None:
+                continue
+            found = self._typescript_mapping_defect(
+                tool_name, tool_def, inspected, case_execution, []
+            )
+            if found is not None:
+                return found[0], found[1], inspected.source_hash
+        return None
+
+    @staticmethod
+    def _typescript_mapping_defect(
+        tool_name: str,
+        tool_def: ToolDefinition,
+        inspected: InspectedFunction,
+        case_execution: CaseExecutionDetail | None,
+        uncertainties: list[str],
+    ) -> tuple[CandidateCodeLocation, str] | None:
+        """Evidence rule for tool implementations (e.g. NexaCart TypeScript tools).
+
+        A supported code defect needs ALL of: a recorded call that the application rejected,
+        argument keys the agent supplied that the tool schema declares, and an implementation
+        that never reads one of those keys. A rejected call without that mismatch is a business
+        or validation rejection of the agent's input (HTTP 4xx), not evidence against the code.
+        """
+        if case_execution is None:
+            return None
+        schema_props = set(tool_def.parameters_schema.properties.keys())
+        code_keys = set(inspected.parameters)
+        failed_calls = [
+            e
+            for e in case_execution.captured_events
+            if e.tool_name == tool_name and e.status.value == "FAILED"
+        ]
+        for event in failed_calls:
+            supplied = set(event.arguments) & schema_props
+            unread = sorted(supplied - code_keys)
+            if not unread:
+                status = (
+                    ((event.tool_response or {}).get("error") or {}).get("statusCode")
+                    if isinstance(event.tool_response, dict)
+                    else None
+                )
+                uncertainties.append(
+                    f"Call #{event.call_index} to '{tool_name}' was rejected"
+                    f"{f' with HTTP {status}' if status else ''}: {event.tool_error}. The "
+                    "implementation reads every schema argument the agent supplied, so this is "
+                    "treated as a rejection of the agent's input, not a code defect."
+                )
+                continue
+            extra = sorted(code_keys - schema_props)
+            reason_text = (
+                f"Argument mapping defect in '{inspected.file_path}' ({inspected.function_name}, "
+                f"lines {inspected.line_start}-{inspected.line_end}): the agent supplied schema "
+                f"argument(s) {unread} in call #{event.call_index}, but the implementation never "
+                f"reads them"
+                + (
+                    f" (it reads {extra}, which the schema does not declare)"
+                    if extra
+                    else ""
+                )
+                + f"; the application rejected the call: {event.tool_error}."
+            )
+            return (
+                CandidateCodeLocation(
+                    file_path=inspected.file_path,
+                    function_name=inspected.function_name,
+                    line_start=inspected.line_start,
+                    line_end=inspected.line_end,
+                    ranking_score=1,
+                    ranking_criteria=(
+                        "Schema argument supplied by the agent is never read by the tool "
+                        "implementation, and the application rejected the call."
+                    ),
+                    supporting_evidence=[
+                        event.event_id,
+                        f"supplied_arguments={sorted(event.arguments)}",
+                        f"schema_params={sorted(schema_props)}",
+                        f"code_reads={sorted(code_keys)}",
+                        f"tool_error={event.tool_error}",
+                    ],
+                    uncertainties=list(uncertainties),
+                ),
+                reason_text,
+            )
+        return None
+
     def _summarize_agent_behavior(
         self, check_explanations: list[CheckExplanationDetail]
     ) -> str:
         """Summarizes agent failure reasons when application code and specification are verified correct."""
         summaries: list[str] = []
         for chk in check_explanations:
-            if "FORBIDDEN_TOOL" in chk.violated_requirement:
+            if chk.what_was_observed.startswith("Self-corrected after a rejected call"):
+                summaries.append(
+                    f"Agent made a rejected call to '{chk.tool_name}' and then corrected "
+                    "itself; the rejected call is still an incorrect tool call."
+                )
+            elif "FORBIDDEN_TOOL" in chk.violated_requirement:
                 summaries.append(f"Agent invoked forbidden tool '{chk.tool_name}'.")
             elif "REQUIRED_TOOL" in chk.violated_requirement:
                 summaries.append(
@@ -451,6 +630,8 @@ class DiagnosisEngine:
                 )
             else:
                 summaries.append(chk.what_was_observed)
+            if chk.argument_provenance:
+                summaries.append(chk.argument_provenance)
 
         if not summaries:
             return "Agent behavior failed to satisfy expected declarative tool-call requirements."

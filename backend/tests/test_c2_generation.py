@@ -301,3 +301,32 @@ def test_generation_readiness_validator_model_checks():
     assert is_ready is True
     assert readiness == "READY"
     assert reasons == []
+
+
+def test_alternative_paths_are_structural_not_name_based():
+    """A NexaCart accepting path through extra states is an alternative; read self-loops are not."""
+    from app.components.c2_state_aware_workflow.examples.nexacart_workflows import (
+        NEXACART_WORKFLOWS,
+    )
+
+    model = NEXACART_WORKFLOWS["nxc_cancel_then_refund"].builder("proj_test")
+    config = GenerateTestSuiteRequest(
+        model_id=model.model_id,
+        version=model.version,
+        seed=42,
+        case_budget=20,
+        include_alternatives=True,
+        include_negative_rejections=True,
+    )
+    cases, _ = CoverageGuidedGenerator(config=config).generate(model=model, suite_id="s")
+
+    def route(case):
+        path = case.private_reference_paths[0]
+        return [s for i, s in enumerate(path) if i == 0 or s != path[i - 1]]
+
+    valid = [c for c in cases if c.category == TestCategory.VALID]
+    alternatives = [c for c in cases if c.category == TestCategory.ALTERNATIVE]
+    assert valid and alternatives
+    assert {tuple(route(c)) for c in valid} == {("START", "CANCELLED", "REFUNDED")}
+    assert all(len(route(c)) > 3 for c in alternatives)
+    assert all(c.expected_outcome == ExpectedOutcomeType.PASS for c in alternatives)

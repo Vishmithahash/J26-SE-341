@@ -155,6 +155,57 @@ STANDARD_C2_ASSERTIONS: dict[str, C2AssertionDefinition] = {
         applicable_time_scope="post_recovery",
         entity_type="idempotency",
     ),
+    # NexaCart assertions over the external QA harness snapshot shape
+    # (orders.latest, payments, refunds); see examples/nexacart_workflows.py.
+    "nxc_refund_recorded_once": C2AssertionDefinition(
+        assertion_id="nxc_refund_recorded_once",
+        assertion_version="1.0.0",
+        description="Exactly one refund is recorded and the order payment is REFUNDED.",
+        predicate=LogicalPredicate(
+            op=LogicalOperator.AND,
+            clauses=[
+                ComparisonPredicate(
+                    left=FieldRef(scope=ScopeEnum.AFTER, path="refunds.count"),
+                    op=ComparisonOperator.EQUALS,
+                    right=1,
+                ),
+                ComparisonPredicate(
+                    left=FieldRef(scope=ScopeEnum.AFTER, path="payments.latestStatus"),
+                    op=ComparisonOperator.EQUALS,
+                    right="REFUNDED",
+                ),
+            ],
+        ).model_dump(),
+        applicable_time_scope="post_recovery",
+        entity_type="refunds",
+    ),
+    "nxc_duplicate_refund_detected": C2AssertionDefinition(
+        assertion_id="nxc_duplicate_refund_detected",
+        assertion_version="1.0.0",
+        description="More than one refund was recorded for the customer's order.",
+        predicate=ComparisonPredicate(
+            left=FieldRef(scope=ScopeEnum.AFTER, path="refunds.count"),
+            op=ComparisonOperator.GREATER_THAN,
+            right=1,
+        ).model_dump(),
+        applicable_time_scope="post_recovery",
+        entity_type="refunds",
+    ),
+    "nxc_retry_reused_idempotency_key": C2AssertionDefinition(
+        assertion_id="nxc_retry_reused_idempotency_key",
+        assertion_version="1.0.0",
+        description=(
+            "Retries of the faulted refund call carried the same NexaCart idempotency key "
+            "(derived by NexaCart from agent run ID and provider call ID)."
+        ),
+        predicate=ComparisonPredicate(
+            left=FieldRef(scope=ScopeEnum.EVENT, path="idempotency_key_reused"),
+            op=ComparisonOperator.EQUALS,
+            right=True,
+        ).model_dump(),
+        applicable_time_scope="post_recovery",
+        entity_type="refunds",
+    ),
 }
 
 

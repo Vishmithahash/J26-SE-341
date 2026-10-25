@@ -3,7 +3,7 @@
  * Displays trial execution history and strictly disentangled evaluation outcome dimensions.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   PlayCircle,
   RotateCw,
@@ -16,6 +16,7 @@ import {
   POLICY_VERDICTS,
   EXPOSURE_STATUSES,
 } from '../../api/types.js';
+import { LiveNexaCartEvidence } from '../live/NexaCartLivePanels.jsx';
 
 export function ExecutionRunsSection({
   runsList,
@@ -27,6 +28,11 @@ export function ExecutionRunsSection({
   onOpenExportModal,
 }) {
   const [selectedRunId, setSelectedRunId] = useState(activeRun?.run_id || runsList[0]?.run_id || null);
+
+  // Follow an externally selected run (e.g. opened from the live NexaCart panel).
+  useEffect(() => {
+    if (activeRun?.run_id) setSelectedRunId(activeRun.run_id);
+  }, [activeRun?.run_id]);
 
   const currentRun = runsList.find((r) => r.run_id === selectedRunId) || activeRun || runsList[0];
 
@@ -312,6 +318,8 @@ export function ExecutionRunsSection({
                     </pre>
                   </div>
                 )}
+
+                <LiveNexaCartEvidence runRecord={currentRun} />
 
                 {/* Findings List */}
                 {currentRun.findings?.length > 0 && (

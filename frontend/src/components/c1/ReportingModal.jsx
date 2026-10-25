@@ -21,6 +21,7 @@ export const ReportingModal = ({
   projectId,
   activeRunId,
   onClose,
+  correctionEnabled = true,
 }) => {
   const [activeTab, setActiveTab] = useState('export'); // 'export', 'research'
 
@@ -251,8 +252,8 @@ export const ReportingModal = ({
                         <th className="py-2 px-3">Case ID</th>
                         <th className="py-2 px-3">Verdict</th>
                         <th className="py-2 px-3">Root Cause</th>
-                        <th className="py-2 px-3">Candidate Fix</th>
-                        <th className="py-2 px-3">Verified</th>
+                        {correctionEnabled && <th className="py-2 px-3">Candidate Fix</th>}
+                        {correctionEnabled && <th className="py-2 px-3">Verified</th>}
                         <th className="py-2 px-3">Review</th>
                       </tr>
                     </thead>
@@ -278,16 +279,20 @@ export const ReportingModal = ({
                           <td className="py-2 px-3 text-[11px] text-slate-600 dark:text-slate-400">
                             {item.cause_category || 'N/A'}
                           </td>
-                          <td className="py-2 px-3 font-mono text-[10px] text-slate-500">
-                            {item.candidate_patch_hash?.slice(0, 8) || 'None'}
-                          </td>
-                          <td className="py-2 px-3">
-                            {item.is_verified ? (
-                              <span className="text-emerald-600 font-semibold">Yes</span>
-                            ) : (
-                              <span className="text-slate-400">No</span>
-                            )}
-                          </td>
+                          {correctionEnabled && (
+                            <td className="py-2 px-3 font-mono text-[10px] text-slate-500">
+                              {item.candidate_patch_hash?.slice(0, 8) || 'None'}
+                            </td>
+                          )}
+                          {correctionEnabled && (
+                            <td className="py-2 px-3">
+                              {item.is_verified ? (
+                                <span className="text-emerald-600 font-semibold">Yes</span>
+                              ) : (
+                                <span className="text-slate-400">No</span>
+                              )}
+                            </td>
+                          )}
                           <td className="py-2 px-3 text-[11px]">
                             {item.review_decision || 'PENDING'}
                           </td>
@@ -374,15 +379,17 @@ export const ReportingModal = ({
                     </div>
                   </div>
 
-                  <div className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
-                    <div className="text-[10px] text-slate-500">Verified Fix Rate</div>
-                    <div className="text-base font-bold text-emerald-600">
-                      {(metricsReport.verified_correction_rate.value * 100).toFixed(1)}%
+                  {correctionEnabled && (
+                    <div className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                      <div className="text-[10px] text-slate-500">Verified Fix Rate</div>
+                      <div className="text-base font-bold text-emerald-600">
+                        {(metricsReport.verified_correction_rate.value * 100).toFixed(1)}%
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        {metricsReport.verified_correction_rate.numerator}/{metricsReport.verified_correction_rate.denominator} cases
+                      </div>
                     </div>
-                    <div className="text-[10px] text-slate-400">
-                      {metricsReport.verified_correction_rate.numerator}/{metricsReport.verified_correction_rate.denominator} cases
-                    </div>
-                  </div>
+                  )}
                 </div>
 
                 {/* Timing & Performance Latency */}

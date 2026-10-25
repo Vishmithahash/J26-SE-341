@@ -33,7 +33,7 @@ export const c4Api = {
    * Check extraction provider configuration and operational readiness.
    * Distinguishes 'offline_mock' from external LLM providers.
    */
-  async getExtractionReadiness(projectId, providerId = 'offline_mock') {
+  async getExtractionReadiness(projectId, providerId = 'shared_llm') {
     const url = `${buildUrl(projectId, '/extraction/readiness')}?provider_id=${encodeURIComponent(providerId)}`;
     return request(url, { method: 'GET' });
   },
@@ -92,6 +92,12 @@ export const c4Api = {
    * Human or dev review gate for an extracted candidate rule.
    * decision: 'ACCEPTED' | 'REJECTED'
    */
+  async listCandidateRules(projectId, ruleIds = null) {
+    const query = ruleIds?.length ? `?rule_ids=${encodeURIComponent(ruleIds.join(','))}` : '';
+    const url = `${buildUrl(projectId, '/candidates')}${query}`;
+    return request(url, { method: 'GET' });
+  },
+
   async reviewCandidateRule(projectId, ruleId, payload) {
     const url = buildUrl(projectId, `/candidates/${encodeURIComponent(ruleId)}/review`);
     return request(url, {
@@ -526,6 +532,40 @@ export const c4Api = {
    */
   async getExperimentReport(projectId, experimentId) {
     const url = buildUrl(projectId, `/evaluation/experiments/${encodeURIComponent(experimentId)}/report`);
+    return request(url, { method: 'GET' });
+  },
+  /**
+   * Live NexaCart target: harness readiness, agent model and real tool catalog.
+   */
+  async getNexaCartLiveReadiness(projectId) {
+    const url = buildUrl(projectId, '/live/nexacart/readiness');
+    return request(url, { method: 'GET' });
+  },
+
+  /**
+   * Import the NexaCart domain binding, policy document and reference candidate rules.
+   */
+  async importNexaCartLive(projectId) {
+    const url = buildUrl(projectId, '/live/nexacart/import');
+    return request(url, { method: 'POST' });
+  },
+
+  /**
+   * Run the frozen NexaCart cases of an accepted contract live through the NexaCart LLM agent.
+   */
+  async startNexaCartLiveExecution(projectId, payload) {
+    const url = buildUrl(projectId, '/live/nexacart/executions');
+    return request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * Live NexaCart execution progress and per-case results.
+   */
+  async getNexaCartLiveExecution(projectId, executionId) {
+    const url = buildUrl(projectId, `/live/nexacart/executions/${encodeURIComponent(executionId)}`);
     return request(url, { method: 'GET' });
   },
 };

@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { c3Api } from '../api';
 import {
   GitCompare,
   UploadCloud,
@@ -53,6 +54,24 @@ export const C3TrialsWorkspace = ({
     isDbUnavailable: isExecDbUnavailable,
     refreshExecutions,
   } = useC3Executions(projectId);
+
+  // Stored recovery evaluations (server-computed), keyed by pair. Latest first from the API.
+  const [verdictsByPair, setVerdictsByPair] = useState({});
+  useEffect(() => {
+    if (!projectId) return undefined;
+    const controller = new AbortController();
+    c3Api
+      .listEvaluations(projectId, { limit: 200 }, controller.signal)
+      .then((res) => {
+        const map = {};
+        (res.items || []).forEach((e) => {
+          if (!(e.pair_id in map) && e.recovery_verdict) map[e.pair_id] = e.recovery_verdict;
+        });
+        setVerdictsByPair(map);
+      })
+      .catch(() => setVerdictsByPair({}));
+    return () => controller.abort();
+  }, [projectId, pairs]);
 
   // Fallback offline demonstration state (if DB unmigrated or empty)
   const [offlineDemoPairs, setOfflineDemoPairs] = useState(null);
@@ -201,6 +220,7 @@ export const C3TrialsWorkspace = ({
             isDbUnavailable={isPairsDbUnavailable}
             onRefresh={refreshPairs}
             onLoadOfflineDemo={handleLoadOfflineDemo}
+            verdictsByPair={offlineDemoPairs ? {} : verdictsByPair}
           />
         </div>
       )}
@@ -340,6 +360,7 @@ export const C3TrialsWorkspace = ({
       {/* Tab 3: Runtime Readiness & CLI */}
       {activeTab === 'readiness' && (
         <C3RuntimeReadinessAudit
+          projectId={projectId}
           candidateCase={candidateCase}
           adapterManifest={adapterManifest}
           taskFixtureMetadata={taskFixtureMetadata}

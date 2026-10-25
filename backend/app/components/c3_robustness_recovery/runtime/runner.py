@@ -188,12 +188,12 @@ def check_runtime_readiness(
         if candidate_case.fault_family != FaultFamily.TIMEOUT_DISCONNECTION:
             reasons.append(
                 f"Fault family '{candidate_case.fault_family.value}' is not supported for AFTER_COMMIT. "
-                "Only TIMEOUT_DISCONNECTION lost-response delivery is implemented."
+                "The demonstration runner implements only TIMEOUT_DISCONNECTION lost-response delivery."
             )
         if target_mode == TargetMode.LIVE_AUT:
             reasons.append(
-                "Live AFTER_COMMIT lost-response delivery is BLOCKED: actual target hooks and verified "
-                "live state interfaces are not available."
+                "The demonstration runner does not deliver live AFTER_COMMIT faults; live lost-response "
+                "cases run through NexaCartLiveSuiteRunner (NexaCart QA harness fault gateway)."
             )
 
     else:

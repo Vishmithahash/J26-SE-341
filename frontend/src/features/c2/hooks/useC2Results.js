@@ -157,7 +157,8 @@ export const useC2Results = (projectId, userId) => {
           .getRetainedEvidence(projectId, runId)
           .then((data) => {
             if (currentGen !== generationRef.current) return;
-            setRetainedEvidence(data);
+            // The API nests the evidence packet under evidence_payload next to retention metadata.
+            setRetainedEvidence(data?.evidence_payload ? { ...data, ...data.evidence_payload } : data);
           })
           .catch(() => {
             if (currentGen !== generationRef.current) return;

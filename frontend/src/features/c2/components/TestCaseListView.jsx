@@ -169,13 +169,13 @@ export const TestCaseListView = ({
                     Planned Transition Coverage
                   </span>
                   <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold">
-                    {plannedTransCov.percentage != null
-                      ? `${Number(plannedTransCov.percentage).toFixed(1)}%`
+                    {plannedTransCov.coverage_percentage != null
+                      ? `${Number(plannedTransCov.coverage_percentage).toFixed(1)}%`
                       : '-'}
                   </span>
                 </div>
                 <div className="text-[10px] text-slate-400 font-mono">
-                  Covered {plannedTransCov.covered_count ?? 0} of {plannedTransCov.total_transitions ?? '-'} transitions
+                  Covered {plannedTransCov.covered_transitions_count ?? 0} of {plannedTransCov.total_transitions ?? '-'} transitions
                 </div>
               </div>
 
@@ -185,13 +185,15 @@ export const TestCaseListView = ({
                     Planned Guard Coverage
                   </span>
                   <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-                    {plannedGuardCov.percentage != null
-                      ? `${Number(plannedGuardCov.percentage).toFixed(1)}%`
+                    {plannedGuardCov.planned_guard_outcome_coverage_pct != null
+                      ? `${Number(plannedGuardCov.planned_guard_outcome_coverage_pct).toFixed(1)}%`
                       : '-'}
                   </span>
                 </div>
                 <div className="text-[10px] text-slate-400 font-mono">
-                  Covered {plannedGuardCov.covered_count ?? 0} of {plannedGuardCov.total_guards ?? '-'} guards
+                  Covered {plannedGuardCov.covered_guards_count ?? 0} of {plannedGuardCov.total_guards_defined ?? '-'} guards
+                  {plannedGuardCov.total_outcome_targets != null &&
+                    ` · ${(plannedGuardCov.guards_planned_true_count ?? 0) + (plannedGuardCov.guards_planned_false_count ?? 0)} of ${plannedGuardCov.total_outcome_targets} true/false outcomes`}
                 </div>
               </div>
             </div>

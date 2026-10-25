@@ -29,6 +29,9 @@ from app.components.c4_policy_aware_safety.contracts.rules import (
 from app.components.c4_policy_aware_safety.derivation.intake import (
     validate_source_reference,
 )
+from app.components.c4_policy_aware_safety.predicates.evaluator import (
+    field_reference_path,
+)
 
 SUPPORTED_PATH_ROOTS = {
     "principal": {"principal_id", "role", "roles", "attributes"},
@@ -112,6 +115,20 @@ def _validate_predicate_condition(pred: PredicateCondition) -> list[ValidationIs
     # 2. Check operator and operand type compatibility
     op = pred.operator
     val = pred.value
+    ref_path = field_reference_path(val)
+    if ref_path is not None:
+        # Operand is another evidence field: its type is only known at evaluation time.
+        if not any(ref_path.startswith(pfx) for pfx in ALLOWLISTED_FIELD_PREFIXES):
+            issues.append(
+                ValidationIssue(
+                    code=ValidationIssueCode.UNSUPPORTED,
+                    message=f"Field reference '{ref_path}' does not use an allowlisted evidence prefix.",
+                    field=f"predicate.{field}",
+                    severity=Severity.HIGH,
+                    blocking=True,
+                )
+            )
+        return issues
     from decimal import Decimal, InvalidOperation
 
     ordered_ops = {
@@ -277,7 +294,26 @@ class PolicyContractValidator:
                         validate_source_reference(project_id, src, artifact_resolver)
                     )
 
-            # 4. Predicate field allowlist check
+            # 4. Executability: the evaluator decides compliance from this predicate only, and an
+            # empty predicate is always TRUE, so a DENY/REQUIRE rule without one could never FAIL.
+            # (ALLOW rules are permission declarations and may have no condition.)
+            if rule.policy_requirement != PolicyRequirement.ALLOW and (
+                rule.compliance_conditions is None or not rule.compliance_conditions.conditions
+            ):
+                issues.append(
+                    ValidationIssue(
+                        code=ValidationIssueCode.UNSUPPORTED_CONDITION,
+                        message=(
+                            f"Rule '{rule.rule_id}' has no compliance condition, so it can never be violated. "
+                            "Add a condition (e.g. from the reference rules) before contract acceptance."
+                        ),
+                        field="compliance_conditions",
+                        severity=Severity.CRITICAL,
+                        blocking=True,
+                    )
+                )
+
+            # 4b. Predicate field allowlist check
             issues.extend(_check_predicate_fields(rule.applicability_conditions))
             issues.extend(_check_predicate_fields(rule.compliance_conditions))
 

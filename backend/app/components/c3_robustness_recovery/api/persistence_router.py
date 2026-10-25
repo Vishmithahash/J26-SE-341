@@ -41,6 +41,9 @@ from app.components.c3_robustness_recovery.runtime.adapter import (
     TargetMode,
 )
 from app.components.c3_robustness_recovery.runtime.suite_runner import SuiteRunner
+from app.components.c3_robustness_recovery.services.live_execution import (
+    expire_stale_live_executions,
+)
 from app.components.c3_robustness_recovery.services.reporting import (
     build_execution_report,
     export_report_to_csv,
@@ -316,8 +319,9 @@ async def run_controlled_trials_endpoint(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "LIVE_AUT execution mode is BLOCKED: Live NexaCart adapter connector is not implemented. "
-                "Only registered DEMONSTRATION mode is supported."
+                "LIVE_AUT execution mode is BLOCKED for the controlled demonstration runner. Use "
+                "POST /api/v1/c3/live/nexacart/executions with a suite generated from the "
+                "NexaCart harness capabilities."
             ),
         )
     if request.execution_mode != "DEMONSTRATION":
@@ -468,6 +472,8 @@ def list_executions_endpoint(
 ) -> PaginatedResponse[ExecutionRecordResponse]:
     verify_c3_project_access(project_id, current_user, db)
     try:
+        # Live runs that can no longer finish are shown as INTERRUPTED, never as RUNNING.
+        expire_stale_live_executions(db, project_id)
         return service_list_executions(
             db,
             project_id=project_id,

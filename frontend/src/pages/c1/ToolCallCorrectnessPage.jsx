@@ -16,6 +16,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useProject } from '../../context/ProjectContext';
 import { c1Api } from '../../components/c1/c1Api';
 import { ConfigurationEditor } from '../../components/c1/ConfigurationEditor';
+import { DefectLabPanel } from '../../components/c1/DefectLabPanel';
 import { GenerationPanel } from '../../components/c1/GenerationPanel';
 import { CandidateInspector } from '../../components/c1/CandidateInspector';
 import { SuiteViewer } from '../../components/c1/SuiteViewer';
@@ -39,6 +40,7 @@ export const ToolCallCorrectnessPage = () => {
   const [activeRunId, setActiveRunId] = useState(null);
 
   const [isLoadingConfigs, setIsLoadingConfigs] = useState(false);
+  const [codeCorrectionEnabled, setCodeCorrectionEnabled] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
   // Counter to guard against stale responses from previous project
@@ -69,9 +71,10 @@ export const ToolCallCorrectnessPage = () => {
     const loadInitialData = async () => {
       setIsLoadingConfigs(true);
       try {
-        const [configs, suites] = await Promise.all([
+        const [configs, suites, features] = await Promise.all([
           c1Api.listConfigs(activeProjectId),
           c1Api.listSuites(activeProjectId).catch(() => []),
+          c1Api.getFeatures(activeProjectId).catch(() => null),
         ]);
 
         // Discard late response if project changed in the meantime
@@ -81,6 +84,7 @@ export const ToolCallCorrectnessPage = () => {
 
         setConfigList(configs || []);
         setSuitesList(suites || []);
+        setCodeCorrectionEnabled(Boolean(features?.code_correction_enabled));
         if (configs && configs.length > 0) {
           setActiveConfig(configs[0]);
         }
@@ -116,9 +120,19 @@ export const ToolCallCorrectnessPage = () => {
   };
 
   // Handle generation job completed
-  const handleJobCreated = (job) => {
+  const handleJobCreated = async (job) => {
     setActiveJob(job);
     setTestCaseSubTab('candidates');
+    // Auto-promoted suites must appear in Accepted Suites and Runs without a page reload.
+    if (job?.suite_version_id) {
+      try {
+        const suites = await c1Api.listSuites(activeProjectId);
+        setSuitesList(suites || []);
+        if (suites && suites.length > 0) setActiveSuite(suites[0]);
+      } catch {
+        // the list refreshes on the next page load
+      }
+    }
   };
 
   // Handle suite promoted
@@ -290,6 +304,9 @@ export const ToolCallCorrectnessPage = () => {
             onSelectConfig={(config) => setActiveConfig(config)}
             onSaveSuccess={handleConfigSaved}
           />
+          {codeCorrectionEnabled && (
+            <DefectLabPanel projectId={activeProjectId} onConfigImported={handleConfigSaved} />
+          )}
         </div>
       )}
 
@@ -401,6 +418,7 @@ export const ToolCallCorrectnessPage = () => {
           initialRunId={activeRunId}
           onSelectRun={(runId) => setActiveRunId(runId)}
           currentUser={user}
+          correctionEnabled={codeCorrectionEnabled}
         />
       )}
     </div>

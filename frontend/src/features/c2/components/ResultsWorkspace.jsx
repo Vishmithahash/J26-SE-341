@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Activity,
   RotateCw,
@@ -15,6 +15,7 @@ import { WorkflowEvidenceViewer } from './WorkflowEvidenceViewer';
 import { ObservedCoverageViewer } from './ObservedCoverageViewer';
 import { RunReportModal } from './RunReportModal';
 import { VERDICT_CONFIG, PROVENANCE_CONFIG } from '../constants/resultsConfig.js';
+import { c2Api } from '../api/c2Api.js';
 
 const VERDICT_ICONS = {
   PASS: CheckCircle2,
@@ -26,7 +27,7 @@ const VERDICT_ICONS = {
 };
 
 export const ResultsWorkspace = ({
-  projectId: _projectId,
+  projectId,
   resultsState,
 }) => {
   const {
@@ -64,6 +65,25 @@ export const ResultsWorkspace = ({
 
   const [activeViewTab, setActiveViewTab] = useState('evidence'); // 'evidence' | 'coverage'
   const [showReportModal, setShowReportModal] = useState(false);
+  // The evaluated case's frozen definition: its planned reference path and category
+  const [plannedCase, setPlannedCase] = useState(null);
+
+  useEffect(() => {
+    setPlannedCase(null);
+    const suiteId = selectedEvaluation?.suite_id;
+    const testId = selectedEvaluation?.test_id;
+    if (!projectId || !suiteId || !testId) return undefined;
+    let cancelled = false;
+    c2Api
+      .getTestCaseDetail(projectId, suiteId, testId)
+      .then((detail) => {
+        if (!cancelled) setPlannedCase(detail?.definition || null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, selectedEvaluation?.suite_id, selectedEvaluation?.test_id]);
 
   const currentVerdict = selectedEvaluation?.verdict ? String(selectedEvaluation.verdict).toUpperCase() : null;
   const verdictConfig = currentVerdict && VERDICT_CONFIG[currentVerdict] ? VERDICT_CONFIG[currentVerdict] : null;
@@ -141,6 +161,8 @@ export const ResultsWorkspace = ({
             >
               <option value="">All Origins</option>
               <option value="live_agent_run">Live Agent Run</option>
+              <option value="live_nexacart_agent">Live NexaCart Agent</option>
+              <option value="live_trace_mutation">Live-Trace Mutant</option>
               <option value="scripted_synthetic_demonstration">Scripted Demonstration</option>
               <option value="controlled_trace_fixture">Controlled Fixture</option>
             </select>
@@ -240,7 +262,7 @@ export const ResultsWorkspace = ({
                       </div>
                       <div className="text-[10px] text-slate-500 flex items-center justify-between font-mono">
                         <span>Run: {ev.run_id}</span>
-                        <span>{ev.evaluator_timing_ms || 0}ms</span>
+                        <span>{Number(ev.evaluator_timing_ms || 0).toFixed(1)} ms</span>
                       </div>
                     </div>
 
@@ -382,6 +404,7 @@ export const ResultsWorkspace = ({
                   evaluation={selectedEvaluation}
                   evidence={retainedEvidence}
                   isLoadingEvidence={isLoadingEvidence}
+                  plannedCase={plannedCase}
                 />
               ) : (
                 <ObservedCoverageViewer

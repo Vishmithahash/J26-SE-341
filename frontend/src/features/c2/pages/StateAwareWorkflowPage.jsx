@@ -11,6 +11,7 @@ import {
   Play,
   Activity,
   FlaskConical,
+  Server,
 } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { useProject } from '../../../context/ProjectContext';
@@ -38,6 +39,7 @@ import { ExecutionPanel } from '../components/ExecutionPanel';
 import { DemonstrationRunnerModal } from '../components/DemonstrationRunnerModal';
 import { ResultsWorkspace } from '../components/ResultsWorkspace';
 import { ResearchWorkspace } from '../components/ResearchWorkspace';
+import { C2LiveNexaCartPanel } from '../components/C2LiveNexaCartPanel';
 
 export const StateAwareWorkflowPage = () => {
   const { user } = useAuth();
@@ -58,7 +60,7 @@ export const StateAwareWorkflowPage = () => {
   const [sharedSelectionError, setSharedSelectionError] = useState(null);
   const [isDelegating, setIsDelegating] = useState(false);
 
-  // Workspace Tabs: 'models' | 'suites' | 'runs'
+  // Workspace Tabs: 'models' | 'suites' | 'runs' | 'live' | 'results' | 'research'
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState('models');
 
   // Phase 1 Modals
@@ -145,6 +147,7 @@ export const StateAwareWorkflowPage = () => {
     buildCandidateModel,
     createDraftModel,
     clearActionError: clearModelsActionError,
+    loadModels,
   } = useC2Models(activeProjectId, user?.id);
 
   // Phase 2 Hook: Suites & Cases
@@ -169,6 +172,7 @@ export const StateAwareWorkflowPage = () => {
     setReadinessFilter,
     generateSuite,
     clearActionError: clearSuitesActionError,
+    refreshSuites,
   } = useC2Suites(activeProjectId, user?.id);
 
   // Phase 2 Hook: Execution Controls
@@ -455,6 +459,19 @@ export const StateAwareWorkflowPage = () => {
 
         <button
           type="button"
+          onClick={() => setActiveWorkspaceTab('live')}
+          className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors shrink-0 ${
+            activeWorkspaceTab === 'live'
+              ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+          }`}
+        >
+          <Server className="w-4 h-4" />
+          <span>Live NexaCart Runs</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveWorkspaceTab('results')}
           className={`py-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors shrink-0 ${
             activeWorkspaceTab === 'results'
@@ -600,6 +617,19 @@ export const StateAwareWorkflowPage = () => {
           approvedModels={approvedModels}
           executionState={executionState}
           onOpenDemoModal={() => setShowDemoModal(true)}
+        />
+      )}
+
+      {/* LIVE NEXACART RUNS: generated suites executed by NexaCart's own LLM agent */}
+      {activeWorkspaceTab === 'live' && (
+        <C2LiveNexaCartPanel
+          projectId={activeProjectId}
+          suites={suites}
+          onModelsChanged={loadModels}
+          onSuitesChanged={refreshSuites}
+          onEvaluationsChanged={resultsState.refreshEvaluations}
+          onOpenModels={() => setActiveWorkspaceTab('models')}
+          onOpenSuites={() => setActiveWorkspaceTab('suites')}
         />
       )}
 

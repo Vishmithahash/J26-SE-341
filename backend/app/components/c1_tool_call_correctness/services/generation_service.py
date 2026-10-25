@@ -12,6 +12,9 @@ from app.components.c1_tool_call_correctness.contracts.generation import (
 from app.components.c1_tool_call_correctness.contracts.validation import (
     ValidationSeverity,
 )
+from app.components.c1_tool_call_correctness.examples.nexacart_live import (
+    is_nexacart_connection,
+)
 from app.components.c1_tool_call_correctness.models.persistence import (
     C1GenerationRunModel,
     C1ProjectConfigModel,
@@ -25,6 +28,10 @@ from app.components.c1_tool_call_correctness.services.config_service import (
 )
 from app.components.c1_tool_call_correctness.services.generator_engine import (
     DeterministicCandidateGenerator,
+)
+from app.components.c1_tool_call_correctness.services.nexacart_live_generator import (
+    NexaCartLiveCandidateGenerator,
+    validate_nexacart_live_case,
 )
 from app.components.c1_tool_call_correctness.services.suite_selector import (
     SuiteSelector,
@@ -101,13 +108,22 @@ def execute_generation_job(
                 f"Unresolved tool references in generation request: {sorted(unresolved_tools)}"
             )
 
-    # 3. Generate raw candidates
-    generator = DeterministicCandidateGenerator(config, request)
+    # 3. Generate raw candidates. A NexaCart harness configuration gets cases built from its
+    # real tools and fixtures; the template generator would invent records it cannot run.
+    is_live_nexacart = is_nexacart_connection(config.agent_connection_ref)
+    if is_live_nexacart:
+        generator = NexaCartLiveCandidateGenerator(config, request)
+        request.generator_id = generator.GENERATOR_ID
+        request.generator_version = generator.GENERATOR_VERSION
+    else:
+        generator = DeterministicCandidateGenerator(config, request)
     raw_candidates = generator.generate_all_candidates()
 
     # 4. Perform deep candidate validation
     for candidate in raw_candidates:
         issues = validate_candidate_case(candidate, config)
+        if is_live_nexacart:
+            issues += validate_nexacart_live_case(candidate)
         candidate.validation_issues = issues
         has_errors = any(i.severity == ValidationSeverity.ERROR for i in issues)
         candidate.is_valid = not has_errors

@@ -166,6 +166,26 @@ DEFAULT_C2_TO_C3_MAPPINGS: list[C2ToC3AssertionMapping] = [
 ]
 
 
+# NexaCart bindings: pin these per plan (metadata "c2_to_c3_mappings") for NexaCart refund suites.
+NEXACART_C2_TO_C3_MAPPINGS: list[C2ToC3AssertionMapping] = [
+    C2ToC3AssertionMapping(
+        c3_assertion_id="refund_recorded_once",
+        c2_assertion_id="nxc_refund_recorded_once",
+        entity_type="refunds",
+    ),
+    C2ToC3AssertionMapping(
+        c3_assertion_id="duplicate_side_effect_detected",
+        c2_assertion_id="nxc_duplicate_refund_detected",
+        entity_type="refunds",
+    ),
+    C2ToC3AssertionMapping(
+        c3_assertion_id="idempotency_key_reused",
+        c2_assertion_id="nxc_retry_reused_idempotency_key",
+        entity_type="refunds",
+    ),
+]
+
+
 def validate_c2_facts(
     facts: list[C2AssertionFact],
     expected_project_id: str | None = None,

@@ -31,21 +31,25 @@ export const useC2Suites = (projectId, userId) => {
   const [error, setError] = useState(null);
   const [actionError, setActionError] = useState(null);
 
-  // Generation counter to protect against stale asynchronous responses
-  const generationRef = useRef(0);
+  // One counter per loader to discard stale responses of that loader only (a shared counter let the
+  // case-list request invalidate the suite-detail request started with it, so diagnostics never showed)
+  const suitesGenRef = useRef(0);
+  const suiteDetailGenRef = useRef(0);
+  const casesGenRef = useRef(0);
+  const caseDetailGenRef = useRef(0);
 
   /**
    * Load all test suites for the active project
    */
   const loadSuites = useCallback(async () => {
     if (!projectId) return;
-    const currentGen = ++generationRef.current;
+    const currentGen = ++suitesGenRef.current;
     setIsLoadingSuites(true);
     setError(null);
 
     try {
       const data = await c2Api.listTestSuites(projectId);
-      if (currentGen !== generationRef.current) return;
+      if (currentGen !== suitesGenRef.current) return;
       setSuites(data || []);
 
       setSelectedSuiteSummary((prev) => {
@@ -54,11 +58,11 @@ export const useC2Suites = (projectId, userId) => {
         return matching || data?.[0] || null;
       });
     } catch (err) {
-      if (currentGen !== generationRef.current) return;
+      if (currentGen !== suitesGenRef.current) return;
       setError(err.message || 'Failed to load test suites.');
       setSuites([]);
     } finally {
-      if (currentGen === generationRef.current) {
+      if (currentGen === suitesGenRef.current) {
         setIsLoadingSuites(false);
       }
     }
@@ -66,7 +70,9 @@ export const useC2Suites = (projectId, userId) => {
 
   // Reset all state when projectId or userId changes
   useEffect(() => {
-    generationRef.current += 1;
+    for (const ref of [suitesGenRef, suiteDetailGenRef, casesGenRef, caseDetailGenRef]) {
+      ref.current += 1;
+    }
     setSuites([]);
     setSelectedSuiteSummary(null);
     setSelectedSuiteDetail(null);
@@ -94,7 +100,7 @@ export const useC2Suites = (projectId, userId) => {
       return;
     }
 
-    const currentGen = ++generationRef.current;
+    const currentGen = ++suiteDetailGenRef.current;
     const suiteId = selectedSuiteSummary.suite_id;
     setIsLoadingSuiteDetail(true);
 
@@ -102,7 +108,7 @@ export const useC2Suites = (projectId, userId) => {
       c2Api.getTestSuite(projectId, suiteId),
       c2Api.getSuiteReadiness(projectId, suiteId),
     ]).then(([detailResult, readinessResult]) => {
-      if (currentGen !== generationRef.current) return;
+      if (currentGen !== suiteDetailGenRef.current) return;
 
       if (detailResult.status === 'fulfilled') {
         setSelectedSuiteDetail(detailResult.value);
@@ -130,7 +136,7 @@ export const useC2Suites = (projectId, userId) => {
       return;
     }
 
-    const currentGen = ++generationRef.current;
+    const currentGen = ++casesGenRef.current;
     const suiteId = selectedSuiteSummary.suite_id;
     setIsLoadingCases(true);
 
@@ -140,7 +146,7 @@ export const useC2Suites = (projectId, userId) => {
         readiness: readinessFilter || undefined,
       })
       .then((data) => {
-        if (currentGen !== generationRef.current) return;
+        if (currentGen !== casesGenRef.current) return;
         setCases(data || []);
 
         setSelectedCaseSummary((prev) => {
@@ -150,12 +156,12 @@ export const useC2Suites = (projectId, userId) => {
         });
       })
       .catch((err) => {
-        if (currentGen !== generationRef.current) return;
+        if (currentGen !== casesGenRef.current) return;
         setActionError(err.message || 'Failed to load test cases.');
         setCases([]);
       })
       .finally(() => {
-        if (currentGen === generationRef.current) {
+        if (currentGen === casesGenRef.current) {
           setIsLoadingCases(false);
         }
       });
@@ -170,24 +176,30 @@ export const useC2Suites = (projectId, userId) => {
       return;
     }
 
-    const currentGen = ++generationRef.current;
     const suiteId = selectedSuiteSummary.suite_id;
+    // Right after switching suites the selected case still belongs to the previous suite;
+    // wait until the new suite's case list has replaced it
+    if (selectedCaseSummary.suite_id && selectedCaseSummary.suite_id !== suiteId) {
+      return;
+    }
+
+    const currentGen = ++caseDetailGenRef.current;
     const testId = selectedCaseSummary.test_id;
     setIsLoadingCaseDetail(true);
 
     c2Api
       .getTestCaseDetail(projectId, suiteId, testId)
       .then((data) => {
-        if (currentGen !== generationRef.current) return;
+        if (currentGen !== caseDetailGenRef.current) return;
         setSelectedCaseDetail(data);
       })
       .catch((err) => {
-        if (currentGen !== generationRef.current) return;
+        if (currentGen !== caseDetailGenRef.current) return;
         setActionError(err.message || 'Failed to load test case definition.');
         setSelectedCaseDetail(null);
       })
       .finally(() => {
-        if (currentGen === generationRef.current) {
+        if (currentGen === caseDetailGenRef.current) {
           setIsLoadingCaseDetail(false);
         }
       });
